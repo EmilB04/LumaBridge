@@ -1,0 +1,38 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [x64, Win32]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch }}
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Core tests
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Package
+        run: cmake --install build --config Release --prefix dist
+      - name: Add scripts and docs
+        shell: pwsh
+        run: |
+          Copy-Item scripts/*.ps1 dist/
+          Copy-Item README.md dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LumaBridge-${{ matrix.arch }}
+          path: dist/
+
+  core-tests-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure

@@ -1,0 +1,35 @@
+; Export table for the LumaBridge proxy. Keep in sync with logiled_api.h.
+; No LIBRARY line: the output can be renamed to whatever file name the game loads.
+EXPORTS
+    LogiLedInit
+    LogiLedInitWithName
+    LogiLedSaveCurrentLighting
+    LogiLedSetLighting
+    LogiLedRestoreLighting
+    LogiLedFlashLighting
+    LogiLedPulseLighting
+    LogiLedStopEffects
+    LogiLedSetLightingFromBitmap
+    LogiLedSetLightingForTargetZone
+    LogiLedShutdown
+    LogiLedGetSdkVersion
+    LogiLedGetConfigOptionNumber
+    LogiLedGetConfigOptionBool
+    LogiLedGetConfigOptionColor
+    LogiLedGetConfigOptionRect
+    LogiLedGetConfigOptionString
+    LogiLedGetConfigOptionKeyInput
+    LogiLedGetConfigOptionSelect
+    LogiLedGetConfigOptionRange
+    LogiLedSetConfigOptionLabel
+    LogiLedSetTargetDevice
+    LogiLedSetLightingForKeyWithScanCode
+    LogiLedSetLightingForKeyWithHidCode
+    LogiLedSetLightingForKeyWithQuartzCode
+    LogiLedSetLightingForKeyWithKeyName
+    LogiLedSaveLightingForKey
+    LogiLedRestoreLightingForKey
+    LogiLedExcludeKeysFromBitmap
+    LogiLedFlashSingleKey
+    LogiLedPulseSingleKey
+    LogiLedStopEffectsOnKey

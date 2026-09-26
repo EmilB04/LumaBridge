@@ -1,0 +1,10 @@
+/build/
+/out/
+/dist/
+/.vs/
+CMakeUserPresets.json
+*.user
+LumaBridge.ini
+# SDK headers/binaries are not redistributable
+/third_party/*
+!/third_party/README.md

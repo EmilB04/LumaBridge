@@ -1,0 +1,55 @@
+; LumaBridge configuration.
+; Copy to LumaBridge.ini either next to the DLL, or to %LOCALAPPDATA%\LumaBridge\LumaBridge.ini
+; (the Chroma emulator in System32 always uses the %LOCALAPPDATA% copy).
+; Every key is optional; the values shown are the defaults.
+
+[Logitech]
+; Forward every LogiLed call to the real Logitech DLL so Logitech devices keep working.
+Passthrough=1
+; Real SDK DLL. Empty = auto-detect: registry (HKLM ServerBinary), then
+; C:\Program Files\LGHUB\sdk_legacy_led_x64.dll, then the old LGS path.
+; The install script fills this in when it redirects the registry machine-wide.
+RealDllPath=
+
+[Aura]
+Enabled=1
+; Upper bound on Aura updates per second. Aura's Apply() is slow-ish; 30 is plenty.
+MaxUpdateHz=30
+; Which Aura device types to drive: all, or a comma list of
+; motherboard, motherboard_ledstrip, vga, dram, keyboard, mouse, headset, chassis, ...
+; or raw hex codes (0x00090000). Run aura-test.exe list to see yours.
+DeviceTypes=all
+; Skip devices whose name contains any of these (comma separated, case-insensitive).
+ExcludeNames=
+; Hand lighting back to Armoury Crate when the game shuts the SDK down.
+ReleaseControlOnShutdown=1
+
+[Color]
+; Calibration applied to everything sent to Aura (percent). Aura LEDs tend to run
+; bluer/brighter than Logitech's; lower GainB / Brightness to match.
+Brightness=100
+GainR=100
+GainG=100
+GainB=100
+; >1 darkens mid-tones (e.g. 2.2 when games send sRGB-ish values that look washed out).
+Gamma=1.0
+
+[Mirror]
+; How a per-key frame (LogiLed bitmap, Chroma keyboard grid) becomes one ambient color:
+; average   = mean of the lit keys
+; brightest = the single brightest key (punchier for effects that light a few keys)
+BitmapMode=average
+
+[Chroma]
+; Which Chroma device class drives Aura: auto, keyboard, chromalink, headset, mousepad,
+; keypad, mouse. auto = keyboard if the game sends keyboard effects, else Chroma Link, ...
+AmbientSource=auto
+; Answer "connected" to every QueryDevice() so games light up devices you don't own.
+ReportDevicesConnected=1
+
+[Log]
+; debug | info | warn | error | off
+Level=info
+; Empty = %LOCALAPPDATA%\LumaBridge\lumabridge.log (the Chroma emulator writes
+; lumabridge-chroma.log next to it)
+File=
