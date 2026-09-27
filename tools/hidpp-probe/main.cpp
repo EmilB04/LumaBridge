@@ -284,26 +284,42 @@ int wmain(int argc, wchar_t** argv) {
                 Log("    cluster FF effect %d: %s", e, Hex(ei.data(), ei.size()).c_str());
             }
 
+            // Per-key lighting: info (0, 0) answers "00 00 <bitmap of zone IDs>" (the G502 X Plus:
+            // FF 01 = zones 0-8). A report with any zone the device lacks is refused whole.
+            std::vector<int> zones;
             if (perKey) {
                 Log("  Per-key lighting (0x8081, index %02X):", perKey);
                 for (uint8_t a : {uint8_t{0}, uint8_t{1}, uint8_t{2}})
                     for (uint8_t b : {uint8_t{0}, uint8_t{1}}) {
                         auto pi = Request(d.h, dev, perKey, 0, {a, b}, true);
                         Log("    info %u %u: %s", a, b, pi.empty() ? "refused" : Hex(pi.data(), pi.size()).c_str());
+                        if (a == 0 && b == 0 && !pi.empty())
+                            for (int k = 2; k < 16; ++k)
+                                for (int bit = 0; bit < 8; ++bit)
+                                    if (pi[k] >> bit & 1) zones.push_back((k - 2) * 8 + bit);
                     }
+                std::string list;
+                for (int z : zones) list += std::to_string(z) + " ";
+                Log("    zones: %s", list.c_str());
             }
-            if (perkey && perKey) {
+            if (perkey && perKey && !zones.empty()) {
+                using C = std::array<uint8_t, 3>;
                 auto frame = [&](const char* what, auto zoneColor, DWORD ms = 5000) {
-                    // Set zones 0-31, four per report (zone R G B), then end the frame.
+                    // The device's zones, four per report (zone R G B), then end the frame.
                     int accepted = 0, refused = 0;
-                    for (int z = 0; z < 32; z += 4) {
-                        uint8_t r[16];
-                        for (int k = 0; k < 4; ++k) {
-                            const auto c = zoneColor(z + k);
-                            r[k * 4] = static_cast<uint8_t>(z + k);
-                            r[k * 4 + 1] = c[0];
-                            r[k * 4 + 2] = c[1];
-                            r[k * 4 + 3] = c[2];
+                    for (size_t z = 0; z < zones.size(); z += 4) {
+                        uint8_t r[16] = {};
+                        size_t n = 0;
+                        for (; n < 4 && z + n < zones.size(); ++n) {
+                            const int id = zones[z + n];
+                            const C c = zoneColor(id);
+                            r[n * 4] = static_cast<uint8_t>(id);
+                            r[n * 4 + 1] = c[0];
+                            r[n * 4 + 2] = c[1];
+                            r[n * 4 + 3] = c[2];
+                        }
+                        for (; n < 4; ++n) {  // pad with the first zone again, same color
+                            memcpy(r + n * 4, r, 4);
                         }
                         auto a = Request(d.h, dev, perKey, 1,
                                          {r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15]},
@@ -311,29 +327,25 @@ int wmain(int argc, wchar_t** argv) {
                         a.empty() ? ++refused : ++accepted;
                     }
                     auto end = Request(d.h, dev, perKey, 7, {0, 0, 0, 0}, true);
-                    Log("    zones: %d report(s) accepted, %d refused; frame end %s", accepted, refused,
-                        end.empty() ? "refused" : "accepted");
+                    Log("    %d report(s) accepted, %d refused; frame end %s", accepted, refused, end.empty() ? "refused" : "accepted");
                     Pause(what, ms);
                 };
-                using C = std::array<uint8_t, 3>;
-                Log("  Per-key test A (watch the mouse):");
-                frame("A1: all LEDs white?", [](int) { return C{0xFF, 0xFF, 0xFF}; });
-                frame("A2: a rainbow along the strip (red, orange, yellow, green, cyan, blue, purple, pink)?", [](int z) {
-                    static const C c[8] = {{255, 0, 0}, {255, 110, 0}, {255, 230, 0}, {0, 255, 0},
-                                           {0, 230, 255}, {0, 40, 255}, {150, 0, 255}, {255, 0, 150}};
-                    return c[z % 8];
-                });
-                Log("  Per-key test B: the same after switching the mouse to its custom effect (cluster FF, effect 3):");
-                auto custom = Request(d.h, dev, rgb, 1, {0xFF, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01});
-                Log("    custom effect %s", custom.empty() ? "refused" : "accepted");
-                frame("B1: all LEDs white?", [](int) { return C{0xFF, 0xFF, 0xFF}; });
-                frame("B2: a rainbow along the strip?", [](int z) {
-                    static const C c[8] = {{255, 0, 0}, {255, 110, 0}, {255, 230, 0}, {0, 255, 0},
-                                           {0, 230, 255}, {0, 40, 255}, {150, 0, 255}, {255, 0, 150}};
-                    return c[z % 8];
-                });
-                Log("  One LED at a time (zone number printed; note which LED lights):");
-                for (int z = 0; z < 16; ++z) {
+                static const C rainbow[9] = {{255, 0, 0},   {255, 110, 0}, {255, 230, 0}, {0, 255, 0},  {0, 230, 255},
+                                             {0, 40, 255},  {150, 0, 255}, {255, 0, 150}, {255, 255, 255}};
+                auto white = [](int) { return C{0xFF, 0xFF, 0xFF}; };
+                auto colors = [](int z) { return rainbow[z % 9]; };
+                Log("  A: straight away (watch the mouse):");
+                frame("A1: all LEDs white?", white);
+                frame("A2: every LED its own color?", colors);
+                for (uint8_t e : {uint8_t{3}, uint8_t{4}}) {
+                    Log("  %c: after switching the mouse to whole-mouse effect %u:", e == 3 ? 'B' : 'C', e);
+                    auto r = Request(d.h, dev, rgb, 1, {0xFF, e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01});
+                    Log("    effect %u %s", e, r.empty() ? "refused" : "accepted");
+                    frame(e == 3 ? "B1: all LEDs white?" : "C1: all LEDs white?", white);
+                    frame(e == 3 ? "B2: every LED its own color?" : "C2: every LED its own color?", colors);
+                }
+                Log("  One LED at a time (note which LED lights for each zone):");
+                for (int z : zones) {
                     char what[48];
                     snprintf(what, sizeof what, "zone %d red, the rest off", z);
                     frame(what, [z](int k) { return k == z ? C{0xFF, 0, 0} : C{0, 0, 0}; }, 2500);
