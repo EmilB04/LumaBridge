@@ -43,8 +43,15 @@ bool ParseHex(const wchar_t* s, Rgb* out) {
     return true;
 }
 
+// Effect channels and direct channels are numbered differently (see aura_usb_protocol.h),
+// so every effect channel is switched to direct mode up front.
+bool AllDirect(Device& dev) {
+    bool ok = true;
+    for (int ch = 0; ch <= kMaxChannel; ++ch) ok &= dev.Write(SetModeRequest(static_cast<uint8_t>(ch), kModeDirect));
+    return ok;
+}
+
 bool SetChannel(Device& dev, int channel, Rgb color, int leds) {
-    if (!dev.Write(SetModeRequest(static_cast<uint8_t>(channel), kModeDirect))) return false;
     std::vector<Rgb> frame(static_cast<size_t>(leds), color);
     for (const Report& r : DirectColorRequests(static_cast<uint8_t>(channel), frame))
         if (!dev.Write(r)) return false;
@@ -111,7 +118,9 @@ int wmain(int argc, wchar_t** argv) {
 
     if (cmd == L"scan") {
         const int secs = args.size() > 1 ? _wtoi(args[1].c_str()) : 4;
-        std::wprintf(L"Lighting channels 0..%d in RED, one at a time. Note what lights up each time.\n",
+        std::wprintf(L"Switching all effect channels to direct mode: %ls\n", AllDirect(dev) ? L"ok" : L"write failed");
+        for (int ch = 0; ch <= kMaxChannel; ++ch) SetChannel(dev, ch, Rgb{}, leds);  // start dark
+        std::wprintf(L"Lighting direct channels 0..%d in RED, one at a time. Note what lights up each time.\n",
                      kMaxChannel);
         for (int ch = 0; ch <= kMaxChannel; ++ch) {
             std::wprintf(L"  channel %d ... ", ch);
@@ -130,6 +139,7 @@ int wmain(int argc, wchar_t** argv) {
         if (!ParseHex(args[1].c_str(), &c)) return Usage();
         int first = 0, last = kMaxChannel;
         if (args.size() >= 3 && args[2] != L"all") first = last = _wtoi(args[2].c_str());
+        std::wprintf(L"  direct mode: %ls\n", AllDirect(dev) ? L"ok" : L"write failed");
         for (int ch = first; ch <= last; ++ch)
             std::wprintf(L"  channel %d: %ls\n", ch, SetChannel(dev, ch, c, leds) ? L"sent" : L"write failed");
         std::wprintf(L"Reopen Armoury Crate (or reboot) to restore your normal lighting.\n");

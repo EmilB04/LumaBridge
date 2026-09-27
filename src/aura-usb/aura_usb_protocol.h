@@ -6,8 +6,13 @@
 // Everything is a 65-byte HID report starting with report id 0xEC:
 //   EC 82                      -> EC 02 <firmware name, 16 ASCII bytes>
 //   EC B0                      -> EC 30 ?? ?? <60-byte configuration table>
-//   EC 35 <ch> 00 00 <mode>    set a channel's effect; mode 0xFF = direct (host-driven)
+//   EC 35 <ch> 00 00 <mode>    set an *effect channel's* mode; 0xFF = direct (host-driven)
 //   EC 40 <ch|0x80 on last> <first led> <count> <R G B>...   direct colors, <= 20 LEDs each
+//
+// Effect channels and direct channels are numbered independently: on a B550-F
+// (AULA3-AR42) switching effect channel N to direct and painting direct channel N hit
+// different LED groups. Put every effect channel into direct mode first, then address
+// direct channels; `aura-usb-test scan` maps which direct channel is which.
 //
 // Deliberately NOT implemented: the command that saves the current state to the
 // controller's flash. Everything LumaBridge does is undone by Armoury Crate or a reboot.
