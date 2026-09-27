@@ -16,7 +16,7 @@ struct Fonts {
     ImFont* regular = nullptr;
     ImFont* bold = nullptr;
     ImFont* title = nullptr;
-    ImFont* small = nullptr;
+    ImFont* caption = nullptr;  // not "small": rpcndr.h #defines small
 };
 
 enum class Page { Lighting, Devices, Games, Settings };

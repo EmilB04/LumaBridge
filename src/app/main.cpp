@@ -126,10 +126,10 @@ void LoadFonts(float scale) {
     }
     g_fonts.bold = load("segoeuib.ttf", 16.f);
     g_fonts.title = load("segoeuib.ttf", 26.f);
-    g_fonts.small = load("segoeui.ttf", 13.5f);
+    g_fonts.caption = load("segoeui.ttf", 13.5f);
     if (!g_fonts.bold) g_fonts.bold = g_fonts.regular;
     if (!g_fonts.title) g_fonts.title = g_fonts.regular;
-    if (!g_fonts.small) g_fonts.small = g_fonts.regular;
+    if (!g_fonts.caption) g_fonts.caption = g_fonts.regular;
     io.FontDefault = g_fonts.regular;
 }
 

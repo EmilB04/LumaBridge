@@ -542,7 +542,7 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width) {
     ImGui::PushFont(f.title);
     ImGui::TextUnformatted("LumaBridge");
     ImGui::PopFont();
-    ImGui::PushFont(f.small);
+    ImGui::PushFont(f.caption);
     Muted("Game lighting for Aura");
     ImGui::PopFont();
     ImGui::Dummy(ImVec2(0, 18 * S()));
@@ -578,7 +578,7 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width) {
     ImGui::PushFont(f.bold);
     ImGui::TextUnformatted(ctl.prefs().mode == Mode::Auto ? "Auto" : "Manual");
     ImGui::PopFont();
-    ImGui::PushFont(f.small);
+    ImGui::PushFont(f.caption);
     Muted("%s", out.label.c_str());
     ImGui::PopFont();
 
