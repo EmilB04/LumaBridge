@@ -187,6 +187,9 @@ set_target_properties(hw_helper PROPERTIES OUTPUT_NAME "LumaBridge-Helper")
 # Read-only survey of keyboard / mouse HID interfaces (LampArray, vendor pages).
 add_executable(device-probe tools/device-probe/main.cpp)
 target_link_libraries(device-probe PRIVATE hid setupapi)
+add_executable(azoth-probe tools/azoth-probe/main.cpp)
+target_link_libraries(azoth-probe PRIVATE hid setupapi)
+target_include_directories(azoth-probe PRIVATE src/core)
 add_executable(hidpp-probe tools/hidpp-probe/main.cpp)
 target_link_libraries(hidpp-probe PRIVATE hid setupapi)
 
@@ -204,6 +207,7 @@ if(MINGW)
     target_link_options(ghub-probe PRIVATE -municode)
     target_link_options(device-probe PRIVATE -municode)
     target_link_options(hidpp-probe PRIVATE -municode)
+    target_link_options(azoth-probe PRIVATE -municode)
 endif()
 
 # Release layout:
@@ -217,7 +221,7 @@ install(TARGETS hw_helper RUNTIME DESTINATION .)
 install(FILES third_party/pawnio/PawnIO_setup.exe third_party/pawnio/COPYING third_party/pawnio/README.md DESTINATION pawnio)
 install(FILES third_party/pawnio/modules/SmbusPIIX4.bin third_party/pawnio/modules/LpcIO.bin
         third_party/pawnio/modules/AMDFamily17.bin third_party/pawnio/modules/COPYING DESTINATION pawnio/modules)
-install(TARGETS aura-test aura-usb-test ram-probe ghub-probe device-probe hidpp-probe logiled-harness RUNTIME DESTINATION tools)
+install(TARGETS aura-test aura-usb-test ram-probe ghub-probe device-probe hidpp-probe azoth-probe logiled-harness RUNTIME DESTINATION tools)
 install(FILES scripts/Run-HardwareTest.ps1 DESTINATION tools)
 install(FILES scripts/Install-LogiLedProxy.ps1 scripts/Install-SdkEmulators.ps1 scripts/Install-HandbackTask.ps1 scripts/Install-Helper.ps1 scripts/Write-GameFile.ps1
         DESTINATION scripts)
