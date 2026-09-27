@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Publish a release with this version tag (e.g. v0.2.0). Leave empty to just build."
+        required: false
+        default: ""
 
 jobs:
   windows:
@@ -36,11 +41,12 @@ jobs:
       - uses: actions/checkout@v4
       - run: cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure
 
-  # Pushing a tag like v0.2.0 publishes a GitHub Release with one ready-to-use zip:
+  # Pushing a tag like v0.2.0 -- or running this workflow from the Actions tab with a
+  # release_version -- publishes a GitHub Release with one ready-to-use zip:
   # the app + x64 DLLs at the top level, the 32-bit DLLs in x86\ (the install scripts
   # pick them up from there for 32-bit games).
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_version != '')
     needs: [windows, core-tests-linux]
     runs-on: ubuntu-latest
     permissions:
@@ -51,8 +57,9 @@ jobs:
         with:
           path: artifacts
       - name: Assemble zip
+        env:
+          TAG: ${{ inputs.release_version || github.ref_name }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
           mkdir -p "pkg/LumaBridge"
           cp -r artifacts/LumaBridge-x64/. "pkg/LumaBridge/"
           mkdir -p "pkg/LumaBridge/x86"
@@ -62,10 +69,11 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_version || github.ref_name }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
           NOTES="docs/releases/${TAG}.md"
-          ARGS=(--title "LumaBridge ${TAG}")
+          # --target creates the tag at this commit when it doesn't exist yet.
+          ARGS=(--title "LumaBridge ${TAG}" --target "$GITHUB_SHA")
           if [ -f "$NOTES" ]; then ARGS+=(--notes-file "$NOTES"); else ARGS+=(--generate-notes); fi
           # 0.x versions are marked as pre-releases until verified on real hardware.
           case "$TAG" in v0.*) ARGS+=(--prerelease) ;; esac
