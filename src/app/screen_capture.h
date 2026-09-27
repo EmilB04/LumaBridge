@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <string>
 #include <thread>
 
 #include "screen_colors.h"
@@ -23,6 +24,9 @@ public:
 
     // The latest colors; false before the first frame.
     bool Latest(games::ScreenColors* out) const;
+    // Why the screen isn't being read right now ("" while it is): capture refused, or the
+    // screen reads as black (a game hidden from capture).
+    std::string problem() const;
 
 private:
     void Run();
@@ -32,6 +36,7 @@ private:
     mutable std::mutex mutex_;
     games::ScreenColors latest_{};
     bool have_ = false;
+    std::string problem_;
 };
 
 }  // namespace luma::app

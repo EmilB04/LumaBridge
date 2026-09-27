@@ -26,10 +26,12 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdarg>
+#include <cctype>
 #include <cstdio>
 #include <cwctype>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include <thread>
@@ -172,6 +174,9 @@ void Send(Socket* s, const std::string& text) {
     Log("port %u >> %s%s", s->port, text.c_str(), rc == NO_ERROR ? "" : "  (send failed)");
 }
 
+std::mutex g_receivedMutex;
+std::string g_received;  // every text message, for picking out device ids
+
 void ReceiveLoop(Socket* s, std::atomic<bool>* stop) {
     std::string message;
     std::vector<char> buf(64 * 1024);
@@ -193,14 +198,19 @@ void ReceiveLoop(Socket* s, std::atomic<bool>* stop) {
         ++g_messages;
         if (type == WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE)
             Log("port %u << (binary, %zu bytes)", s->port, message.size());
-        else
+        else {
             Log("port %u << %s", s->port, message.c_str());
+            std::lock_guard<std::mutex> lock(g_receivedMutex);
+            g_received += message;
+        }
         message.clear();
     }
 }
 
 // Message paths ("/lighting/...") quoted in G HUB's installed files (its window's scripts and
 // its agent), the lighting-related ones. Read-only: the files are only read.
+std::set<std::string> g_types;  // protobuf type names seen in G HUB's files ("logi.protocol....")
+
 std::set<std::string> ScanPaths() {
     std::set<std::string> found;
     wchar_t pf[MAX_PATH];
@@ -255,13 +265,28 @@ std::set<std::string> ScanPaths() {
                             break;
                         }
                 }
+                // Message types: "logi.protocol.<...>", the lighting / viewer ones.
+                for (size_t i = chunk.find("logi.protocol."); i != std::string::npos; i = chunk.find("logi.protocol.", i + 1)) {
+                    size_t j = i;
+                    while (j < chunk.size() && j - i < 120 &&
+                           (isalnum(static_cast<unsigned char>(chunk[j])) || chunk[j] == '.' || chunk[j] == '_'))
+                        ++j;
+                    const std::string t = chunk.substr(i, j - i);
+                    std::string lower = t;
+                    for (auto& ch : lower) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+                    if (j < chunk.size() && t.size() > 16 &&
+                        (lower.find("viewer") != std::string::npos || lower.find("lighting") != std::string::npos))
+                        g_types.insert(t);
+                }
                 carry = chunk.size() > 100 ? chunk.substr(chunk.size() - 100) : chunk;
             }
             fclose(f);
         } while (FindNextFileW(h, &fd));
         FindClose(h);
     }
-    Log("Scanned %d G HUB file(s): %zu lighting path(s).", files, found.size());
+    Log("Scanned %d G HUB file(s): %zu lighting path(s), %zu lighting message type(s).", files, found.size(),
+        g_types.size());
+    for (const std::string& t : g_types) Log("  type %s", t.c_str());
     return found;
 }
 
@@ -343,6 +368,38 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
 
+    if (scan) {
+        // G HUB's live lighting view ("/lighting/viewer...") wants to be told which device: ask
+        // with each device id and each lighting message type found in its files.
+        Sleep(1500);
+        std::set<std::string> devices;
+        {
+            std::lock_guard<std::mutex> lock(g_receivedMutex);
+            for (size_t i = g_received.find("\"dev"); i != std::string::npos; i = g_received.find("\"dev", i + 1)) {
+                const size_t e = g_received.find('"', i + 1);
+                if (e != std::string::npos && e - i < 24) devices.insert(g_received.substr(i + 1, e - i - 1));
+            }
+        }
+        if (devices.empty()) devices.insert("dev00000000");
+        std::vector<std::string> payloads;
+        for (const std::string& d : devices) {
+            payloads.push_back("{\"deviceId\":\"" + d + "\"}");
+            payloads.push_back("{\"id\":\"" + d + "\"}");
+            for (const std::string& t : g_types)
+                if (t.find("iewer") != std::string::npos || t.find("Device") != std::string::npos)
+                    payloads.push_back("{\"@type\":\"type.googleapis.com/" + t + "\",\"deviceId\":\"" + d + "\",\"id\":\"" + d + "\"}");
+        }
+        if (payloads.size() > 60) payloads.resize(60);
+        Log("Asking G HUB's lighting viewer with %zu payload(s) for %zu device(s).", payloads.size(), devices.size());
+        for (auto& s : sockets)
+            for (const char* path : {"/lighting/viewer", "/lighting/viewer/state", "/lighting/viewer/update"})
+                for (const std::string& pl : payloads) {
+                    for (const char* verb : {"GET", "SUBSCRIBE"})
+                        Send(s.get(), "{\"msgId\":\"probe-" + std::to_string(++id) + "\",\"verb\":\"" + verb + "\",\"path\":\"" +
+                                          path + "\",\"payload\":" + pl + "}");
+                    Sleep(5);
+                }
+    }
     Log("Listening for %d s. Play now: let the game change your mouse's color (e.g. lose health).", seconds);
     for (int left = seconds; left > 0; --left) {
         Sleep(1000);

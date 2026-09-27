@@ -595,7 +595,11 @@ void WGame(DashCtx& c) {
         const bool active = g.support == games::Support::Active;
         const bool builtIn = g.profile && g.profile->kind == games::ProfileKind::BuiltIn;
         if (active) Pill(("Dynamic lighting - " + g.sdk).c_str(), kGreen);
-        else if (c.ctl.screenColorsActive() && g.mode != GameMode::Idle && !builtIn) Pill("Screen colors", kAccent);
+        else if (c.ctl.screenColorsActive() && g.mode != GameMode::Idle && !builtIn) {
+            const std::string problem = c.ctl.screenProblem();
+            Pill(problem.empty() ? "Screen colors" : "Screen colors: can't read the screen", problem.empty() ? kAccent : kAmber);
+            if (!problem.empty()) Muted("%s", problem.c_str());
+        }
         else if (builtIn || games::SupportsLighting(g.support)) Pill("Waiting for its lighting", kAmber);
         else Pill("No dynamic lighting", kMuted);
     }
@@ -2751,6 +2755,11 @@ void GameDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts&
             "Your choice for \"When no game is running\" (Lighting page) stays on while this game runs.",
             "The lights show this game's own color while it runs.",
         };
+        if (running && ctl.screenColorsActive() && !ctl.screenProblem().empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(kAmber));
+            ImGui::TextWrapped("Screen colors can't read the screen: %s", ctl.screenProblem().c_str());
+            ImGui::PopStyleColor();
+        }
         if (mode == 0 && profile && profile->blocked)
             Muted("Your Logitech gear shows the game's own lighting (LIGHTSYNC, through G HUB); every other device "
                   "the screen's colors, since EA's anti-cheat keeps the game's lighting away from LumaBridge.");

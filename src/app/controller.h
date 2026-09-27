@@ -131,6 +131,8 @@ public:
     void RefreshFeedSettings();  // re-read Rocket League's Stats API port after setup changes
     // Screen colors is running for a game right now.
     bool screenColorsActive() const { return screen_.Running(); }
+    // Why Screen colors can't read the screen right now ("" when it can).
+    std::string screenProblem() const { return screen_.Running() ? screen_.problem() : std::string(); }
 
     // Logitech devices through G HUB.
     const LogitechOutput& logitech() const { return logitech_; }

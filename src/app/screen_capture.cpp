@@ -1,7 +1,7 @@
 #include "screen_capture.h"
 
 #include <d3d11.h>
-#include <dxgi1_2.h>
+#include <dxgi1_5.h>
 
 #include <cstring>
 #include <vector>
@@ -34,6 +34,12 @@ void ScreenCapture::Stop() {
     thread_.join();
     std::lock_guard<std::mutex> lock(mutex_);
     have_ = false;
+    problem_.clear();
+}
+
+std::string ScreenCapture::problem() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return problem_;
 }
 
 bool ScreenCapture::Latest(games::ScreenColors* out) const {
@@ -53,6 +59,13 @@ void ScreenCapture::Run() {
     ID3D11Texture2D* staging = nullptr;  // one small mip level, CPU-readable
     UINT mipLevel = 0, sampleW = 0, sampleH = 0, texW = 0, texH = 0;
     int failures = 0;
+    bool loggedFrame = false;
+    uint64_t blackSince = 0;  // the screen has read as black since then (0: it hasn't)
+    auto setProblem = [&](const std::string& p) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (p != problem_ && !p.empty()) LUMA_WARN("screen colors: %s", p.c_str());
+        problem_ = p;
+    };
 
     auto resetDup = [&] {
         Release(staging);
@@ -78,16 +91,26 @@ void ScreenCapture::Run() {
             HRESULT hr = device->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
             if (SUCCEEDED(hr)) hr = dxgiDevice->GetAdapter(&adapter);
             if (SUCCEEDED(hr)) hr = adapter->EnumOutputs(0, &output);  // primary monitor
-            if (SUCCEEDED(hr)) hr = output->QueryInterface(IID_PPV_ARGS(&output1));
-            if (SUCCEEDED(hr)) hr = output1->DuplicateOutput(device, &dup);
+            // Windows 10 1703+: ask for 8-bit BGRA, which also reads an HDR screen (converted).
+            IDXGIOutput5* output5 = nullptr;
+            if (SUCCEEDED(hr) && SUCCEEDED(output->QueryInterface(IID_PPV_ARGS(&output5)))) {
+                const DXGI_FORMAT formats[] = {DXGI_FORMAT_B8G8R8A8_UNORM};
+                if (FAILED(output5->DuplicateOutput1(device, 0, 1, formats, &dup))) dup = nullptr;
+                Release(output5);
+            }
+            if (SUCCEEDED(hr) && !dup) hr = output->QueryInterface(IID_PPV_ARGS(&output1));
+            if (SUCCEEDED(hr) && !dup) hr = output1->DuplicateOutput(device, &dup);
             Release(output1);
             Release(output);
             Release(adapter);
             Release(dxgiDevice);
             if (FAILED(hr)) {
-                if (failures++ == 0)
-                    LUMA_WARN("screen colors: can't capture the screen (hr=0x%08lX), retrying",
-                              static_cast<unsigned long>(hr));
+                if (failures++ == 0) {
+                    char msg[160];
+                    snprintf(msg, sizeof msg, "Windows won't let LumaBridge read the screen (error 0x%08lX).",
+                             static_cast<unsigned long>(hr));
+                    setProblem(msg);
+                }
                 for (int i = 0; i < 20 && !stop_; ++i) Sleep(100);
                 continue;
             }
@@ -162,6 +185,23 @@ void ScreenCapture::Run() {
                     context->Unmap(staging, 0);
                     const games::ScreenColors c =
                         games::SummarizeScreen(pixels, static_cast<int>(sampleW), static_cast<int>(sampleH));
+                    if (!loggedFrame) {
+                        LUMA_INFO("screen colors: reading the screen (%ux%u, format %d)", texW, texH,
+                                  static_cast<int>(d.Format));
+                        loggedFrame = true;
+                    }
+                    // A screen that stays black: the game hides itself from capture.
+                    const uint64_t now = GetTickCount64();
+                    auto dark = [](Rgb x) { return x.r < 16 && x.g < 16 && x.b < 16; };
+                    if (dark(c.left) && dark(c.right)) {
+                        if (!blackSince) blackSince = now;
+                        if (now - blackSince > 3000)
+                            setProblem("The screen reads as black: the game hides itself from screen capture, or "
+                                       "runs in exclusive fullscreen. Try Borderless in the game's display settings.");
+                    } else {
+                        blackSince = 0;
+                        setProblem("");
+                    }
                     std::lock_guard<std::mutex> lock(mutex_);
                     latest_ = c;
                     have_ = true;
