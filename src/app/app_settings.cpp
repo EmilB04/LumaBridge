@@ -155,6 +155,7 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (v == L"keep") p.ramRelease = 2;
     v = Read(ini, L"App", L"LogitechDevices");
     if (!v.empty()) p.logitechDevices = v != L"0";
+    p.logitechForce = Read(ini, L"App", L"LogitechForce") == L"1";
     v = Read(ini, L"Dashboard", L"LhmPort");
     if (!v.empty()) p.lhmPort = _wtoi(v.c_str());
     for (const char* id : device::All()) {
@@ -222,6 +223,7 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"Dashboard", Widen(dash.empty() ? "-" : dash));  // "-": all hidden
     WriteConfigValue(ini, L"Dashboard", L"LhmPort", Num(p.lhmPort));
     WriteConfigValue(ini, L"App", L"LogitechDevices", p.logitechDevices ? L"1" : L"0");
+    WriteConfigValue(ini, L"App", L"LogitechForce", p.logitechForce ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"AzothKeyboard", p.azothKeyboard ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"RamLighting", p.ramLighting ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"RamRelease", p.ramRelease == 1 ? L"off" : p.ramRelease == 2 ? L"keep" : L"rainbow");

@@ -2015,8 +2015,11 @@ void FansCard(Controller& ctl, const Fonts& f) {
 // ---- Devices: status and settings of each -------------------------------------------
 
 struct DeviceStatus {
+    DeviceStatus(std::string t = {}, unsigned c = kMuted, std::string why = {})
+        : text(std::move(t)), color(c), tip(std::move(why)) {}
     std::string text;
-    unsigned color = kMuted;
+    unsigned color;
+    std::string tip;  // why, shown on hover
 };
 
 DeviceStatus LogitechStatus(Controller& ctl) {
@@ -2027,7 +2030,7 @@ DeviceStatus LogitechStatus(Controller& ctl) {
     case S_::Active: return {lg.mouseEffect() ? "Following LumaBridge, every LED" : "Following LumaBridge", kGreen};
     case S_::NoGHub: return {"G HUB not found", kRed};
     case S_::Waiting: return {"Waiting for G HUB", kAmber};
-    default: return {"G HUB has them", kMuted};
+    default: return {"G HUB has them", kMuted, ctl.logitechNote()};
     }
 }
 
@@ -2050,12 +2053,23 @@ void LogitechCard(Controller& ctl, const Fonts& f) {
           "LED SDK in G HUB (nothing goes into a game). They show one color: the first LED of the effect. "
           "A G502 X Plus shows the whole effect instead, LED by LED along its light strip: breathing, "
           "color cycle and the classic rainbow wave run on the mouse itself.");
-    if (ctl.prefs().logitechDevices && lg.state() == LogitechOutput::State::Released && !ctl.logitechNote().empty())
-        Muted("Right now: %s.", ctl.logitechNote().c_str());
+    if (ctl.prefs().logitechDevices && lg.state() == LogitechOutput::State::Released && !ctl.logitechNote().empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, V4(kAmber));
+        ImGui::TextWrapped("Right now G HUB has them: %s.", ctl.logitechNote().c_str());
+        ImGui::PopStyleColor();
+    }
     ImGui::Dummy(ImVec2(0, 2 * S()));
     bool enabled = ctl.prefs().logitechDevices;
     if (Toggle("Light Logitech devices", &enabled)) ctl.SetLogitechEnabled(enabled);
     if (ImGui::IsItemHovered() && !lg.dllPath().empty()) ImGui::SetTooltip("%s", Utf8(lg.dllPath()).c_str());
+    bool force = ctl.prefs().logitechForce;
+    if (Toggle("Keep them with LumaBridge, even when a game lights them", &force)) {
+        ctl.prefs().logitechForce = force;
+        ctl.Changed();
+    }
+    Muted("Normally LumaBridge hands Logitech gear back when a game lights it itself (through Logitech LIGHTSYNC "
+          "or G HUB), so you see the game's lighting. With this on they keep LumaBridge's lighting, including the "
+          "game's colors when LumaBridge follows the game; the game's own Logitech lighting may flicker in between.");
     EndCard();
 }
 
@@ -2443,6 +2457,7 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
             Pill(r.status.text.c_str(), r.status.color);
+            if (!r.status.tip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", r.status.tip.c_str());
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
             if (r.leds >= 0) Muted("%d", r.leds);

@@ -79,6 +79,11 @@ void Controller::UpdateLogitech() {
     }
     bool own = !output_.stopped;
     logitechNote_ = own ? "" : "LumaBridge isn't controlling the lights - G HUB has them";
+    if (own && prefs_.logitechForce) {
+        logitech_.Set(output_.For(device::kMouse),
+                      cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse), true);
+        return;  // kept with LumaBridge even while a game lights Logitech gear
+    }
     if (own)
         if (auto s = tracker_.Active(); s && s->sdk == "Logitech LIGHTSYNC") {
             own = false;  // the game already lights Logitech gear itself (through the proxy)

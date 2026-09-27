@@ -63,6 +63,9 @@ struct Prefs {
     int lhmPort = 8085;  // LibreHardwareMonitor's web server
     // Light Logitech devices (G HUB) along with Aura.
     bool logitechDevices = true;
+    // Keep Logitech devices with LumaBridge even while a game lights them itself (through
+    // LIGHTSYNC or G HUB); else LumaBridge hands them back to the game.
+    bool logitechForce = false;
     // Light the ROG Azoth over its cable (experimental, opt-in).
     bool azothKeyboard = false;
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper (experimental, opt-in).
