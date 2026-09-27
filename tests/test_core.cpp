@@ -741,6 +741,15 @@ static void TestAzoth() {
     save[1] = 0x50;
     save[2] = 0x55;
     CHECK(IsSave(save));
+    // Wireless, through the Omni receiver: frame 1977 of the capture (green, 100 %).
+    const Report w = StaticColor(luma::Rgb{0x00, 0xFF, 0x00}, Link::Wireless);
+    const uint8_t wexpected[] = {0x02, 0x51, 0x2C, 0x00, 0x00, 0xFF, 0x64, 0x00, 0xFF, 0xFF, 0x00, 0xFF, 0x00};
+    CHECK(std::memcmp(w.data(), wexpected, sizeof wexpected) == 0);
+    for (size_t i = sizeof wexpected; i < w.size(); ++i) CHECK(w[i] == 0);
+    CHECK(ReportSize(Link::Wireless) == 64 && ReportSize(Link::Wired) == 65);
+    CHECK(Product(Link::Wireless) == 0x1ACE && !IsSave(w));
+    save[0] = 0x02;
+    CHECK(IsSave(save));
 }
 
 static void TestIpc() {

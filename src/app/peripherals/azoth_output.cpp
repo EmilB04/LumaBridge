@@ -18,8 +18,9 @@ namespace {
 constexpr DWORD kFrameMs = 100;          // ~10 color updates per second at most
 constexpr uint64_t kRefreshMs = 5000;    // re-send the same color now and then
 
-// Opens the Azoth's lighting interface (0B05:1A83, usage page 0xFF00) for writing.
-HANDLE OpenAzoth() {
+// Opens the Azoth's lighting interface for writing: the keyboard's own (0B05:1A83) or the
+// Omni receiver's (0B05:1ACE), usage page 0xFF00 with the link's output report size.
+HANDLE OpenAzoth(azoth::Link link) {
     GUID hid;
     HidD_GetHidGuid(&hid);
     HDEVINFO set = SetupDiGetClassDevsW(&hid, nullptr, nullptr, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
@@ -38,12 +39,12 @@ HANDLE OpenAzoth() {
         if (q == INVALID_HANDLE_VALUE) continue;
         HIDD_ATTRIBUTES a{};
         a.Size = sizeof a;
-        bool match = HidD_GetAttributes(q, &a) && a.VendorID == azoth::kVendor && a.ProductID == azoth::kProductWired;
+        bool match = HidD_GetAttributes(q, &a) && a.VendorID == azoth::kVendor && a.ProductID == azoth::Product(link);
         if (match) {
             PHIDP_PREPARSED_DATA pre = nullptr;
             HIDP_CAPS caps{};
             match = HidD_GetPreparsedData(q, &pre) && HidP_GetCaps(pre, &caps) == HIDP_STATUS_SUCCESS &&
-                    caps.UsagePage == azoth::kUsagePage && caps.OutputReportByteLength == azoth::kReportSize;
+                    caps.UsagePage == azoth::kUsagePage && caps.OutputReportByteLength == azoth::ReportSize(link);
             if (pre) HidD_FreePreparsedData(pre);
         }
         CloseHandle(q);
@@ -80,6 +81,7 @@ void AzothOutput::Set(const fx::Params& effect, double brightness, bool own) {
 
 void AzothOutput::Run() {
     HANDLE dev = INVALID_HANDLE_VALUE;
+    azoth::Link link = azoth::Link::Wired;
     uint64_t nextFind = 0, lastSent = 0;
     Rgb last{1, 2, 3};
     bool loggedMissing = false;
@@ -104,15 +106,22 @@ void AzothOutput::Run() {
         }
         if (dev == INVALID_HANDLE_VALUE) {
             if (now < nextFind) continue;
-            dev = OpenAzoth();
+            // The cable first: with both, the keyboard is plugged in and charging.
+            link = azoth::Link::Wired;
+            dev = OpenAzoth(link);
             if (dev == INVALID_HANDLE_VALUE) {
-                if (!loggedMissing) LUMA_INFO("ROG Azoth: not found on USB (plug it in by cable)");
+                link = azoth::Link::Wireless;
+                dev = OpenAzoth(link);
+            }
+            if (dev == INVALID_HANDLE_VALUE) {
+                if (!loggedMissing) LUMA_INFO("ROG Azoth: not found (neither by cable nor its Omni receiver)");
                 loggedMissing = true;
                 state_ = State::NotFound;
                 nextFind = now + 3000;
                 continue;
             }
-            LUMA_INFO("ROG Azoth: connected (wired)");
+            LUMA_INFO("ROG Azoth: connected (%s)", link == azoth::Link::Wired ? "wired" : "wireless, Omni receiver");
+            link_ = link;
             loggedMissing = false;
             lastSent = 0;
         }
@@ -121,10 +130,10 @@ void AzothOutput::Run() {
             state_ = State::Active;
             continue;
         }
-        const azoth::Report r = azoth::StaticColor(c);
+        const azoth::Report r = azoth::StaticColor(c, link);
         if (azoth::IsSave(r)) continue;  // never write the keyboard's flash
         DWORD written = 0;
-        if (!WriteFile(dev, r.data(), static_cast<DWORD>(r.size()), &written, nullptr)) {
+        if (!WriteFile(dev, r.data(), static_cast<DWORD>(azoth::ReportSize(link)), &written, nullptr)) {
             LUMA_WARN("ROG Azoth: write failed (error %lu) - unplugged?", GetLastError());
             CloseHandle(dev);
             dev = INVALID_HANDLE_VALUE;

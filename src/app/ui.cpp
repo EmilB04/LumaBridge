@@ -701,8 +701,8 @@ void WDevices(DashCtx& c) {
         ImGui::SameLine();
         ImGui::TextUnformatted("ASUS ROG Azoth");
         ImGui::SameLine();
-        Muted("%s", st == AzothOutput::State::Active     ? "wired"
-                    : st == AzothOutput::State::NotFound ? "not connected by cable"
+        Muted("%s", st == AzothOutput::State::Active     ? (c.ctl.azoth().wireless() ? "wireless" : "wired")
+                    : st == AzothOutput::State::NotFound ? "not connected"
                                                          : "Armoury Crate's lighting");
     }
 }
@@ -1193,7 +1193,7 @@ void PeripheralsCard(Controller& ctl, const Fonts& f) {
 
     ImGui::Dummy(ImVec2(0, 6 * S()));
 
-    // ASUS ROG Azoth, wired.
+    // ASUS ROG Azoth, by cable or its Omni receiver.
     const auto& az = ctl.azoth();
     using A_ = AzothOutput::State;
     const A_ as = az.state();
@@ -1206,17 +1206,17 @@ void PeripheralsCard(Controller& ctl, const Fonts& f) {
     ImGui::PopFont();
     ImGui::SameLine();
     if (!azOn) Pill("Off", kMuted);
-    else if (as == A_::Active) Pill("Following LumaBridge", kGreen);
-    else if (as == A_::NotFound) Pill("Not connected by cable", kAmber);
+    else if (as == A_::Active) Pill(az.wireless() ? "Following LumaBridge (wireless)" : "Following LumaBridge (wired)", kGreen);
+    else if (as == A_::NotFound) Pill("Not connected", kAmber);
     else Pill("Armoury Crate's lighting", kMuted);
     ImGui::SameLine();
     Pill("Experimental", kAccent);
-    Muted("The whole keyboard shows LumaBridge's color, over the USB cable (wireless comes later). LumaBridge "
+    Muted("The whole keyboard shows LumaBridge's color, by cable or wirelessly through its ROG Omni receiver. LumaBridge "
           "sends the same color command Armoury Crate does, but never its save command, so your saved "
           "Armoury Crate lighting stays in the keyboard. When LumaBridge lets go, the keyboard keeps the last "
-          "color until it's unplugged or Armoury Crate sets it again.");
+          "color until it restarts or Armoury Crate sets it again.");
     bool azEnabled = azOn;
-    if (ImGui::Checkbox("Light the ROG Azoth (wired)", &azEnabled)) ctl.SetAzothEnabled(azEnabled);
+    if (ImGui::Checkbox("Light the ROG Azoth", &azEnabled)) ctl.SetAzothEnabled(azEnabled);
     ImGui::SameLine();
     if (ImGui::SmallButton("Run the device probe")) {
         const std::wstring exe = AppDirectory() + L"\\tools\\device-probe.exe";
