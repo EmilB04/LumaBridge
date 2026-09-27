@@ -27,6 +27,7 @@
 #include "game_profiles.h"
 #include "screen_capture.h"
 #include "system_monitor.h"
+#include "logitech_output.h"
 #include "gamesense_server.h"
 #include "ipc.h"
 #include "source_tracker.h"
@@ -115,6 +116,12 @@ public:
     // Screen colors is running for a game right now.
     bool screenColorsActive() const { return screen_.Running(); }
 
+    // Logitech devices through G HUB.
+    const LogitechOutput& logitech() const { return logitech_; }
+    void SetLogitechEnabled(bool on);
+    // Why LumaBridge isn't lighting Logitech devices right now ("" when it is).
+    const std::string& logitechNote() const { return logitechNote_; }
+
     // Dashboard data (CPU, GPU, memory, sensors, component names).
     sensors::SystemMonitor& monitor() { return monitor_; }
 
@@ -161,6 +168,9 @@ private:
     GameFeeds feeds_;
     ScreenCapture screen_;
     sensors::SystemMonitor monitor_;
+    LogitechOutput logitech_;
+    std::string logitechNote_;
+    void UpdateLogitech();
     bool feedActive_[3] = {};
     std::future<std::vector<InstalledGame>> libraryJob_;
     bool libraryRescanPending_ = false;  // the list changed while a scan was running

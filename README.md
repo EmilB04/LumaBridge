@@ -18,6 +18,7 @@ OpenRGB, Artemis or other middleware.
   breathing, strobe, color cycle, and per-LED rainbow wave, gradient, comet and twinkle
   that run around each ARGB fan.
 - **Calibration:** per-channel gains and gamma so Aura matches your other gear.
+- **Logitech devices** (mice, ...) follow along through G HUB's own LED SDK.
 - **Devices:** switch individual Aura devices on or off, and set up your fans (count, LEDs
   per fan, test pattern).
 - **Games:** one-click setup per SDK, with live status.

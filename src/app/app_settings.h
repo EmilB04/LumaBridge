@@ -54,6 +54,8 @@ struct Prefs {
     std::map<std::string, GameMode> gameModes;
     std::vector<std::string> dashboard = DefaultDashboard();
     int lhmPort = 8085;  // LibreHardwareMonitor's web server
+    // Light Logitech devices (G HUB) along with Aura.
+    bool logitechDevices = true;
     static constexpr size_t kMaxRecent = 8;
 };
 

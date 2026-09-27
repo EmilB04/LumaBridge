@@ -299,7 +299,7 @@ void PreviewCard(Controller& ctl, const Fonts& f) {
 
 // ---- Icons (drawn with lines and shapes, so no icon font is needed) ------------------
 
-enum class Icon { Lighting, Game, Cpu, Gpu, Memory, Fan, Temp, Board, Leds, Plug, Info };
+enum class Icon { Lighting, Game, Cpu, Gpu, Memory, Fan, Temp, Board, Leds, Plug, Info, Mouse, Keyboard };
 
 ImVec2 At(ImVec2 c, float dx, float dy) { return ImVec2(c.x + dx, c.y + dy); }
 
@@ -384,6 +384,19 @@ void DrawIcon(Icon icon, ImVec2 c, float s, ImU32 col, float spin = 0) {
         dl->AddLine(At(c, -r * 0.2f, -r * 0.25f), At(c, -r * 0.2f, -r * 0.7f), col, t);
         dl->AddLine(At(c, r * 0.2f, -r * 0.25f), At(c, r * 0.2f, -r * 0.7f), col, t);
         dl->AddLine(At(c, 0, r * 0.35f), At(c, 0, r * 0.85f), col, t);
+        break;
+    case Icon::Mouse:
+        dl->AddRect(At(c, -r * 0.5f, -r * 0.85f), At(c, r * 0.5f, r * 0.85f), col, r * 0.5f, 0, t);
+        dl->AddLine(At(c, 0, -r * 0.85f), At(c, 0, -r * 0.2f), col, t);
+        dl->AddLine(At(c, -r * 0.5f, -r * 0.2f), At(c, r * 0.5f, -r * 0.2f), col, t);
+        break;
+    case Icon::Keyboard:
+        dl->AddRect(At(c, -r * 0.95f, -r * 0.5f), At(c, r * 0.95f, r * 0.5f), col, r * 0.12f, 0, t);
+        for (int row = 0; row < 2; ++row)
+            for (int k = 0; k < 5; ++k)
+                dl->AddRectFilled(At(c, -r * 0.72f + k * r * 0.32f, -r * 0.3f + row * r * 0.28f),
+                                  At(c, -r * 0.56f + k * r * 0.32f, -r * 0.16f + row * r * 0.28f), col);
+        dl->AddLine(At(c, -r * 0.45f, r * 0.3f), At(c, r * 0.45f, r * 0.3f), col, t);
         break;
     case Icon::Info:
         dl->AddCircle(c, r * 0.88f, col, 24, t);
@@ -674,6 +687,14 @@ void WDevices(DashCtx& c) {
         Muted("%d LEDs%s", d.lightCount, off ? " - off" : "");
     }
     Muted("AURA LED Controller (USB 0B05:1939)");
+    if (c.ctl.prefs().logitechDevices) {
+        const bool active = c.ctl.logitech().state() == LogitechOutput::State::Active;
+        IconItem(Icon::Mouse, 18 * S(), active ? Hex(kAccent) : Hex(kMuted));
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Logitech devices");
+        ImGui::SameLine();
+        Muted("%s", active ? "via G HUB" : "G HUB has them");
+    }
 }
 
 void EnsureIntegrations(Controller& ctl, Integrations& in, UiState& ui) {
@@ -1131,6 +1152,59 @@ void FansCard(Controller& ctl, const Fonts& f) {
     EndCard();
 }
 
+void PeripheralsCard(Controller& ctl, const Fonts& f) {
+    BeginCard("peripherals");
+    CardTitle(f, "Keyboard & mouse");
+
+    // Logitech (G502 X Plus, ...) through G HUB.
+    const auto& lg = ctl.logitech();
+    using S_ = LogitechOutput::State;
+    const S_ st = lg.state();
+    const bool on = ctl.prefs().logitechDevices;
+    IconItem(Icon::Mouse, 20 * S(), on && st == S_::Active ? Hex(kAccent) : Hex(kMuted));
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted("Logitech devices");
+    ImGui::PopFont();
+    ImGui::SameLine();
+    if (!on) Pill("Off", kMuted);
+    else if (st == S_::Active) Pill("Following LumaBridge", kGreen);
+    else if (st == S_::NoGHub) Pill("G HUB not found", kRed);
+    else if (st == S_::Waiting) Pill("Waiting for G HUB", kAmber);
+    else Pill("G HUB has them", kMuted);
+    Muted("Your Logitech mouse and other Logitech RGB gear show LumaBridge's color, through Logitech's own "
+          "LED SDK in G HUB (nothing goes into a game). They show one color: the first LED of the effect.");
+    if (on && st == S_::Released && !ctl.logitechNote().empty()) Muted("Right now: %s.", ctl.logitechNote().c_str());
+    bool enabled = on;
+    if (ImGui::Checkbox("Light Logitech devices", &enabled)) ctl.SetLogitechEnabled(enabled);
+    if (ImGui::IsItemHovered() && !lg.dllPath().empty()) ImGui::SetTooltip("%s", Utf8(lg.dllPath()).c_str());
+    ImGui::EndGroup();
+
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+
+    // ASUS ROG keyboards (Azoth): needs its protocol mapped first.
+    IconItem(Icon::Keyboard, 20 * S(), Hex(kMuted));
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted("ASUS ROG keyboard (Azoth)");
+    ImGui::PopFont();
+    ImGui::SameLine();
+    Pill("Not yet", kAmber);
+    Muted("ASUS's Aura SDK crashes on the Azoth, so LumaBridge will talk to it over USB like the motherboard. "
+          "First step: the read-only device probe lists its USB interfaces (it sends nothing to the keyboard). "
+          "Send its output to get keyboard lighting in the next version.");
+    if (ImGui::Button("Run the device probe")) {
+        const std::wstring exe = AppDirectory() + L"\\tools\\device-probe.exe";
+        ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    ImGui::SameLine();
+    Muted("Saves %%LOCALAPPDATA%%\\LumaBridge\\device-probe.txt");
+    ImGui::EndGroup();
+    EndCard();
+}
+
 void DevicesPage(Controller& ctl, const Fonts& f) {
     const sensors::SystemSnapshot snap = ctl.monitor().Snapshot();  // board name for the labels
     auto st = ctl.auraStatus();
@@ -1202,6 +1276,7 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
     }
     EndCard();
 
+    PeripheralsCard(ctl, f);
     FansCard(ctl, f);
 }
 

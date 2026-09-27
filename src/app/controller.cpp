@@ -6,6 +6,7 @@
 #include <iterator>
 
 #include "armoury_crate.h"
+#include "integrations.h"
 #include "log.h"
 #include "usb_aura.h"
 
@@ -45,7 +46,38 @@ bool Controller::Init() {
     RescanLibrary();
     feeds_.Start();
     monitor_.Start(prefs_.lhmPort);
+    if (prefs_.logitechDevices) logitech_.Start(AppDirectory() + L"\\integrations\\LumaBridge_x64.dll");
     return true;
+}
+
+void Controller::SetLogitechEnabled(bool on) {
+    prefs_.logitechDevices = on;
+    if (on) logitech_.Start(AppDirectory() + L"\\integrations\\LumaBridge_x64.dll");
+    else logitech_.Stop();  // G HUB takes its profile back
+    Changed();
+}
+
+void Controller::UpdateLogitech() {
+    if (!prefs_.logitechDevices) {
+        logitechNote_ = "Turned off";
+        return;
+    }
+    bool own = !output_.stopped;
+    logitechNote_ = own ? "" : "LumaBridge isn't controlling the lights - G HUB has them";
+    if (own)
+        if (auto s = tracker_.Active(); s && s->sdk == "Logitech LIGHTSYNC") {
+            own = false;  // the game already lights Logitech gear itself (through the proxy)
+            logitechNote_ = s->game + " lights them itself";
+        }
+    if (own && !tracker_.Active())
+        for (const GameStatus& g : games_)
+            if (g.profile && g.profile->kind == games::ProfileKind::VendorSdk &&
+                std::string(g.profile->how).find("Logitech") != std::string::npos) {
+                own = false;  // e.g. Battlefield 1 talks to G HUB directly
+                logitechNote_ = g.game.name + " lights them through G HUB";
+                break;
+            }
+    logitech_.Set(output_.fx, own);
 }
 
 std::wstring Controller::GameDir(const char* profileKey) const {
@@ -135,6 +167,7 @@ void Controller::Shutdown(bool handBack) {
     feeds_.Stop();
     screen_.Stop();
     monitor_.Stop();
+    logitech_.Stop();
     const bool wasControlling = mirror_.IsRunning();
     mirror_.Stop();
     // Exiting LumaBridge gives the lights back to Armoury Crate (not during a Windows
@@ -451,6 +484,7 @@ void Controller::Tick() {
         outputApplied_ = true;
     }
     output_ = next;
+    UpdateLogitech();
 
     if (dirty_ && now - dirtySince_ >= kSaveDebounceMs) {
         SaveAll(iniPath_, prefs_, cfg_);
