@@ -3092,16 +3092,21 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width) {
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     {
-        // Logo: a slowly turning ring of hues.
+        // Logo: the app's icon (else a slowly turning ring of hues).
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const float r = 13 * S();
         const ImVec2 c(p.x + r, p.y + r + 2 * S());
-        const double t = ImGui::GetTime() * 0.08;
-        for (int i = 0; i < 24; ++i) {
-            const float a0 = 6.2831853f * i / 24, a1 = 6.2831853f * (i + 1) / 24;
-            const Rgb col = FromHue((static_cast<double>(i) / 24 + t) * 360.0);
-            ImGui::GetWindowDrawList()->PathArcTo(c, r - 2.5f * S(), a0, a1 + 0.05f, 4);
-            ImGui::GetWindowDrawList()->PathStroke(Col(col), 0, 4 * S());
+        if (f.logo) {
+            ImGui::GetWindowDrawList()->AddImage(static_cast<ImTextureID>(f.logo), ImVec2(c.x - r, c.y - r),
+                                                 ImVec2(c.x + r, c.y + r));
+        } else {
+            const double t = ImGui::GetTime() * 0.08;
+            for (int i = 0; i < 24; ++i) {
+                const float a0 = 6.2831853f * i / 24, a1 = 6.2831853f * (i + 1) / 24;
+                const Rgb col = FromHue((static_cast<double>(i) / 24 + t) * 360.0);
+                ImGui::GetWindowDrawList()->PathArcTo(c, r - 2.5f * S(), a0, a1 + 0.05f, 4);
+                ImGui::GetWindowDrawList()->PathStroke(Col(col), 0, 4 * S());
+            }
         }
         ImGui::Dummy(ImVec2(r * 2, r * 2 + 4 * S()));
         ImGui::SameLine(0, 10 * S());
@@ -3227,6 +3232,62 @@ void ApplyTheme(float scale) {
     s.ScaleAllSizes(scale);
 }
 
+// The loading screen when the window first opens: the logo growing in with a ring of hues
+// turning around it, then fading into the app. Covers the window (and takes the clicks)
+// while it shows.
+void Splash(UiState& ui, const Fonts& f) {
+    constexpr double kShow = 1.3, kFade = 0.4;
+    const double now = ImGui::GetTime();
+    if (ui.splashStart < 0) ui.splashStart = now;
+    const double t = now - ui.splashStart;
+    if (t >= kShow + kFade) return;
+    const float alpha = t < kShow ? 1.f : static_cast<float>(1.0 - (t - kShow) / kFade);
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->Pos);
+    ImGui::SetNextWindowSize(vp->Size);
+    ImGui::SetNextWindowBgAlpha(0);
+    ImGui::Begin("##splash", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
+    ImGui::SetWindowFocus();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    auto a = [&](unsigned rgb, float k = 1.f) { return Hex(rgb, static_cast<unsigned>(255 * alpha * k)); };
+    dl->AddRectFilled(vp->Pos, ImVec2(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y), a(kBg));
+    const ImVec2 c(vp->Pos.x + vp->Size.x / 2, vp->Pos.y + vp->Size.y / 2 - 30 * S());
+    // The logo grows in (ease out over the first half second).
+    const float grow = static_cast<float>(std::min(1.0, t / 0.5));
+    const float ease = 1 - (1 - grow) * (1 - grow) * (1 - grow);
+    const float r = (38 + 10 * ease) * S();
+    if (f.logo) {
+        dl->AddImage(static_cast<ImTextureID>(f.logo), ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), ImVec2(0, 0),
+                     ImVec2(1, 1), IM_COL32(255, 255, 255, static_cast<int>(255 * alpha * ease)));
+    } else {
+        dl->AddCircleFilled(c, r, a(kAccent, ease), 64);
+    }
+    // A comet of hues turning around it.
+    const float ring = r + 14 * S();
+    const float head = static_cast<float>(t * 4.2);
+    for (int i = 0; i < 28; ++i) {
+        const float k = static_cast<float>(i) / 28;
+        const float a0 = head - k * 3.6f, a1 = a0 + 0.14f;
+        const Rgb col = FromHue(std::fmod(t * 90.0 + k * 140.0, 360.0));
+        dl->PathArcTo(c, ring, a0, a1, 4);
+        dl->PathStroke(Col(col, static_cast<int>(255 * alpha * (1 - k))), 0, 3.5f * S() * (1 - k * 0.6f));
+    }
+    // The name under it.
+    ImGui::PushFont(f.title);
+    const char* name = "LumaBridge";
+    const ImVec2 ns = ImGui::CalcTextSize(name);
+    dl->AddText(ImVec2(c.x - ns.x / 2, c.y + ring + 18 * S()), a(kText), name);
+    ImGui::PopFont();
+    ImGui::PushFont(f.caption);
+    const char* sub = "Starting...";
+    const ImVec2 ss = ImGui::CalcTextSize(sub);
+    dl->AddText(ImVec2(c.x - ss.x / 2, c.y + ring + 18 * S() + ns.y + 6 * S()), a(kMuted), sub);
+    ImGui::PopFont();
+    ImGui::End();
+}
+
 void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui, const Fonts& f) {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -3319,6 +3380,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::End();
+    Splash(ui, f);
 }
 
 }  // namespace luma::app

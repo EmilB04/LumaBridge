@@ -14,6 +14,7 @@
 #include <exception>
 #include <cwchar>
 #include <iterator>
+#include <vector>
 
 #include "controller.h"
 #include "log.h"
@@ -166,6 +167,54 @@ void CleanupDevice() {
     g_swapChain = nullptr;
     g_context = nullptr;
     g_device = nullptr;
+}
+
+// ---- The logo ------------------------------------------------------------------------
+
+ID3D11ShaderResourceView* g_logo = nullptr;
+
+// The app's own icon (resource 1, its 128 px image) as a texture for the UI, so the logo in
+// the window is the program's icon.
+void LoadLogo(HINSTANCE inst) {
+    constexpr int kSize = 128;
+    HICON icon = static_cast<HICON>(LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, kSize, kSize, LR_DEFAULTCOLOR));
+    if (!icon) return;
+    ICONINFO ii{};
+    std::vector<uint32_t> px(kSize * kSize);
+    bool ok = false;
+    if (GetIconInfo(icon, &ii)) {
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize = sizeof bi.bmiHeader;
+        bi.bmiHeader.biWidth = kSize;
+        bi.bmiHeader.biHeight = -kSize;  // top-down
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        HDC dc = GetDC(nullptr);
+        ok = ii.hbmColor && GetDIBits(dc, ii.hbmColor, 0, kSize, px.data(), &bi, DIB_RGB_COLORS) == kSize;
+        ReleaseDC(nullptr, dc);
+        if (ii.hbmColor) DeleteObject(ii.hbmColor);
+        if (ii.hbmMask) DeleteObject(ii.hbmMask);
+    }
+    DestroyIcon(icon);
+    if (!ok) return;
+    D3D11_TEXTURE2D_DESC td{};
+    td.Width = td.Height = kSize;
+    td.MipLevels = td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;  // the bitmap's BGRA, straight alpha
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA init{px.data(), kSize * 4, 0};
+    ID3D11Texture2D* tex = nullptr;
+    if (FAILED(g_device->CreateTexture2D(&td, &init, &tex))) return;
+    D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
+    sv.Format = td.Format;
+    sv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    sv.Texture2D.MipLevels = 1;
+    g_device->CreateShaderResourceView(tex, &sv, &g_logo);
+    tex->Release();
+    g_fonts.logo = reinterpret_cast<unsigned long long>(g_logo);
 }
 
 // ---- Fonts ---------------------------------------------------------------------------
@@ -437,6 +486,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     LoadFonts(g_dpiScale);
     ImGui_ImplWin32_Init(g_main);
     ImGui_ImplDX11_Init(g_device, g_context);
+    LoadLogo(inst);
 
     g_ctl.Tick();
     UpdateTray(true);
@@ -493,6 +543,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     g_ctl.Shutdown();
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
+    if (g_logo) g_logo->Release();
     ImGui::DestroyContext();
     CleanupDevice();
     DestroyWindow(g_main);

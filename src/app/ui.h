@@ -17,6 +17,9 @@ struct Fonts {
     ImFont* bold = nullptr;
     ImFont* title = nullptr;
     ImFont* caption = nullptr;  // not "small": rpcndr.h #defines small
+    // The app's icon as a texture (an ImTextureID: the D3D11 shader resource view), 0 if it
+    // couldn't be loaded.
+    unsigned long long logo = 0;
 };
 
 // Sidebar order.
@@ -46,6 +49,7 @@ struct UiState {
     bool integrationsLoaded = false;
     bool autostart = false;
     bool autostartLoaded = false;
+    double splashStart = -1;  // when the loading screen appeared (ImGui time), -1 before the first frame
 };
 
 // Applies the LumaBridge theme at the given DPI scale (call again when DPI changes).
