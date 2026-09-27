@@ -7,7 +7,7 @@ has a tested effect engine next to it.
 ## Built-in game feeds
 
 These use official data the game publishes on your own PC. Nothing is loaded into the game,
-so anti-cheat isn't involved. Set them up on the **Integrations** page.
+so anti-cheat isn't involved. Set them up on the **Games List** page: click the game's tile.
 
 | Game | Source | Effects |
 |---|---|---|

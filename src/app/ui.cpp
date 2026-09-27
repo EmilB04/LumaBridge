@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <functional>
+#include <map>
 #include <iterator>
 #include <cctype>
 #include <cmath>
@@ -20,6 +21,7 @@
 #include "system_monitor.h"
 #include "effects.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "integrations.h"
 
 namespace luma::app {
@@ -34,15 +36,17 @@ ImVec4 V4(unsigned rgb, float a = 1.f) {
     return ImVec4(((rgb >> 16) & 0xFF) / 255.f, ((rgb >> 8) & 0xFF) / 255.f, (rgb & 0xFF) / 255.f, a);
 }
 
-constexpr unsigned kBg = 0x0E1014;
-constexpr unsigned kSidebar = 0x13161C;
-constexpr unsigned kCard = 0x191D25;
-constexpr unsigned kCardHover = 0x20252F;
-constexpr unsigned kBorder = 0x262B36;
-constexpr unsigned kText = 0xE7E9EF;
-constexpr unsigned kMuted = 0x8A92A6;
+constexpr unsigned kBg = 0x0B0D12;
+constexpr unsigned kSidebar = 0x0F1218;
+constexpr unsigned kCard = 0x151922;
+constexpr unsigned kCardHover = 0x1D2230;
+constexpr unsigned kTrack = 0x0F1219;  // behind segmented controls and switches
+constexpr unsigned kBorder = 0x252B3A;
+constexpr unsigned kText = 0xECEEF4;
+constexpr unsigned kMuted = 0x8A93A8;
 constexpr unsigned kAccent = 0x7C6CFF;
 constexpr unsigned kAccentHover = 0x9384FF;
+constexpr unsigned kAccent2 = 0x3CC8FF;  // the other end of accent gradients
 constexpr unsigned kGreen = 0x3DDC97;
 constexpr unsigned kAmber = 0xF5B84B;
 constexpr unsigned kRed = 0xFF6B6B;
@@ -96,20 +100,21 @@ void Pill(const char* text, unsigned color) {
     ImGui::Dummy(size);
 }
 
-bool BeginCard(const char* id, float height = 0) {
+bool BeginCard(const char* id, float height = 0, ImGuiWindowFlags windowFlags = 0) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, V4(kCard));
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 12 * S());
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18 * S(), 16 * S()));
+    ImGui::PushStyleColor(ImGuiCol_Border, V4(kBorder, 0.7f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 14 * S());
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20 * S(), 18 * S()));
     ImGuiChildFlags flags = ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding;
     if (height <= 0) flags |= ImGuiChildFlags_AutoResizeY;
-    bool open = ImGui::BeginChild(id, ImVec2(0, height), flags);
+    bool open = ImGui::BeginChild(id, ImVec2(0, height), flags, windowFlags);
     return open;
 }
 
 void EndCard() {
     ImGui::EndChild();
     ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(2);
     ImGui::Dummy(ImVec2(0, 6 * S()));
 }
 
@@ -120,33 +125,83 @@ void CardTitle(const Fonts& f, const char* title) {
     ImGui::Dummy(ImVec2(0, 2 * S()));
 }
 
-// Segmented control; returns true when the selection changed.
+// Label text of an id ("Name##id" -> "Name").
+const char* LabelEnd(const char* label) { return ImGui::FindRenderedTextEnd(label); }
+
+// Segmented control: a rounded track with the selected option as an accent pill. Returns
+// true when the selection changed.
 bool Segmented(const char* id, int* current, const char* const* labels, int count, float width = 0) {
     bool changed = false;
     ImGui::PushID(id);
+    const float pad = 3 * S();
     const float h = ImGui::GetFrameHeight() + 4 * S();
-    const float w = width > 0 ? width : 0;
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4 * S(), 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, h / 2);
+    const float bh = h - pad * 2;
+    float total = width;
+    if (total <= 0) {
+        total = pad * 2;
+        for (int i = 0; i < count; ++i) total += ImGui::CalcTextSize(labels[i], nullptr, true).x + 32 * S();
+    }
+    const float bw = (total - pad * 2) / count;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    dl->AddRectFilled(p, ImVec2(p.x + total, p.y + h), Hex(kTrack), h / 2);
+    dl->AddRect(p, ImVec2(p.x + total, p.y + h), Hex(kBorder, 160), h / 2);
     for (int i = 0; i < count; ++i) {
-        if (i) ImGui::SameLine();
-        const bool sel = *current == i;
-        ImGui::PushStyleColor(ImGuiCol_Button, sel ? V4(kAccent) : V4(kCardHover));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, sel ? V4(kAccentHover) : V4(kBorder));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, V4(kAccent));
-        ImGui::PushStyleColor(ImGuiCol_Text, sel ? V4(0xFFFFFF) : V4(kMuted));
-        const float bw = w > 0 ? (w - 4 * S() * (count - 1)) / count
-                               : ImGui::CalcTextSize(labels[i]).x + 32 * S();
-        if (ImGui::Button(labels[i], ImVec2(bw, h)) && !sel) {
+        const ImVec2 a(p.x + pad + i * bw, p.y + pad);
+        ImGui::SetCursorScreenPos(a);
+        ImGui::PushID(i);
+        const bool clicked = ImGui::InvisibleButton("seg", ImVec2(bw, bh));
+        ImGui::PopID();
+        const bool sel = *current == i, hovered = ImGui::IsItemHovered();
+        if (sel) {
+            dl->AddRectFilled(a, ImVec2(a.x + bw, a.y + bh), Hex(hovered ? kAccentHover : kAccent), bh / 2);
+        } else if (hovered) {
+            dl->AddRectFilled(a, ImVec2(a.x + bw, a.y + bh), Hex(kCardHover), bh / 2);
+        }
+        const ImVec2 ts = ImGui::CalcTextSize(labels[i], nullptr, true);
+        dl->AddText(ImVec2(a.x + (bw - ts.x) / 2, a.y + (bh - ts.y) / 2), sel ? Hex(0xFFFFFF) : hovered ? Hex(kText) : Hex(kMuted),
+                    labels[i], LabelEnd(labels[i]));
+        if (clicked && !sel) {
             *current = i;
             changed = true;
         }
-        ImGui::PopStyleColor(4);
     }
-    ImGui::PopStyleVar(2);
+    ImGui::SetCursorScreenPos(p);
+    ImGui::Dummy(ImVec2(total, h));
     ImGui::PopID();
     ImGui::Dummy(ImVec2(0, 2 * S()));  // breathing room before whatever follows
     return changed;
+}
+
+// An on/off switch with its label on the right; returns true when flipped. Sits on the
+// text baseline like a checkbox, so text after it on the same line lines up.
+bool Toggle(const char* label, bool* v) {
+    const float fh = ImGui::GetFrameHeight();
+    const float h = 20 * S(), w = 36 * S();
+    const char* end = LabelEnd(label);
+    const float tw = end > label ? ImGui::CalcTextSize(label, end).x + 10 * S() : 0;
+    ImGui::AlignTextToFramePadding();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const bool clicked = ImGui::InvisibleButton(label, ImVec2(w + tw, fh));
+    if (clicked) *v = !*v;
+    // Knob position eases towards the new state.
+    ImGuiStorage* st = ImGui::GetStateStorage();
+    const ImGuiID id = ImGui::GetItemID();
+    float t = st->GetFloat(id, *v ? 1.f : 0.f);
+    t += ((*v ? 1.f : 0.f) - t) * std::min(1.f, ImGui::GetIO().DeltaTime * 16.f);
+    st->SetFloat(id, t);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 a(p.x, p.y + (fh - h) / 2), b(p.x + w, p.y + (fh + h) / 2);
+    const ImVec4 off = V4(ImGui::IsItemHovered() ? 0x343B4E : kBorder), on = V4(kAccent);
+    const ImVec4 mix(off.x + (on.x - off.x) * t, off.y + (on.y - off.y) * t, off.z + (on.z - off.z) * t, 1.f);
+    dl->AddRectFilled(a, b, ImGui::ColorConvertFloat4ToU32(mix), h / 2);
+    const float r = h / 2 - 3 * S();
+    dl->AddCircleFilled(ImVec2(a.x + h / 2 + (w - h) * t, a.y + h / 2), r, Hex(0xFFFFFF), 24);
+    if (tw > 0) {
+        const float th = ImGui::GetTextLineHeight();
+        dl->AddText(ImVec2(p.x + w + 10 * S(), p.y + (fh - th) / 2), Hex(kText), label, end);
+    }
+    return clicked;
 }
 
 bool PrimaryButton(const char* label, ImVec2 size = ImVec2(0, 0)) {
@@ -167,6 +222,7 @@ bool Swatch(const char* id, Rgb c, float size, bool selected = false) {
     float r = size / 2;
     ImVec2 center(p.x + r, p.y + r);
     dl->AddCircleFilled(center, r - 2 * S(), IM_COL32(c.r, c.g, c.b, 255), 32);
+    if (c.r + c.g + c.b < 90) dl->AddCircle(center, r - 2 * S(), Hex(kBorder), 32, 1.5f * S());  // dark: keep it visible
     if (selected || ImGui::IsItemHovered())
         dl->AddCircle(center, r - 0.5f, selected ? Hex(0xFFFFFF) : Hex(0xFFFFFF, 90), 32, 2 * S());
     ImGui::PopID();
@@ -289,17 +345,10 @@ int BoardLedCount(Controller& ctl) {
     return 5;
 }
 
-void PreviewCard(Controller& ctl, const Fonts& f) {
-    BeginCard("preview");
-    CardTitle(f, "Preview");
-    LightsPreview(ctl.output(), ctl.config().argbFans, BoardLedCount(ctl));
-    Muted("Fans on the ARGB header, as set up on the Devices page.");
-    EndCard();
-}
 
 // ---- Icons (drawn with lines and shapes, so no icon font is needed) ------------------
 
-enum class Icon { Lighting, Game, Cpu, Gpu, Memory, Fan, Temp, Board, Leds, Plug, Info, Mouse, Keyboard };
+enum class Icon { Lighting, Game, Cpu, Gpu, Memory, Fan, Temp, Board, Leds, Plug, Info, Mouse, Keyboard, Grid, Gear, Palette };
 
 ImVec2 At(ImVec2 c, float dx, float dy) { return ImVec2(c.x + dx, c.y + dy); }
 
@@ -398,6 +447,29 @@ void DrawIcon(Icon icon, ImVec2 c, float s, ImU32 col, float spin = 0) {
                                   At(c, -r * 0.56f + k * r * 0.32f, -r * 0.16f + row * r * 0.28f), col);
         dl->AddLine(At(c, -r * 0.45f, r * 0.3f), At(c, r * 0.45f, r * 0.3f), col, t);
         break;
+    case Icon::Grid:
+        for (int y = 0; y < 2; ++y)
+            for (int x = 0; x < 2; ++x) {
+                const float x0 = -r * 0.85f + x * r * 0.95f, y0 = -r * 0.85f + y * r * 0.95f;
+                dl->AddRect(At(c, x0, y0), At(c, x0 + r * 0.75f, y0 + r * 0.75f), col, r * 0.18f, 0, t);
+            }
+        break;
+    case Icon::Gear:
+        dl->AddCircle(c, r * 0.32f, col, 16, t);
+        dl->AddCircle(c, r * 0.62f, col, 24, t);
+        for (int i = 0; i < 8; ++i) {
+            const float a = i * 0.785398f;
+            dl->AddLine(At(c, std::cos(a) * r * 0.62f, std::sin(a) * r * 0.62f),
+                        At(c, std::cos(a) * r * 0.92f, std::sin(a) * r * 0.92f), col, t * 1.6f);
+        }
+        break;
+    case Icon::Palette:
+        dl->AddCircle(c, r * 0.85f, col, 28, t);
+        for (int i = 0; i < 4; ++i) {
+            const float a = -2.4f + i * 0.9f;
+            dl->AddCircleFilled(At(c, std::cos(a) * r * 0.48f, std::sin(a) * r * 0.48f), r * 0.14f, col);
+        }
+        break;
     case Icon::Info:
         dl->AddCircle(c, r * 0.88f, col, 24, t);
         dl->AddCircleFilled(At(c, 0, -r * 0.4f), r * 0.1f, col);
@@ -406,12 +478,30 @@ void DrawIcon(Icon icon, ImVec2 c, float s, ImU32 col, float spin = 0) {
     }
 }
 
-// An icon inline with text (advances the cursor like an item).
+// An icon inline with text (advances the cursor like an item). Centered on the text line,
+// including when the line is pushed down to line up with a frame (a switch or button earlier
+// in the line or table row), so it never sits higher than the text next to it.
 void IconItem(Icon icon, float size, ImU32 col, float spin = 0) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float h = std::max(size, ImGui::GetTextLineHeight());
-    DrawIcon(icon, ImVec2(p.x + size / 2, p.y + h / 2), size, col, spin);
-    ImGui::Dummy(ImVec2(size, h));
+    const float base = ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset;
+    const float lh = ImGui::GetTextLineHeight();
+    DrawIcon(icon, ImVec2(p.x + size / 2, p.y + base + lh / 2), size, col, spin);
+    ImGui::Dummy(ImVec2(size, base + std::max(lh, size * 0.9f)));
+}
+
+// Card title with an icon in front.
+void CardTitle(const Fonts& f, const char* title, Icon icon) {
+    IconItem(icon, 18 * S(), Hex(kAccent));
+    ImGui::SameLine(0, 10 * S());
+    CardTitle(f, title);
+}
+
+void PreviewCard(Controller& ctl, const Fonts& f) {
+    BeginCard("preview");
+    CardTitle(f, "Preview", Icon::Fan);
+    LightsPreview(ctl.output(), ctl.config().argbFans, BoardLedCount(ctl));
+    Muted("Fans on the ARGB header, as set up on the Devices page.");
+    EndCard();
 }
 
 // ---- Dashboard ------------------------------------------------------------------------
@@ -804,7 +894,7 @@ void DashboardCustomize(Controller& ctl, UiState& ui, const Fonts& f) {
         ImGui::PushID(w->id);
         auto pos = std::find(order.begin(), order.end(), all[i]);
         bool shown = pos != order.end();
-        if (ImGui::Checkbox("##on", &shown)) {
+        if (Toggle("##on", &shown)) {
             if (shown) order.push_back(all[i]);
             else order.erase(pos);
             changed = true;
@@ -846,36 +936,52 @@ void DashboardCustomize(Controller& ctl, UiState& ui, const Fonts& f) {
 
 void DashboardPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
     const sensors::SystemSnapshot snap = ctl.monitor().Snapshot();
-    Muted("The essentials at a glance. Cards can be hidden and reordered.");
-    ImGui::SameLine(ImGui::GetContentRegionMax().x - 100 * S());
-    if (ImGui::Button(ui.dashEdit ? "Close" : "Customize", ImVec2(100 * S(), 0))) ui.dashEdit = !ui.dashEdit;
+    Muted("Cards can be hidden and reordered.");
+    ImGui::SameLine(ImGui::GetContentRegionMax().x - 110 * S());
+    if (ImGui::Button(ui.dashEdit ? "Close" : "Customize", ImVec2(110 * S(), 0))) ui.dashEdit = !ui.dashEdit;
     ImGui::Dummy(ImVec2(0, 4 * S()));
     if (ui.dashEdit) DashboardCustomize(ctl, ui, f);
 
-    const auto& order = ctl.prefs().dashboard;
-    if (order.empty()) {
+    std::vector<const DashWidget*> shown;
+    for (const auto& id : ctl.prefs().dashboard)
+        if (const DashWidget* w = FindWidget(id)) shown.push_back(w);
+    if (shown.empty()) {
         Muted("All cards are hidden. Click Customize to show some.");
         return;
     }
     const float avail = ImGui::GetContentRegionAvail().x;
     const int cols = avail > 1000 * S() ? 3 : avail > 600 * S() ? 2 : 1;
     DashCtx c{hwnd, ctl, in, ui, f, snap};
+    // Every card in a row is as tall as the tallest one (measured last frame), and never
+    // shorter than kMin, so the grid reads as even tiles instead of a ragged column.
+    static std::map<std::string, float> measured;  // content height per card, unscaled
+    const float kMin = 150 * S();
     if (!ImGui::BeginTable("dash", cols, ImGuiTableFlags_SizingStretchSame)) return;
-    for (const auto& id : order) {
-        const DashWidget* w = FindWidget(id);
-        if (!w) continue;
-        ImGui::TableNextColumn();
-        ImGui::PushID(w->id);
-        BeginCard(w->id);
-        IconItem(w->icon, 20 * S(), Hex(kAccent));
-        ImGui::SameLine(0, 8 * S());
-        ImGui::PushFont(f.bold);
-        ImGui::TextUnformatted(w->title);
-        ImGui::PopFont();
-        ImGui::Dummy(ImVec2(0, 2 * S()));
-        w->draw(c);
-        EndCard();
-        ImGui::PopID();
+    for (size_t row = 0; row < shown.size(); row += static_cast<size_t>(cols)) {
+        float rowH = kMin;
+        for (size_t k = row; k < shown.size() && k < row + static_cast<size_t>(cols); ++k) {
+            auto it = measured.find(shown[k]->id);
+            if (it != measured.end()) rowH = std::max(rowH, it->second * S());
+        }
+        ImGui::TableNextRow();
+        for (size_t k = row; k < shown.size() && k < row + static_cast<size_t>(cols); ++k) {
+            const DashWidget* w = shown[k];
+            ImGui::TableNextColumn();
+            ImGui::PushID(w->id);
+            BeginCard(w->id, rowH, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+            IconItem(w->icon, 20 * S(), Hex(kAccent));
+            ImGui::SameLine(0, 10 * S());
+            ImGui::PushFont(f.bold);
+            ImGui::TextUnformatted(w->title);
+            ImGui::PopFont();
+            ImGui::Dummy(ImVec2(0, 2 * S()));
+            w->draw(c);
+            // Natural height of what was drawn: cursor + bottom padding - the last spacing.
+            const ImGuiStyle& st = ImGui::GetStyle();
+            measured[w->id] = (ImGui::GetCursorPosY() - st.ItemSpacing.y + st.WindowPadding.y) / S();
+            EndCard();
+            ImGui::PopID();
+        }
     }
     ImGui::EndTable();
 }
@@ -884,7 +990,7 @@ void DashboardPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
 
 void BrightnessCard(Controller& ctl, const Fonts& f) {
     BeginCard("brightness");
-    CardTitle(f, "Brightness");
+    CardTitle(f, "Brightness", Icon::Lighting);
     float b = static_cast<float>(ctl.config().auraCorrection.brightness * 100.0);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::SliderFloat("##brightness", &b, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
@@ -895,9 +1001,11 @@ void BrightnessCard(Controller& ctl, const Fonts& f) {
     EndCard();
 }
 
+void RainbowCard(Controller& ctl, const Fonts& f, bool showSpread);
+
 void AutoPage(Controller& ctl, const Fonts& f) {
     BeginCard("now");
-    CardTitle(f, "Dynamic lighting");
+    CardTitle(f, "Dynamic lighting", Icon::Game);
     Muted("Games drive your lights. When several are running, the one that changed color most recently wins.");
     ImGui::Dummy(ImVec2(0, 8 * S()));
 
@@ -952,7 +1060,7 @@ void AutoPage(Controller& ctl, const Fonts& f) {
             if (builtIn) {
                 pill = "Supports dynamic lighting";
                 pillColor = kAmber;
-                detail += "  -  " + std::string(g.profile->how) + "  -  waiting for a match (set up on Integrations)";
+                detail += "  -  " + std::string(g.profile->how) + "  -  waiting for a match (set it up on its Games List page)";
             } else if (g.profile) {
                 detail += "  -  " + std::string(g.profile->how) + ". " + g.profile->note;
             } else if (g.support == Support::Unknown) {
@@ -978,7 +1086,7 @@ void AutoPage(Controller& ctl, const Fonts& f) {
     EndCard();
 
     BeginCard("idle");
-    CardTitle(f, "When no game is running");
+    CardTitle(f, "When no game is running", Icon::Lighting);
     int idle = static_cast<int>(ctl.prefs().idle);
     const char* labels[] = {"My manual color", "Rainbow", "Off", "Armoury Crate"};
     if (Segmented("idle", &idle, labels, 4, ImGui::GetContentRegionAvail().x)) {
@@ -988,134 +1096,404 @@ void AutoPage(Controller& ctl, const Fonts& f) {
     ImGui::Dummy(ImVec2(0, 4 * S()));
     static const char* kIdleHelp[] = {
         "Your manual color and effect (Lighting > Manual) show between games.",
-        "A slow rainbow wave turns around the fans and motherboard between games.",
+        "A slow rainbow wave turns around the fans and motherboard between games. Customize it below.",
         "The motherboard and fans stay dark between games.",
         "Between games LumaBridge hands the lights back to Armoury Crate's own effect. Set up "
         "\"Armoury Crate hand-back\" on the Integrations page once to make this silent.",
     };
     Muted("%s", kIdleHelp[idle]);
     ImGui::Dummy(ImVec2(0, 4 * S()));
-    if (ImGui::Checkbox("Games without dynamic lighting show the screen's colors", &ctl.prefs().screenForUnsupported))
+    if (Toggle("Games without dynamic lighting show the screen's colors", &ctl.prefs().screenForUnsupported))
         ctl.Changed();
     Muted("LumaBridge watches the screen image (never the game) and runs its colors around the fans. "
           "Choose per game on the Games List page.");
     EndCard();
 
+    if (ctl.prefs().idle == IdleBehavior::Rainbow) RainbowCard(ctl, f, true);
     PreviewCard(ctl, f);
     BrightnessCard(ctl, f);
 }
 
-void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
-    Prefs& p = ctl.prefs();
-    BeginCard("picker");
-    CardTitle(f, "Color");
+// ---- Presets --------------------------------------------------------------------------
 
-    const float wheel = std::min(250 * S(), ImGui::GetContentRegionAvail().x * 0.45f);
-    float col[3] = {p.manualColor.r / 255.f, p.manualColor.g / 255.f, p.manualColor.b / 255.f};
+// A ready-made look for an effect: colors, speed and (for rainbows) the rainbow settings.
+struct Preset {
+    const char* name;
+    fx::Kind kind;
+    Rgb c1, c2;
+    float speed;
+    float hueStart = 0, hueSpan = 360, saturation = 1;
+    int spread = 1;
+};
+
+constexpr Rgb H(unsigned rgb) {
+    return Rgb{static_cast<uint8_t>(rgb >> 16), static_cast<uint8_t>(rgb >> 8), static_cast<uint8_t>(rgb)};
+}
+
+using K = fx::Kind;
+const Preset kPresets[] = {
+    {"Arctic", K::Static, H(0x00C8FF), {}, 0},
+    {"Sunset", K::Static, H(0xFF6A2B), {}, 0},
+    {"Rose", K::Static, H(0xFF3D7F), {}, 0},
+    {"Mint", K::Static, H(0x3DFFB0), {}, 0},
+    {"Violet", K::Static, H(0x8A5CFF), {}, 0},
+    {"Warm white", K::Static, H(0xFFD9A0), {}, 0},
+    {"Gold", K::Static, H(0xFFB400), {}, 0},
+    {"Crimson", K::Static, H(0xFF1020), {}, 0},
+
+    {"Calm ocean", K::Breathing, H(0x0090FF), {}, 0.25f},
+    {"Heartbeat", K::Breathing, H(0xFF1E3C), {}, 1.1f},
+    {"Aurora", K::Breathing, H(0x20FFA0), {}, 0.35f},
+    {"Lavender", K::Breathing, H(0xB48CFF), {}, 0.3f},
+    {"Ember", K::Breathing, H(0xFF5A00), {}, 0.5f},
+
+    {"Alarm", K::Strobe, H(0xFF0010), {}, 3.f},
+    {"Flash", K::Strobe, H(0xFFFFFF), {}, 1.5f},
+    {"Rave", K::Strobe, H(0xC000FF), {}, 6.f},
+    {"Cyan pulse", K::Strobe, H(0x00E5FF), {}, 2.f},
+
+    {"Full spectrum", K::ColorCycle, {}, {}, 0.05f},
+    {"Pastel", K::ColorCycle, {}, {}, 0.05f, 0, 360, 0.45f},
+    {"Warm", K::ColorCycle, {}, {}, 0.08f, 330, 80},
+    {"Ocean", K::ColorCycle, {}, {}, 0.08f, 170, 90},
+    {"Quick", K::ColorCycle, {}, {}, 0.2f},
+
+    {"Classic", K::RainbowWave, {}, {}, 0.25f},
+    {"Pastel", K::RainbowWave, {}, {}, 0.2f, 0, 360, 0.45f},
+    {"Double", K::RainbowWave, {}, {}, 0.2f, 0, 360, 1, 2},
+    {"Ocean", K::RainbowWave, {}, {}, 0.3f, 170, 90},
+    {"Fire", K::RainbowWave, {}, {}, 0.4f, 0, 45},
+    {"Vaporwave", K::RainbowWave, {}, {}, 0.2f, 180, 140},
+    {"Toxic", K::RainbowWave, {}, {}, 0.3f, 60, 90},
+
+    {"Sunset", K::Gradient, H(0xFF5E3A), H(0x8A2BE2), 0.1f},
+    {"Ocean", K::Gradient, H(0x00C6FF), H(0x0048FF), 0.1f},
+    {"Aurora", K::Gradient, H(0x00FFA3), H(0x7B2FF7), 0.15f},
+    {"Fire", K::Gradient, H(0xFF1A00), H(0xFFB300), 0.2f},
+    {"Cyberpunk", K::Gradient, H(0xFF00C8), H(0x00F0FF), 0.15f},
+    {"Peach", K::Gradient, H(0xFF9A8B), H(0xFF3D77), 0.1f},
+    {"Forest", K::Gradient, H(0x7CFF4F), H(0x00804A), 0.1f},
+    {"Ice", K::Gradient, H(0xFFFFFF), H(0x00A2FF), 0.1f},
+
+    {"Blue comet", K::Comet, H(0x00A0FF), H(0x000814), 0.6f},
+    {"Fire trail", K::Comet, H(0xFF6A00), H(0x200000), 0.8f},
+    {"Neon", K::Comet, H(0x00FFD0), H(0x14002A), 0.7f},
+    {"Ghost", K::Comet, H(0xFFFFFF), H(0x000000), 0.5f},
+    {"Red alert", K::Comet, H(0xFF0020), H(0x100000), 1.5f},
+
+    {"Starry night", K::Twinkle, H(0x0A1040), H(0xFFFFFF), 0.5f},
+    {"Fireflies", K::Twinkle, H(0x002010), H(0xC8FF3C), 0.4f},
+    {"Snowfall", K::Twinkle, H(0x1E3A66), H(0xFFFFFF), 0.6f},
+    {"Embers", K::Twinkle, H(0x300600), H(0xFF7A00), 0.7f},
+    {"Pink sparkle", K::Twinkle, H(0x2A0020), H(0xFF66D9), 0.6f},
+};
+
+bool IsRainbow(fx::Kind k) { return k == fx::Kind::ColorCycle || k == fx::Kind::RainbowWave; }
+
+fx::Params PresetParams(const Preset& p) {
+    fx::Params x;
+    x.kind = p.kind;
+    x.color1 = p.c1;
+    x.color2 = p.c2;
+    x.speed = p.speed;
+    x.hueStart = p.hueStart;
+    x.hueSpan = p.hueSpan;
+    x.saturation = p.saturation;
+    x.spread = p.spread;
+    return x;
+}
+
+bool Near(float a, float b) { return std::fabs(a - b) < 0.001f; }
+
+bool PresetActive(const Prefs& p, const Preset& x) {
+    if (p.effect != x.kind || (x.kind != fx::Kind::Static && !Near(p.speedHz, x.speed))) return false;
+    if (IsRainbow(x.kind))
+        return Near(p.rainbowHueStart, x.hueStart) && Near(p.rainbowHueSpan, x.hueSpan) &&
+               Near(p.rainbowSaturation, x.saturation) && (x.kind == fx::Kind::ColorCycle || p.rainbowSpread == x.spread);
+    return p.manualColor == x.c1 && (!fx::UsesSecondColor(x.kind) || p.manualColor2 == x.c2);
+}
+
+void ApplyPreset(Controller& ctl, const Preset& x) {
+    Prefs& p = ctl.prefs();
+    p.effect = x.kind;
+    if (x.kind != fx::Kind::Static) p.speedHz = x.speed;
+    if (IsRainbow(x.kind)) {
+        p.rainbowHueStart = x.hueStart;
+        p.rainbowHueSpan = x.hueSpan;
+        p.rainbowSaturation = x.saturation;
+        if (x.kind == fx::Kind::RainbowWave) p.rainbowSpread = x.spread;
+        ctl.Changed();
+    } else {
+        p.manualColor = x.c1;
+        if (fx::UsesSecondColor(x.kind)) p.manualColor2 = x.c2;
+        ctl.RememberManualColor();
+    }
+}
+
+// A strip of `fx` as it looks right now, in a bar with rounded ends: the ends are drawn
+// as rounded caps in the first / last color, the middle as thin slices over them.
+void EffectStrip(const fx::Params& fx, ImVec2 a, ImVec2 b, float rounding) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const int n = 32;
+    const double t = ImGui::GetTime();
+    const float r = std::min(rounding, (b.y - a.y) / 2);
+    const float w = (b.x - a.x) / n;
+    dl->AddRectFilled(a, ImVec2(a.x + 2 * r, b.y), Col(fx::Render(fx, t, 0, n)), r, ImDrawFlags_RoundCornersLeft);
+    dl->AddRectFilled(ImVec2(b.x - 2 * r, a.y), b, Col(fx::Render(fx, t, n - 1, n)), r, ImDrawFlags_RoundCornersRight);
+    for (int i = 0; i < n; ++i) {
+        const float x0 = std::max(a.x + i * w, a.x + r), x1 = std::min(a.x + (i + 1) * w + 0.5f, b.x - r);
+        if (x1 > x0) dl->AddRectFilled(ImVec2(x0, a.y), ImVec2(x1, b.y), Col(fx::Render(fx, t, i, n)));
+    }
+}
+
+// The presets of the current effect as tiles with a live preview; click to apply.
+void PresetTiles(Controller& ctl) {
+    const Prefs& p = ctl.prefs();
+    const float w = 128 * S(), h = 60 * S(), gap = 8 * S();
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const int perRow = std::max(1, static_cast<int>((avail + gap) / (w + gap)));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    int shown = 0;
+    for (size_t i = 0; i < std::size(kPresets); ++i) {
+        const Preset& x = kPresets[i];
+        if (x.kind != p.effect) continue;
+        if (shown % perRow) ImGui::SameLine(0, gap);
+        ++shown;
+        ImGui::PushID(static_cast<int>(i));
+        const ImVec2 a = ImGui::GetCursorScreenPos();
+        const bool clicked = ImGui::InvisibleButton("preset", ImVec2(w, h));
+        const bool active = PresetActive(p, x), hovered = ImGui::IsItemHovered();
+        const ImVec2 b(a.x + w, a.y + h);
+        dl->AddRectFilled(a, b, Hex(hovered ? kBorder : kCardHover), 10 * S());
+        if (active) dl->AddRect(a, b, Hex(kAccentHover), 10 * S(), 0, 2 * S());
+        EffectStrip(PresetParams(x), ImVec2(a.x + 8 * S(), a.y + 8 * S()), ImVec2(b.x - 8 * S(), a.y + 30 * S()), 6 * S());
+        dl->AddText(ImVec2(a.x + 10 * S(), a.y + 36 * S()), Hex(active ? kText : hovered ? kText : kMuted), x.name);
+        ImGui::PopID();
+        if (clicked) ApplyPreset(ctl, x);
+    }
+}
+
+// ---- Colors ---------------------------------------------------------------------------
+
+// Everything to pick one color: hue wheel, a big preview, hex, preset and recent swatches.
+// `slot` keeps the widgets of different colors apart. Returns true when the color changed.
+bool ColorEditor(Controller& ctl, UiState& ui, Rgb* color, const char* slot) {
+    ImGui::PushID(slot);
+    bool changed = false;
+    const float wheel = std::min(240 * S(), ImGui::GetContentRegionAvail().x * 0.42f);
+    float col[3] = {color->r / 255.f, color->g / 255.f, color->b / 255.f};
     ImGui::SetNextItemWidth(wheel);
     if (ImGui::ColorPicker3("##wheel", col,
                             ImGuiColorEditFlags_PickerHueWheel | ImGuiColorEditFlags_NoSidePreview |
                                 ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
-        p.manualColor = FromV4(col);
+        *color = FromV4(col);
+        changed = true;
         ctl.Changed();
     }
-    if (ImGui::IsItemDeactivatedAfterEdit()) ctl.RememberManualColor();
+    if (ImGui::IsItemDeactivatedAfterEdit()) ctl.RememberColor(*color);
 
     ImGui::SameLine(0, 24 * S());
     ImGui::BeginGroup();
-    {
-        const float colW = ImGui::GetContentRegionAvail().x;
-        ImVec2 pos = ImGui::GetCursorScreenPos();
-        ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + colW, pos.y + 56 * S()),
-                                                  IM_COL32(p.manualColor.r, p.manualColor.g, p.manualColor.b, 255),
-                                                  10 * S());
-        ImGui::Dummy(ImVec2(colW, 56 * S()));
-        ImGui::Dummy(ImVec2(0, 4 * S()));
+    const float colW = ImGui::GetContentRegionAvail().x;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + colW, pos.y + 56 * S()), Col(*color), 12 * S());
+    ImGui::GetWindowDrawList()->AddRect(pos, ImVec2(pos.x + colW, pos.y + 56 * S()), Hex(0xFFFFFF, 30), 12 * S());
+    ImGui::Dummy(ImVec2(colW, 56 * S()));
 
-        if (!ui.hexEditing) snprintf(ui.hex, sizeof ui.hex, "%s", ToHex(p.manualColor).c_str());
-        ImGui::SetNextItemWidth(colW);
-        if (ImGui::InputText("##hex", ui.hex, sizeof ui.hex, ImGuiInputTextFlags_CharsUppercase)) {
-            Rgb c;
-            if (FromHex(ui.hex, &c)) {
-                p.manualColor = c;
-                ctl.Changed();
-            }
-        }
-        ui.hexEditing = ImGui::IsItemActive();
-        if (ImGui::IsItemDeactivatedAfterEdit()) ctl.RememberManualColor();
-
-        ImGui::Dummy(ImVec2(0, 6 * S()));
-        ImGui::TextUnformatted("Effect");
-        if (EffectGrid(&p.effect, colW)) {
-            const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
-            if (p.effect == ManualEffect::ColorCycle) p.speedHz = std::min(p.speedHz, 0.5f);
-            else if (e.maxSpeed > 0) p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
+    const std::string key = std::string(slot);
+    if (!ui.hexEditing || ui.hexSlot != key) snprintf(ui.hex, sizeof ui.hex, "%s", ToHex(*color).c_str());
+    ImGui::SetNextItemWidth(colW);
+    if (ImGui::InputText("##hex", ui.hex, sizeof ui.hex, ImGuiInputTextFlags_CharsUppercase)) {
+        Rgb c;
+        if (FromHex(ui.hex, &c)) {
+            *color = c;
+            changed = true;
             ctl.Changed();
         }
-        const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
-        Muted("%s", e.help);
-        if (p.effect == ManualEffect::ColorCycle) {
-            float seconds = 1.f / std::max(p.speedHz, 0.02f);
-            if (LabeledSlider("One full cycle every", &seconds, 2.f, 60.f, "%.0f seconds")) {
-                p.speedHz = 1.f / seconds;
-                ctl.Changed();
-            }
-        } else if (e.maxSpeed > 0) {
-            p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
-            if (LabeledSlider("Speed", &p.speedHz, e.minSpeed, e.maxSpeed, e.speedFmt)) ctl.Changed();
-        }
-        if (fx::UsesSecondColor(p.effect)) {
-            ImGui::Dummy(ImVec2(0, 4 * S()));
-            float c2[3] = {p.manualColor2.r / 255.f, p.manualColor2.g / 255.f, p.manualColor2.b / 255.f};
-            if (ImGui::ColorEdit3("Second color", c2, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel)) {
-                p.manualColor2 = FromV4(c2);
-                ctl.Changed();
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Swap")) {
-                std::swap(p.manualColor, p.manualColor2);
-                ctl.Changed();
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Off")) {
-                p.manualColor2 = Rgb{};
-                ctl.Changed();
-            }
-        }
+    }
+    if (ImGui::IsItemActive()) {
+        ui.hexEditing = true;
+        ui.hexSlot = key;
+    } else if (ui.hexSlot == key) {
+        ui.hexEditing = false;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit()) ctl.RememberColor(*color);
 
-        ImGui::Dummy(ImVec2(0, 6 * S()));
-        ImGui::TextUnformatted("Presets");
-        static const Rgb kPresets[] = {{255, 255, 255}, {255, 40, 40},  {255, 120, 0}, {255, 210, 0},
-                                       {60, 230, 90},   {0, 220, 200},  {0, 140, 255}, {80, 70, 255},
-                                       {170, 60, 255},  {255, 60, 170}};
-        const float sw = 26 * S();
-        int perRow = std::max(1, static_cast<int>((colW + 6 * S()) / (sw + 6 * S())));
-        for (int i = 0; i < static_cast<int>(std::size(kPresets)); ++i) {
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    Muted("Swatches");
+    static const Rgb kSwatches[] = {{255, 255, 255}, {255, 40, 40},  {255, 120, 0}, {255, 210, 0},  {60, 230, 90},
+                                    {0, 220, 200},   {0, 140, 255},  {80, 70, 255}, {170, 60, 255}, {255, 60, 170},
+                                    {255, 170, 110}, {0, 0, 0}};
+    const float sw = 26 * S();
+    const int perRow = std::max(1, static_cast<int>((colW + 6 * S()) / (sw + 6 * S())));
+    for (int i = 0; i < static_cast<int>(std::size(kSwatches)); ++i) {
+        if (i % perRow) ImGui::SameLine(0, 6 * S());
+        char id[8];
+        snprintf(id, sizeof id, "p%d", i);
+        if (Swatch(id, kSwatches[i], sw, *color == kSwatches[i])) {
+            *color = kSwatches[i];
+            changed = true;
+            ctl.RememberColor(*color);
+        }
+        if (kSwatches[i].IsBlack() && ImGui::IsItemHovered()) ImGui::SetTooltip("Off (black)");
+    }
+    const auto& recent = ctl.prefs().recentColors;
+    if (!recent.empty()) {
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+        Muted("Recent");
+        for (size_t i = 0; i < recent.size(); ++i) {
             if (i % perRow) ImGui::SameLine(0, 6 * S());
             char id[8];
-            snprintf(id, sizeof id, "p%d", i);
-            if (Swatch(id, kPresets[i], sw, p.manualColor == kPresets[i])) {
-                p.manualColor = kPresets[i];
-                ctl.RememberManualColor();
-            }
-        }
-        if (!p.recentColors.empty()) {
-            ImGui::Dummy(ImVec2(0, 4 * S()));
-            ImGui::TextUnformatted("Recent");
-            for (size_t i = 0; i < p.recentColors.size(); ++i) {
-                if (i % perRow) ImGui::SameLine(0, 6 * S());
-                char id[8];
-                snprintf(id, sizeof id, "r%d", static_cast<int>(i));
-                Rgb c = p.recentColors[i];
-                if (Swatch(id, c, sw, p.manualColor == c)) {
-                    p.manualColor = c;
-                    ctl.Changed();
-                }
+            snprintf(id, sizeof id, "r%d", static_cast<int>(i));
+            const Rgb c = recent[i];
+            if (Swatch(id, c, sw, *color == c)) {
+                *color = c;
+                changed = true;
+                ctl.Changed();
             }
         }
     }
     ImGui::EndGroup();
+    ImGui::PopID();
+    return changed;
+}
+
+// A color as a selectable tab: swatch + name. Returns true when clicked.
+bool ColorTab(const char* label, Rgb c, bool selected, float width) {
+    const float h = 44 * S();
+    const ImVec2 a = ImGui::GetCursorScreenPos();
+    const bool clicked = ImGui::InvisibleButton(label, ImVec2(width, h));
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 b(a.x + width, a.y + h);
+    dl->AddRectFilled(a, b, Hex(selected ? kCardHover : hovered ? kCardHover : kTrack), 12 * S());
+    dl->AddRect(a, b, selected ? Hex(kAccentHover) : Hex(kBorder), 12 * S(), 0, selected ? 2 * S() : 1 * S());
+    const float r = 12 * S();
+    const ImVec2 dot(a.x + 14 * S() + r, a.y + h / 2);
+    dl->AddCircleFilled(dot, r, Col(c), 24);
+    dl->AddCircle(dot, r, Hex(0xFFFFFF, 50), 24, 1.2f * S());
+    const float th = ImGui::GetTextLineHeight();
+    dl->AddText(ImVec2(dot.x + r + 10 * S(), a.y + h / 2 - th), Hex(selected ? kText : kMuted), label, LabelEnd(label));
+    const std::string hex = ToHex(c);
+    dl->AddText(ImVec2(dot.x + r + 10 * S(), a.y + h / 2), Hex(kMuted), hex.c_str());
+    return clicked;
+}
+
+// ---- Rainbow --------------------------------------------------------------------------
+
+void RainbowCard(Controller& ctl, const Fonts& f, bool showSpread) {
+    Prefs& p = ctl.prefs();
+    BeginCard("rainbow");
+    CardTitle(f, "Rainbow", Icon::Palette);
+    Muted("Pick which part of the spectrum to use and how vivid it is. Used by Color cycle, Rainbow wave "
+          "and Auto mode's rainbow between games.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    // The chosen hues as a strip.
+    fx::Params look;
+    look.kind = fx::Kind::RainbowWave;
+    look.speed = 0;
+    look.hueStart = p.rainbowHueStart;
+    look.hueSpan = p.rainbowHueSpan;
+    look.saturation = p.rainbowSaturation;
+    const ImVec2 a = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x;
+    EffectStrip(look, a, ImVec2(a.x + w, a.y + 18 * S()), 9 * S());
+    ImGui::Dummy(ImVec2(w, 18 * S()));
+    bool changed = false;
+    changed |= LabeledSlider("Starting hue", &p.rainbowHueStart, 0.f, 360.f, "%.0f\xC2\xB0");
+    changed |= LabeledSlider("Range of hues", &p.rainbowHueSpan, 10.f, 360.f,
+                             p.rainbowHueSpan >= 359.5f ? "Full spectrum" : "%.0f\xC2\xB0");
+    float sat = p.rainbowSaturation * 100.f;
+    if (LabeledSlider("Color intensity", &sat, 0.f, 100.f, sat >= 99.5f ? "Vivid" : "%.0f%%")) {
+        p.rainbowSaturation = sat / 100.f;
+        changed = true;
+    }
+    if (showSpread) {
+        ImGui::TextUnformatted("Rainbows around each fan");
+        static const char* kSpread[] = {"1", "2", "3", "4"};
+        int spread = std::clamp(p.rainbowSpread, 1, 4) - 1;
+        if (Segmented("spread", &spread, kSpread, 4, std::min(320 * S(), ImGui::GetContentRegionAvail().x))) {
+            p.rainbowSpread = spread + 1;
+            changed = true;
+        }
+    }
+    if (changed) ctl.Changed();
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    if (ImGui::Button("Reset rainbow")) {
+        p.rainbowHueStart = 0;
+        p.rainbowHueSpan = 360;
+        p.rainbowSaturation = 1;
+        p.rainbowSpread = 1;
+        ctl.Changed();
+    }
     EndCard();
+}
+
+void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
+    Prefs& p = ctl.prefs();
+    BeginCard("effect");
+    CardTitle(f, "Effect", Icon::Lighting);
+    const float full = ImGui::GetContentRegionAvail().x;
+    if (EffectGrid(&p.effect, full)) {
+        const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
+        if (p.effect == ManualEffect::ColorCycle) p.speedHz = std::min(p.speedHz, 0.5f);
+        else if (e.maxSpeed > 0) p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
+        ctl.Changed();
+    }
+    const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
+    Muted("%s", e.help);
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    ImGui::TextUnformatted("Presets");
+    PresetTiles(ctl);
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    if (p.effect == ManualEffect::ColorCycle) {
+        float seconds = 1.f / std::max(p.speedHz, 0.02f);
+        if (LabeledSlider("One full cycle every", &seconds, 2.f, 60.f, "%.0f seconds")) {
+            p.speedHz = 1.f / seconds;
+            ctl.Changed();
+        }
+    } else if (e.maxSpeed > 0) {
+        p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
+        if (LabeledSlider("Speed", &p.speedHz, e.minSpeed, e.maxSpeed, e.speedFmt)) ctl.Changed();
+    }
+    if (p.effect == ManualEffect::RainbowWave || p.effect == ManualEffect::Gradient || p.effect == ManualEffect::Comet) {
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+        if (Toggle("Reverse direction", &p.effectReverse)) ctl.Changed();
+    }
+    EndCard();
+
+    if (IsRainbow(p.effect)) {
+        RainbowCard(ctl, f, p.effect == ManualEffect::RainbowWave);
+    } else {
+        BeginCard("colors");
+        const bool two = fx::UsesSecondColor(p.effect);
+        CardTitle(f, two ? "Colors" : "Color", Icon::Palette);
+        if (two) {
+            static const char* kSecondName[] = {"", "", "", "", "", "Second color", "Background", "Sparkles"};
+            const char* first = p.effect == ManualEffect::Twinkle ? "Base color" : p.effect == ManualEffect::Comet ? "Comet" : "First color";
+            const float swapW = 70 * S(), gap = 8 * S();
+            const float tabW = (ImGui::GetContentRegionAvail().x - swapW - gap * 2) / 2;
+            if (ColorTab((std::string(first) + "##c1").c_str(), p.manualColor, ui.colorSlot == 0, tabW)) ui.colorSlot = 0;
+            ImGui::SameLine(0, gap);
+            if (ColorTab((std::string(kSecondName[static_cast<int>(p.effect)]) + "##c2").c_str(), p.manualColor2,
+                         ui.colorSlot == 1, tabW))
+                ui.colorSlot = 1;
+            ImGui::SameLine(0, gap);
+            if (ImGui::Button("Swap", ImVec2(swapW, 44 * S()))) {
+                std::swap(p.manualColor, p.manualColor2);
+                ctl.Changed();
+            }
+            ImGui::Dummy(ImVec2(0, 6 * S()));
+        } else {
+            ui.colorSlot = 0;
+        }
+        if (ui.colorSlot == 0) {
+            if (ColorEditor(ctl, ui, &p.manualColor, "color1")) ctl.Changed();
+        } else {
+            if (ColorEditor(ctl, ui, &p.manualColor2, "color2")) ctl.Changed();
+        }
+        EndCard();
+    }
 
     PreviewCard(ctl, f);
     BrightnessCard(ctl, f);
@@ -1123,7 +1501,7 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
 
 void FansCard(Controller& ctl, const Fonts& f) {
     BeginCard("fans");
-    CardTitle(f, "Fans on the ARGB header");
+    CardTitle(f, "Fans on the ARGB header", Icon::Fan);
     Muted("Per-LED effects (rainbow wave, gradient, comet, twinkle) need to know how the LEDs are "
           "grouped. Fans chained on a hub count in order. be quiet! Light Wings 120 mm: 20 LEDs per fan.");
     ImGui::Dummy(ImVec2(0, 4 * S()));
@@ -1151,7 +1529,7 @@ void FansCard(Controller& ctl, const Fonts& f) {
         ctl.Changed();
     }
     bool test = ctl.fanTest();
-    if (ImGui::Checkbox("Show test pattern", &test)) ctl.SetFanTest(test);
+    if (Toggle("Show test pattern", &test)) ctl.SetFanTest(test);
     ImGui::SameLine();
     Muted("Each fan should be one solid color with a single white LED. If a color spills onto the "
           "next fan, change LEDs per fan.");
@@ -1164,7 +1542,7 @@ void FansCard(Controller& ctl, const Fonts& f) {
 
 void PeripheralsCard(Controller& ctl, const Fonts& f) {
     BeginCard("peripherals");
-    CardTitle(f, "Keyboard & mouse");
+    CardTitle(f, "Keyboard & mouse", Icon::Keyboard);
 
     // Logitech (G502 X Plus, ...) through G HUB.
     const auto& lg = ctl.logitech();
@@ -1187,7 +1565,7 @@ void PeripheralsCard(Controller& ctl, const Fonts& f) {
           "LED SDK in G HUB (nothing goes into a game). They show one color: the first LED of the effect.");
     if (on && st == S_::Released && !ctl.logitechNote().empty()) Muted("Right now: %s.", ctl.logitechNote().c_str());
     bool enabled = on;
-    if (ImGui::Checkbox("Light Logitech devices", &enabled)) ctl.SetLogitechEnabled(enabled);
+    if (Toggle("Light Logitech devices", &enabled)) ctl.SetLogitechEnabled(enabled);
     if (ImGui::IsItemHovered() && !lg.dllPath().empty()) ImGui::SetTooltip("%s", Utf8(lg.dllPath()).c_str());
     ImGui::EndGroup();
 
@@ -1216,7 +1594,7 @@ void PeripheralsCard(Controller& ctl, const Fonts& f) {
           "Armoury Crate lighting stays in the keyboard. When LumaBridge lets go, the keyboard keeps the last "
           "color until it restarts or Armoury Crate sets it again.");
     bool azEnabled = azOn;
-    if (ImGui::Checkbox("Light the ROG Azoth", &azEnabled)) ctl.SetAzothEnabled(azEnabled);
+    if (Toggle("Light the ROG Azoth", &azEnabled)) ctl.SetAzothEnabled(azEnabled);
     ImGui::SameLine();
     if (ImGui::SmallButton("Run the device probe")) {
         const std::wstring exe = AppDirectory() + L"\\tools\\device-probe.exe";
@@ -1232,7 +1610,7 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
     const auto& lastDevices = ctl.devices();
 
     BeginCard("status");
-    CardTitle(f, "Aura connection");
+    CardTitle(f, "Aura connection", Icon::Plug);
     if (st.connected) {
         Pill("Connected", kGreen);
         ImGui::SameLine();
@@ -1253,7 +1631,7 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
     EndCard();
 
     BeginCard("devices");
-    CardTitle(f, "Devices");
+    CardTitle(f, "Devices", Icon::Leds);
     if (lastDevices.empty()) {
         Muted("No Aura devices found. Click Rescan devices; if it stays empty, the log (Settings) says why.");
     } else if (ImGui::BeginTable("devtable", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX)) {
@@ -1271,7 +1649,7 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
             auto it = std::find_if(disabled.begin(), disabled.end(),
                                    [&](const std::wstring& n) { return _wcsicmp(n.c_str(), d.name.c_str()) == 0; });
             bool on = it == disabled.end();
-            if (ImGui::Checkbox("##on", &on)) {
+            if (Toggle("##on", &on)) {
                 if (on) disabled.erase(it);
                 else disabled.push_back(d.name);
                 ctl.Changed();
@@ -1343,14 +1721,318 @@ const Controller::GameStatus* RunningAs(const Controller& ctl, const InstalledGa
     return nullptr;
 }
 
-void GamesListPage(HWND hwnd, Controller& ctl, UiState& ui, const Fonts& f) {
-    const auto& lib = ctl.library();
+// Dynamic-lighting status of an installed game, for the list and its page.
+struct LightingStatus {
+    const char* text;
+    unsigned color;
+    bool pill;
+    std::string tip;
+};
+
+LightingStatus GameLighting(Controller& ctl, const InstalledGame& g, const Controller::GameStatus* running,
+                            const games::GameProfile* profile) {
+    using games::ProfileKind;
     const auto& seen = ctl.prefs().lightingGames;
+    bool hasSeen = false;
+    for (const auto& exe : g.exeNames) hasSeen |= std::find(seen.begin(), seen.end(), exe) != seen.end();
+    const std::string about = profile ? std::string(profile->how) + ".\n" + profile->note : std::string();
+    if (running && running->support == games::Support::Active) return {"Lighting now", kGreen, true, ""};
+    if (profile && profile->kind == ProfileKind::NotAGame) return {"Not a game", kMuted, false, about};
+    if (profile && profile->kind == ProfileKind::BuiltIn) return {"Built in", kGreen, true, about};
+    if (hasSeen || (running && games::SupportsLighting(running->support)))
+        return {"Supported", kGreen, true, "LumaBridge has seen this game send lighting."};
+    if (profile && profile->kind == ProfileKind::VendorSdk) return {profile->how, kAmber, true, about};
+    if (!g.sdk.empty())
+        return {"Likely", kAmber, true,
+                "The game's folder has " + g.sdk + " files. It shows as Supported once it sends lighting."};
+    if (profile && profile->kind == ProfileKind::NoSupport) return {"No lighting support", kMuted, false, about};
+    return {"Not detected", kMuted, false,
+            "No lighting SDK files in its folder and no lighting seen yet. Some games build the SDK in, so "
+            "play it once with LumaBridge running to be sure."};
+}
+
+const games::GameProfile* ProfileFor(const InstalledGame* g, const Controller::GameStatus* running, const std::string& name) {
+    const games::GameProfile* profile = running ? running->profile : nullptr;
+    for (size_t i = 0; g && !profile && i < g->exeNames.size(); ++i) profile = games::FindProfile(g->exeNames[i], "");
+    if (!profile) profile = games::FindProfile("", name);
+    return profile;
+}
+
+const char* kGameModeNames[] = {"Default", "Screen colors", "My idle choice", "Own color"};
+
+// Writes a feed's config file; if the game's folder needs administrator rights, asks for
+// them through Write-GameFile.ps1.
+void WriteFeedFile(Integrations& in, UiState& ui, const std::string& id, const std::string& what,
+                   const std::wstring& path, const std::string& text, bool remove) {
+    const bool ok = remove ? (DeleteFileW(path.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND)
+                           : WriteTextFile(path, text);
+    const DWORD err = GetLastError();
+    ui.feedMessageId = id;
+    if (ok) {
+        ui.feedMessage = "Done: " + what;
+    } else if (err == ERROR_ACCESS_DENIED) {
+        ui.feedMessageId.clear();  // the elevated run reports under the card itself
+        in.WriteGameFileElevated(id, what, path, text, remove);
+    } else {
+        ui.feedMessage = "Failed: couldn't write " + Utf8(path) + " (error " + std::to_string(err) + ")";
+    }
+    ui.feedCheckAt = 0;
+}
+
+// Re-reads whether the built-in feeds are set up (every couple of seconds).
+void RefreshFeeds(Controller& ctl, UiState& ui) {
+    const uint64_t now = GetTickCount64();
+    if (now < ui.feedCheckAt) return;
+    ui.feedCheckAt = now + 2000;
+    ui.cs2Dir = ctl.GameDir("cs2");
+    ui.rlDir = ctl.GameDir("rocketleague");
+    ui.cs2Installed = Cs2ConfigInstalled(ui.cs2Dir);
+    ui.rlIniFound = !RocketLeagueStatsText(ui.rlDir, true).empty();
+    ui.rlEnabled = RocketLeagueStatsEnabled(ui.rlDir);
+    ctl.RefreshFeedSettings();
+}
+
+// Status of a built-in feed as a pill.
+void FeedPill(const Controller& ctl, const UiState& ui, const std::string& key) {
+    const auto& feeds = ctl.feeds();
+    if (key == "cs2") {
+        if (!feeds.Cs2Listening()) Pill("Port busy", kRed);
+        else if (feeds.Cs2Seen()) Pill("Receiving", kGreen);
+        else Pill(ui.cs2Installed ? "Set up" : "Not set up", ui.cs2Installed ? kGreen : kAmber);
+    } else if (key == "rocketleague") {
+        if (feeds.RocketLeagueConnected()) Pill("Receiving", kGreen);
+        else Pill(ui.rlEnabled ? "Switched on" : "Off", ui.rlEnabled ? kGreen : kAmber);
+    } else {
+        Pill(feeds.WarThunderSeen() ? "Receiving" : "Ready", kGreen);
+    }
+}
+
+// Setting up a built-in feed (on the game's page).
+void FeedSetup(Controller& ctl, Integrations& in, UiState& ui, const std::string& key) {
+    const auto& feeds = ctl.feeds();
+    if (key == "cs2") {
+        if (ui.cs2Dir.empty()) {
+            Muted("Counter-Strike 2 wasn't found in your game libraries (Rescan on the list).");
+        } else if (ui.cs2Installed) {
+            Muted("%s", feeds.Cs2Seen() ? "CS2 is sending its game state." : "Set up. Restart CS2 once so it picks it up.");
+            ImGui::BeginDisabled(in.Busy());
+            if (ImGui::Button("Remove##cs2"))
+                WriteFeedFile(in, ui, "cs2", "Counter-Strike 2 feed removed", Cs2ConfigPath(ui.cs2Dir), "", true);
+            ImGui::EndDisabled();
+        } else {
+            ImGui::BeginDisabled(in.Busy());
+            if (PrimaryButton("Set up##cs2"))
+                WriteFeedFile(in, ui, "cs2", "Counter-Strike 2 feed set up - restart CS2", Cs2ConfigPath(ui.cs2Dir),
+                              Cs2ConfigText(), false);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            Muted("Adds gamestate_integration_lumabridge.cfg to CS2's cfg folder (Valve's official way).");
+        }
+    } else if (key == "rocketleague") {
+        const bool on = ui.rlEnabled;
+        if (ui.rlDir.empty()) {
+            Muted("Rocket League wasn't found in your game libraries (Rescan on the list).");
+        } else if (!ui.rlIniFound) {
+            Muted("This Rocket League install has no Stats API settings file (TAGame\\Config\\DefaultStatsAPI.ini). "
+                  "Update the game; the Stats API came in a 2025 update.");
+        } else {
+            if (on)
+                Muted("%s", feeds.RocketLeagueConnected() ? "Connected to the game."
+                                                          : "Switched on. Restart Rocket League if it's running.");
+            ImGui::BeginDisabled(in.Busy());
+            if (on ? ImGui::Button("Switch off##rl") : PrimaryButton("Switch on##rl"))
+                WriteFeedFile(in, ui, "rocketleague",
+                              on ? "Rocket League Stats API switched off" : "Rocket League Stats API switched on - restart the game",
+                              RocketLeagueStatsIni(ui.rlDir), RocketLeagueStatsText(ui.rlDir, !on), false);
+            ImGui::EndDisabled();
+            if (!on) {
+                ImGui::SameLine();
+                Muted("Sets PacketSendRate in the game's DefaultStatsAPI.ini (a backup is kept).");
+            }
+        }
+    } else {
+        Muted("%s", feeds.WarThunderSeen() ? "Seen War Thunder's status page this session."
+                                           : "Nothing to set up: it works as soon as you're in a battle.");
+    }
+    const std::string msg = ui.feedMessageId == key ? ui.feedMessage : in.LastId() == key ? in.LastMessage() : std::string();
+    if (!msg.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, V4(in.Busy() ? kAmber : msg.rfind("Done", 0) == 0 ? kGreen : kRed));
+        ImGui::TextWrapped("%s", msg.c_str());
+        ImGui::PopStyleColor();
+    }
+}
+
+void OpenGame(UiState& ui, const std::string& name, const char* profileKey) {
+    ui.gameDetail = name;
+    ui.gameDetailProfile = profileKey ? profileKey : "";
+    ui.feedCheckAt = 0;
+}
+
+// One game's page: its status, built-in lighting setup, and what it shows without lighting.
+void GameDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
+    const InstalledGame* g = nullptr;
+    for (const auto& x : ctl.library())
+        if (ToUtf8(x.name) == ui.gameDetail) g = &x;
+    const Controller::GameStatus* running = g ? RunningAs(ctl, *g) : nullptr;
+    const games::GameProfile* profile =
+        !ui.gameDetailProfile.empty() ? games::ProfileByKey(ui.gameDetailProfile.c_str()) : ProfileFor(g, running, ui.gameDetail);
+
+    if (ImGui::Button("<  All games")) {
+        ui.gameDetail.clear();
+        return;
+    }
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+
+    BeginCard("game-head");
+    IconItem(Icon::Game, 26 * S(), Hex(kAccent));
+    ImGui::SameLine(0, 12 * S());
+    ImGui::BeginGroup();
+    ImGui::PushFont(f.title);
+    ImGui::TextUnformatted(ui.gameDetail.c_str());
+    ImGui::PopFont();
+    if (g) {
+        Pill(ToUtf8(g->store).c_str(), kMuted);
+        ImGui::SameLine();
+    }
+    if (running) {
+        Pill("Running", kAccent);
+        ImGui::SameLine();
+    }
+    if (g) {
+        const LightingStatus st = GameLighting(ctl, *g, running, profile);
+        Pill(st.text, st.pill ? st.color : kMuted);
+        if (!st.tip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", st.tip.c_str());
+    } else if (profile && profile->kind == games::ProfileKind::BuiltIn) {
+        Pill("Built in", kGreen);
+        ImGui::SameLine();
+        Pill("Not found in your libraries", kMuted);
+    }
+    if (g) Muted("%s", ToUtf8(g->exePath.empty() ? g->dir : g->exePath).c_str());
+    ImGui::EndGroup();
+    EndCard();
+
+    if (profile && profile->kind == games::ProfileKind::BuiltIn) {
+        RefreshFeeds(ctl, ui);
+        BeginCard("game-feed");
+        IconItem(Icon::Lighting, 18 * S(), Hex(kAccent));
+        ImGui::SameLine(0, 10 * S());
+        ImGui::PushFont(f.bold);
+        ImGui::TextUnformatted("Built-in lighting");
+        ImGui::PopFont();
+        ImGui::SameLine(0, 12 * S());
+        FeedPill(ctl, ui, profile->key);
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+        Muted("%s. %s", profile->how, profile->note);
+        Muted("Official data the game publishes on your PC. Nothing is added to the game itself, so anti-cheat "
+              "isn't involved.");
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+        FeedSetup(ctl, in, ui, profile->key);
+        EndCard();
+    } else if (profile && profile->kind != games::ProfileKind::NotAGame) {
+        BeginCard("game-about");
+        CardTitle(f, "Lighting support", Icon::Info);
+        Muted("%s. %s", profile->how, profile->note);
+        EndCard();
+    }
+
+    if (!profile || profile->kind != games::ProfileKind::NotAGame) {
+        BeginCard("game-mode");
+        CardTitle(f, "When it isn't sending lighting", Icon::Palette);
+        const std::string key = games::Normalize(ui.gameDetail);
+        auto& modes = ctl.prefs().gameModes;
+        auto it = modes.find(key);
+        int mode = it == modes.end() ? 0 : static_cast<int>(it->second);
+        if (Segmented("mode", &mode, kGameModeNames, 4, ImGui::GetContentRegionAvail().x)) {
+            if (mode == 0) modes.erase(key);
+            else modes[key] = static_cast<GameMode>(mode);
+            if (mode == static_cast<int>(GameMode::Color) && !ctl.prefs().gameColors.count(key))
+                ctl.prefs().gameColors[key] = ctl.prefs().manualColor;
+            ctl.Changed();
+        }
+        static const char* kHelp[] = {
+            "Follows \"Games without dynamic lighting show the screen's colors\" on the Lighting page.",
+            "The lights run the screen's colors around the fans while this game runs (LumaBridge watches the "
+            "screen image, never the game).",
+            "Your choice for \"When no game is running\" (Lighting page) stays on while this game runs.",
+            "The lights show this game's own color while it runs.",
+        };
+        Muted("%s", kHelp[mode]);
+        if (mode == static_cast<int>(GameMode::Color)) {
+            ImGui::Dummy(ImVec2(0, 4 * S()));
+            Rgb& c = ctl.prefs().gameColors[key];
+            if (ColorEditor(ctl, ui, &c, "gamecolor")) ctl.Changed();
+        }
+        Muted("Dynamic lighting from the game itself always comes first.");
+        EndCard();
+    }
+
+    if (g && g->manual) {
+        BeginCard("game-remove");
+        CardTitle(f, "Added by you", Icon::Info);
+        Muted("You added this game to the list yourself.");
+        if (ImGui::Button("Remove from the list")) {
+            const std::wstring exe = g->exePath;
+            ui.gameDetail.clear();
+            ctl.RemoveManualGame(exe);
+        }
+        EndCard();
+    }
+}
+
+void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
+    if (!ui.gameDetail.empty()) {
+        GameDetailPage(ctl, in, ui, f);
+        return;
+    }
+    const auto& lib = ctl.library();
+
+    // Built-in game lighting: the games LumaBridge lights through their official data.
+    RefreshFeeds(ctl, ui);
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted("Built-in game lighting");
+    ImGui::PopFont();
+    Muted("These games light up through their own official data, no vendor software needed. Click one to set it up.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    static const char* kBuiltIn[] = {"cs2", "rocketleague", "warthunder"};
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const int cols = avail > 700 * S() ? 3 : 1;
+    if (ImGui::BeginTable("builtin", cols, ImGuiTableFlags_SizingStretchSame)) {
+        for (const char* key : kBuiltIn) {
+            const games::GameProfile* p = games::ProfileByKey(key);
+            ImGui::TableNextColumn();
+            ImGui::PushID(key);
+            const ImVec2 a = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x, h = 80 * S();
+            const bool clicked = ImGui::InvisibleButton("tile", ImVec2(w, h));
+            const bool hovered = ImGui::IsItemHovered();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), Hex(hovered ? kCardHover : kCard), 14 * S());
+            dl->AddRect(a, ImVec2(a.x + w, a.y + h), hovered ? Hex(kAccent, 180) : Hex(kBorder, 180), 14 * S());
+            ImGui::SetCursorScreenPos(ImVec2(a.x + 16 * S(), a.y + 14 * S()));
+            ImGui::BeginGroup();
+            IconItem(Icon::Game, 20 * S(), Hex(kAccent));
+            ImGui::SameLine(0, 10 * S());
+            ImGui::PushFont(f.bold);
+            ImGui::TextUnformatted(p->title);
+            ImGui::PopFont();
+            FeedPill(ctl, ui, key);
+            ImGui::EndGroup();
+            const char* more = "Customize  >";
+            const ImVec2 ms = ImGui::CalcTextSize(more);
+            dl->AddText(ImVec2(a.x + w - ms.x - 16 * S(), a.y + h - ms.y - 14 * S()), hovered ? Hex(kAccentHover) : Hex(kMuted), more);
+            ImGui::SetCursorScreenPos(ImVec2(a.x, a.y + h));
+            ImGui::Dummy(ImVec2(w, 4 * S()));
+            if (clicked) OpenGame(ui, p->title, key);
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::Dummy(ImVec2(0, 8 * S()));
 
     BeginCard("library-head");
-    CardTitle(f, "Games on this PC");
+    CardTitle(f, "Games on this PC", Icon::Game);
     Muted("Found in Steam, Epic, EA, Ubisoft, GOG, Xbox, Riot, Rockstar and the games Windows knows about. "
-          "Missing one? Add it, and LumaBridge will recognise it whenever it runs.");
+          "Click a game to customize it. Missing one? Add it, and LumaBridge will recognise it whenever it runs.");
     ImGui::Dummy(ImVec2(0, 4 * S()));
     if (PrimaryButton("Add a game...")) {
         const std::wstring exe = PickExe(hwnd, L"Choose the game's .exe");
@@ -1365,7 +2047,6 @@ void GamesListPage(HWND hwnd, Controller& ctl, UiState& ui, const Fonts& f) {
     ImGui::InputTextWithHint("##filter", "Search", ui.gameFilter, sizeof ui.gameFilter);
     EndCard();
 
-    // Status per game: lighting now > has sent lighting before > ships SDK files > nothing seen.
     struct Row {
         const InstalledGame* g;
         const Controller::GameStatus* running;
@@ -1392,208 +2073,71 @@ void GamesListPage(HWND hwnd, Controller& ctl, UiState& ui, const Fonts& f) {
         ImGui::BeginTable("games", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Game", ImGuiTableColumnFlags_WidthStretch, 2.6f);
         ImGui::TableSetupColumn("Store", ImGuiTableColumnFlags_WidthStretch, 1.1f);
-        ImGui::TableSetupColumn("Dynamic lighting", ImGuiTableColumnFlags_WidthStretch, 2.f);
-        ImGui::TableSetupColumn("Without game lighting", ImGuiTableColumnFlags_WidthStretch, 1.7f);
-        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 70 * S());
+        ImGui::TableSetupColumn("Dynamic lighting", ImGuiTableColumnFlags_WidthStretch, 1.8f);
+        ImGui::TableSetupColumn("Without game lighting", ImGuiTableColumnFlags_WidthStretch, 1.6f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 24 * S());
         ImGui::TableHeadersRow();
         int id = 0;
-        std::wstring removeExe;
         for (const Row& row : rows) {
             const InstalledGame& g = *row.g;
             ImGui::PushID(id++);
-            ImGui::TableNextRow();
+            ImGui::TableNextRow(0, 34 * S());
             ImGui::TableNextColumn();
             const std::string name = ToUtf8(g.name);
+            // The whole row opens the game's page.
+            ImGui::PushStyleColor(ImGuiCol_Header, V4(kAccent, 0.18f));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, V4(kAccent, 0.14f));
+            const bool open = ImGui::Selectable("##row", false,
+                                                ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
+                                                ImVec2(0, 26 * S()));
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ToUtf8(g.exePath.empty() ? g.dir : g.exePath).c_str());
+            ImGui::SameLine(0, 0);
+            ImGui::AlignTextToFramePadding();
             if (row.running) ImGui::PushFont(f.bold);
             ImGui::TextUnformatted(name.c_str());
             if (row.running) ImGui::PopFont();
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ToUtf8(g.exePath.empty() ? g.dir : g.exePath).c_str());
             if (row.running) {
                 ImGui::SameLine();
                 Pill("Running", kAccent);
             }
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             Muted("%s", ToUtf8(g.store).c_str());
             ImGui::TableNextColumn();
-            bool hasSeen = false;
-            for (const auto& exe : g.exeNames) hasSeen |= std::find(seen.begin(), seen.end(), exe) != seen.end();
-            const games::GameProfile* profile = row.running ? row.running->profile : nullptr;
-            for (size_t i = 0; !profile && i < g.exeNames.size(); ++i) profile = games::FindProfile(g.exeNames[i], "");
-            if (!profile) profile = games::FindProfile("", name);
-            using games::ProfileKind;
-            auto profileTip = [&] {
-                if (profile && ImGui::IsItemHovered()) ImGui::SetTooltip("%s.\n%s", profile->how, profile->note);
-            };
-            if (row.running && row.running->support == games::Support::Active) {
-                Pill("Lighting now", kGreen);
-            } else if (profile && profile->kind == ProfileKind::NotAGame) {
-                Muted("Not a game");
-                profileTip();
-            } else if (profile && profile->kind == ProfileKind::BuiltIn) {
-                Pill("Built in", kGreen);
-                profileTip();
-            } else if (hasSeen || (row.running && games::SupportsLighting(row.running->support))) {
-                Pill("Supported", kGreen);
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("LumaBridge has seen this game send lighting.");
-            } else if (profile && profile->kind == ProfileKind::VendorSdk) {
-                Pill(profile->how, kAmber);
-                profileTip();
-            } else if (!g.sdk.empty()) {
-                const std::string label = "Likely - " + g.sdk;
-                Pill(label.c_str(), kAmber);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("The game's folder has %s files. It shows as Supported once it sends lighting.",
-                                      g.sdk.c_str());
-            } else if (profile && profile->kind == ProfileKind::NoSupport) {
-                Muted("No lighting support");
-                profileTip();
-            } else {
-                Muted("Not detected");
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("No lighting SDK files in its folder and no lighting seen yet. Some games build "
-                                      "the SDK in, so play it once with LumaBridge running to be sure.");
-            }
+            ImGui::AlignTextToFramePadding();
+            const games::GameProfile* profile = ProfileFor(&g, row.running, name);
+            const LightingStatus st = GameLighting(ctl, g, row.running, profile);
+            if (st.pill) Pill(st.text, st.color);
+            else Muted("%s", st.text);
+            if (!st.tip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", st.tip.c_str());
             ImGui::TableNextColumn();
-            if (!profile || profile->kind != ProfileKind::NotAGame) {
+            ImGui::AlignTextToFramePadding();
+            if (!profile || profile->kind != games::ProfileKind::NotAGame) {
                 const std::string key = games::Normalize(name);
-                auto& modes = ctl.prefs().gameModes;
-                auto it = modes.find(key);
-                int mode = it == modes.end() ? 0 : static_cast<int>(it->second);
-                const char* labels[] = {"Default", "Screen colors", "My idle choice"};
-                ImGui::SetNextItemWidth(-1);
-                if (ImGui::Combo("##mode", &mode, labels, 3)) {
-                    if (mode == 0) modes.erase(key);
-                    else modes[key] = static_cast<GameMode>(mode);
-                    ctl.Changed();
+                auto it = ctl.prefs().gameModes.find(key);
+                const int mode = it == ctl.prefs().gameModes.end() ? 0 : static_cast<int>(it->second);
+                if (mode == static_cast<int>(GameMode::Color)) {
+                    auto c = ctl.prefs().gameColors.find(key);
+                    const ImVec2 p = ImGui::GetCursorScreenPos();
+                    const float r = 6 * S(), y = p.y + ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset + ImGui::GetTextLineHeight() / 2;
+                    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + r, y), r,
+                                                                Col(c == ctl.prefs().gameColors.end() ? Rgb{} : c->second));
+                    ImGui::Dummy(ImVec2(r * 2, 1));
+                    ImGui::SameLine();
                 }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("What the lights show while this game runs but isn't sending lighting.\n"
-                                      "Default follows \"Games without dynamic lighting show the screen's colors\" "
-                                      "(Lighting page).");
+                if (mode) ImGui::TextUnformatted(kGameModeNames[mode]);
+                else Muted("Default");
             }
             ImGui::TableNextColumn();
-            if (g.manual && ImGui::SmallButton("Remove")) removeExe = g.exePath;
+            ImGui::AlignTextToFramePadding();
+            Muted(">");
             ImGui::PopID();
+            if (open) OpenGame(ui, name, nullptr);
         }
         ImGui::EndTable();
-        if (!removeExe.empty()) ctl.RemoveManualGame(removeExe);
     }
     EndCard();
-}
-
-// ---- Built-in game feeds (Integrations page) ----------------------------------------
-
-// Writes a feed's config file; if the game's folder needs administrator rights, asks for
-// them through Write-GameFile.ps1.
-void WriteFeedFile(Integrations& in, UiState& ui, const std::string& id, const std::string& what,
-                   const std::wstring& path, const std::string& text, bool remove) {
-    const bool ok = remove ? (DeleteFileW(path.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND)
-                           : WriteTextFile(path, text);
-    const DWORD err = GetLastError();
-    ui.feedMessageId = id;
-    if (ok) {
-        ui.feedMessage = "Done: " + what;
-    } else if (err == ERROR_ACCESS_DENIED) {
-        ui.feedMessageId.clear();  // the elevated run reports under the card itself
-        in.WriteGameFileElevated(id, what, path, text, remove);
-    } else {
-        ui.feedMessage = "Failed: couldn't write " + Utf8(path) + " (error " + std::to_string(err) + ")";
-    }
-    ui.feedCheckAt = 0;
-}
-
-void FeedCards(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
-    const uint64_t now = GetTickCount64();
-    if (now >= ui.feedCheckAt) {
-        ui.feedCheckAt = now + 2000;
-        ui.cs2Dir = ctl.GameDir("cs2");
-        ui.rlDir = ctl.GameDir("rocketleague");
-        ui.cs2Installed = Cs2ConfigInstalled(ui.cs2Dir);
-        ui.rlIniFound = !RocketLeagueStatsText(ui.rlDir, true).empty();
-        ui.rlEnabled = RocketLeagueStatsEnabled(ui.rlDir);
-        ctl.RefreshFeedSettings();
-    }
-    const auto& feeds = ctl.feeds();
-    auto header = [&](const char* id, const char* key, const char* pill, unsigned pillColor) {
-        BeginCard(id);
-        const games::GameProfile* p = games::ProfileByKey(key);
-        ImGui::PushFont(f.bold);
-        ImGui::TextUnformatted(p->title);
-        ImGui::PopFont();
-        ImGui::SameLine();
-        Pill(pill, pillColor);
-        Muted("%s. %s", p->how, p->note);
-        ImGui::Dummy(ImVec2(0, 2 * S()));
-    };
-    auto footer = [&](const char* id) {
-        const std::string msg = ui.feedMessageId == id ? ui.feedMessage
-                                : in.LastId() == id    ? in.LastMessage()
-                                                       : std::string();
-        if (!msg.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, V4(in.Busy() ? kAmber : msg.rfind("Done", 0) == 0 ? kGreen : kRed));
-            ImGui::TextWrapped("%s", msg.c_str());
-            ImGui::PopStyleColor();
-        }
-        EndCard();
-    };
-
-    // Counter-Strike 2
-    {
-        const bool on = ui.cs2Installed;
-        header("feed-cs2", "cs2", !feeds.Cs2Listening() ? "Port busy" : on ? "Active" : "Off",
-               !feeds.Cs2Listening() ? kRed : on ? kGreen : kMuted);
-        if (ui.cs2Dir.empty()) {
-            Muted("Counter-Strike 2 wasn't found in your game libraries (Games List > Rescan).");
-        } else if (on) {
-            Muted("%s", feeds.Cs2Seen() ? "CS2 is sending its game state." : "Set up. Restart CS2 once so it picks it up.");
-            ImGui::BeginDisabled(in.Busy());
-            if (ImGui::Button("Remove##cs2"))
-                WriteFeedFile(in, ui, "cs2", "Counter-Strike 2 feed removed", Cs2ConfigPath(ui.cs2Dir), "", true);
-            ImGui::EndDisabled();
-        } else {
-            ImGui::BeginDisabled(in.Busy());
-            if (PrimaryButton("Set up##cs2"))
-                WriteFeedFile(in, ui, "cs2", "Counter-Strike 2 feed set up - restart CS2",
-                              Cs2ConfigPath(ui.cs2Dir), Cs2ConfigText(), false);
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            Muted("Adds gamestate_integration_lumabridge.cfg to CS2's cfg folder (Valve's official way).");
-        }
-        footer("cs2");
-    }
-
-    // Rocket League
-    {
-        const bool on = ui.rlEnabled;
-        header("feed-rl", "rocketleague", on ? "Active" : "Off", on ? kGreen : kMuted);
-        if (ui.rlDir.empty()) {
-            Muted("Rocket League wasn't found in your game libraries (Games List > Rescan).");
-        } else if (!ui.rlIniFound) {
-            Muted("This Rocket League install has no Stats API settings file (TAGame\\Config\\DefaultStatsAPI.ini). "
-                  "Update the game; the Stats API came in a 2025 update.");
-        } else {
-            if (on)
-                Muted("%s", feeds.RocketLeagueConnected() ? "Connected to the game."
-                                                          : "Switched on. Restart Rocket League if it's running.");
-            ImGui::BeginDisabled(in.Busy());
-            if (on ? ImGui::Button("Switch off##rl") : PrimaryButton("Switch on##rl"))
-                WriteFeedFile(in, ui, "rocketleague",
-                              on ? "Rocket League Stats API switched off" : "Rocket League Stats API switched on - restart the game",
-                              RocketLeagueStatsIni(ui.rlDir), RocketLeagueStatsText(ui.rlDir, !on), false);
-            ImGui::EndDisabled();
-            if (!on) {
-                ImGui::SameLine();
-                Muted("Sets PacketSendRate in the game's DefaultStatsAPI.ini (a backup is kept).");
-            }
-        }
-        footer("rocketleague");
-    }
-
-    // War Thunder
-    header("feed-wt", "warthunder", "Built in", kGreen);
-    Muted("%s", feeds.WarThunderSeen() ? "Seen War Thunder's status page this session."
-                                       : "Works as soon as you're in a battle.");
-    footer("warthunder");
 }
 
 void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
@@ -1611,6 +2155,8 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
 
     for (const auto& it : in.list()) {
         BeginCard(it.id.c_str());
+        IconItem(it.id == "handback" ? Icon::Lighting : Icon::Plug, 18 * S(), Hex(kAccent));
+        ImGui::SameLine(0, 10 * S());
         ImGui::PushFont(f.bold);
         ImGui::TextUnformatted(it.name.c_str());
         ImGui::PopFont();
@@ -1631,7 +2177,7 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
         ImGui::BeginDisabled(in.Busy());
         if (it.id == "gamesense") {
             bool on = gs.IsRunning();
-            if (ImGui::Checkbox("Enabled", &on)) {
+            if (Toggle("Enabled", &on)) {
                 ctl.SetGameSenseEnabled(on);
                 ui.integrationsLoaded = false;
             }
@@ -1678,21 +2224,15 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
         EndCard();
     }
 
-    ImGui::Dummy(ImVec2(0, 6 * S()));
-    ImGui::PushFont(f.bold);
-    ImGui::TextUnformatted("Built-in game feeds");
-    ImGui::PopFont();
-    Muted("Official data these games publish on your PC. Nothing is added to the game itself, so "
-          "anti-cheat isn't involved.");
-    ImGui::Dummy(ImVec2(0, 4 * S()));
-    FeedCards(ctl, in, ui, f);
+    Muted("Counter-Strike 2, Rocket League and War Thunder light up through their own official data "
+          "instead: set them up on the Games List page.");
 }
 
 void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
     Config& cfg = ctl.config();
 
     BeginCard("calibration");
-    CardTitle(f, "Color calibration");
+    CardTitle(f, "Color calibration", Icon::Palette);
     Muted("Aura LEDs often look bluer or brighter than other brands. Nudge these until the colors match.");
     ImGui::Dummy(ImVec2(0, 4 * S()));
     float r = static_cast<float>(cfg.auraCorrection.gainR * 100), g = static_cast<float>(cfg.auraCorrection.gainG * 100),
@@ -1718,7 +2258,7 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
     EndCard();
 
     BeginCard("dynamic");
-    CardTitle(f, "Dynamic lighting");
+    CardTitle(f, "Dynamic lighting", Icon::Lighting);
     int mode = cfg.bitmapReduce == BitmapReduce::Brightest ? 1 : 0;
     ImGui::TextUnformatted("Per-key effects become one color by");
     const char* modes[] = {"Average of lit keys", "Brightest key"};
@@ -1736,30 +2276,17 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
     EndCard();
 
     BeginCard("startup");
-    CardTitle(f, "Startup");
+    CardTitle(f, "Startup", Icon::Gear);
     if (!ui.autostartLoaded) {
         ui.autostart = IsAutostartEnabled();
         ui.autostartLoaded = true;
     }
-    if (ImGui::Checkbox("Start LumaBridge with Windows", &ui.autostart)) SetAutostart(ui.autostart);
-    if (ImGui::Checkbox("Start minimized to the tray", &ctl.prefs().startMinimized)) ctl.Changed();
-    EndCard();
-
-    BeginCard("handback");
-    CardTitle(f, "Armoury Crate");
-    Muted("Stopping hands the motherboard and fans back to Armoury Crate's own effect. Exiting "
-          "LumaBridge does the same. With \"Armoury Crate hand-back\" set up (Integrations page) this is "
-          "silent; otherwise Armoury Crate opens and you click an effect once.");
-    ImGui::Dummy(ImVec2(0, 2 * S()));
-    if (ctl.auraPaused()) {
-        if (PrimaryButton("Resume lighting control")) ctl.ResumeAura();
-    } else if (ImGui::Button("Stop controlling the lights")) {
-        ctl.StopLighting();
-    }
+    if (Toggle("Start LumaBridge with Windows", &ui.autostart)) SetAutostart(ui.autostart);
+    if (Toggle("Start minimized to the tray", &ctl.prefs().startMinimized)) ctl.Changed();
     EndCard();
 
     BeginCard("about");
-    CardTitle(f, "About");
+    CardTitle(f, "About", Icon::Info);
     ImGui::Text("LumaBridge %s", kVersionText);
     Muted("Game lighting for ASUS Aura, without Armoury Crate in the way.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
@@ -1768,7 +2295,7 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
     EndCard();
 
     BeginCard("trouble");
-    CardTitle(f, "Troubleshooting");
+    CardTitle(f, "Troubleshooting", Icon::Info);
     if (ImGui::Button("Open log folder")) {
         std::wstring dir = ctl.logPath().substr(0, ctl.logPath().find_last_of(L"\\/"));
         ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -1787,35 +2314,59 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width) {
     ImGui::BeginChild("sidebar", ImVec2(width, 0), ImGuiChildFlags_AlwaysUseWindowPadding,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-    ImGui::PushFont(f.title);
-    ImGui::TextUnformatted("LumaBridge");
-    ImGui::PopFont();
-    ImGui::PushFont(f.caption);
-    Muted("Game lighting for Aura");
-    ImGui::PopFont();
+    {
+        // Logo: a slowly turning ring of hues.
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float r = 13 * S();
+        const ImVec2 c(p.x + r, p.y + r + 2 * S());
+        const double t = ImGui::GetTime() * 0.08;
+        for (int i = 0; i < 24; ++i) {
+            const float a0 = 6.2831853f * i / 24, a1 = 6.2831853f * (i + 1) / 24;
+            const Rgb col = FromHue((static_cast<double>(i) / 24 + t) * 360.0);
+            ImGui::GetWindowDrawList()->PathArcTo(c, r - 2.5f * S(), a0, a1 + 0.05f, 4);
+            ImGui::GetWindowDrawList()->PathStroke(Col(col), 0, 4 * S());
+        }
+        ImGui::Dummy(ImVec2(r * 2, r * 2 + 4 * S()));
+        ImGui::SameLine(0, 10 * S());
+        ImGui::BeginGroup();
+        ImGui::PushFont(f.title);
+        ImGui::TextUnformatted("LumaBridge");
+        ImGui::PopFont();
+        ImGui::PushFont(f.caption);
+        Muted("Game lighting for Aura");
+        ImGui::PopFont();
+        ImGui::EndGroup();
+    }
     ImGui::Dummy(ImVec2(0, 18 * S()));
 
     const struct {
         Page page;
         const char* label;
-    } items[] = {{Page::Dashboard, "Dashboard"},       {Page::Lighting, "Lighting"},
-                 {Page::GamesList, "Games List"},
-                 {Page::Devices, "Devices"},           {Page::Integrations, "Integrations"},
-                 {Page::Settings, "Settings"}};
-    ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.f, 0.5f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8 * S());
+        Icon icon;
+    } items[] = {{Page::Dashboard, "Dashboard", Icon::Grid},     {Page::Lighting, "Lighting", Icon::Lighting},
+                 {Page::GamesList, "Games List", Icon::Game},     {Page::Devices, "Devices", Icon::Leds},
+                 {Page::Integrations, "Integrations", Icon::Plug}, {Page::Settings, "Settings", Icon::Gear}};
+    ImDrawList* dl = ImGui::GetWindowDrawList();
     for (const auto& it : items) {
         const bool sel = ui.page == it.page;
-        ImGui::PushStyleColor(ImGuiCol_Header, V4(kAccent, 0.22f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, V4(kCardHover));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, V4(kAccent, 0.35f));
-        ImGui::PushStyleColor(ImGuiCol_Text, sel ? V4(kText) : V4(kMuted));
-        if (sel) ImGui::PushFont(f.bold);
-        if (ImGui::Selectable(it.label, sel, 0, ImVec2(0, 36 * S()))) ui.page = it.page;
-        if (sel) ImGui::PopFont();
-        ImGui::PopStyleColor(4);
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float w = ImGui::GetContentRegionAvail().x, h = 40 * S();
+        ImGui::PushID(it.label);
+        if (ImGui::InvisibleButton("nav", ImVec2(w, h))) ui.page = it.page;
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopID();
+        if (sel) {
+            dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Hex(kAccent, 42), 10 * S());
+            dl->AddRectFilled(ImVec2(p.x, p.y + 10 * S()), ImVec2(p.x + 3 * S(), p.y + h - 10 * S()), Hex(kAccentHover), 2 * S());
+        } else if (hovered) {
+            dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Hex(kCardHover), 10 * S());
+        }
+        DrawIcon(it.icon, ImVec2(p.x + 22 * S(), p.y + h / 2), 18 * S(), sel ? Hex(kAccentHover) : hovered ? Hex(kText) : Hex(kMuted));
+        ImGui::PushFont(sel ? f.bold : f.regular);
+        dl->AddText(ImVec2(p.x + 44 * S(), p.y + (h - ImGui::GetFontSize()) / 2), sel || hovered ? Hex(kText) : Hex(kMuted), it.label);
+        ImGui::PopFont();
+        ImGui::Dummy(ImVec2(0, 2 * S()));
     }
-    ImGui::PopStyleVar(2);
 
     // Live output at the bottom of the sidebar.
     const auto& out = ctl.output();
@@ -1861,10 +2412,10 @@ void ApplyTheme(float scale) {
     s.FramePadding = ImVec2(12, 8);
     s.ItemSpacing = ImVec2(10, 10);
     s.ItemInnerSpacing = ImVec2(8, 6);
-    s.FrameRounding = 8;
-    s.GrabRounding = 8;
+    s.FrameRounding = 10;
+    s.GrabRounding = 10;
     s.GrabMinSize = 14;
-    s.ChildRounding = 12;
+    s.ChildRounding = 14;
     s.PopupRounding = 10;
     s.ScrollbarRounding = 8;
     s.ScrollbarSize = 12;
@@ -1916,9 +2467,20 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
 
     // Header: page title + global mode switch.
     const char* titles[] = {"Dashboard", "Lighting", "Games List", "Devices", "Integrations", "Settings"};  // Page order
+    const char* subtitles[] = {"Your system and lighting at a glance",
+                               "Auto follows your games; Manual is your own look",
+                               "Every game on this PC, and how it lights up",
+                               "Aura, fans, keyboard and mouse",
+                               "Answer games as the lighting software they look for",
+                               "Calibration, startup and more"};
+    ImGui::BeginGroup();
     ImGui::PushFont(f.title);
     ImGui::TextUnformatted(titles[static_cast<int>(ui.page)]);
     ImGui::PopFont();
+    ImGui::PushFont(f.caption);
+    Muted("%s", subtitles[static_cast<int>(ui.page)]);
+    ImGui::PopFont();
+    ImGui::EndGroup();
     {
         int mode = ctl.prefs().mode == Mode::Manual ? 1 : 0;
         const char* labels[] = {"Auto", "Manual"};
@@ -1928,6 +2490,14 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
             ctl.prefs().mode = mode ? Mode::Manual : Mode::Auto;
             ctl.Changed();
         }
+    }
+    {
+        // Accent line under the header.
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float w = ImGui::GetContentRegionAvail().x;
+        ImGui::GetWindowDrawList()->AddRectFilledMultiColor(p, ImVec2(p.x + w * 0.35f, p.y + 2 * S()), Hex(kAccent),
+                                                           Hex(kAccent2, 0), Hex(kAccent2, 0), Hex(kAccent));
+        ImGui::Dummy(ImVec2(w, 2 * S()));
     }
     ImGui::Dummy(ImVec2(0, 8 * S()));
 
@@ -1951,6 +2521,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
 
     // Re-check integration status whenever the Integrations page is opened.
     if (ui.page == Page::Integrations && ui.lastPage != Page::Integrations) ui.integrationsLoaded = false;
+    if (ui.page == Page::GamesList && ui.lastPage != Page::GamesList) ui.gameDetail.clear();  // open on the list
     if (ui.page != Page::Devices && ctl.fanTest()) ctl.SetFanTest(false);  // the test is a Devices-page thing
     ui.lastPage = ui.page;
 
@@ -1961,7 +2532,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
         break;
     case Page::Devices: DevicesPage(ctl, f); break;
     case Page::Dashboard: DashboardPage(hwnd, ctl, integrations, ui, f); break;
-    case Page::GamesList: GamesListPage(hwnd, ctl, ui, f); break;
+    case Page::GamesList: GamesListPage(hwnd, ctl, integrations, ui, f); break;
     case Page::Integrations: IntegrationsPage(hwnd, ctl, integrations, ui, f); break;
     case Page::Settings: SettingsPage(ctl, ui, f); break;
     }

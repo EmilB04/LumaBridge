@@ -74,6 +74,19 @@ Prefs LoadPrefs(const std::wstring& ini) {
     v = Read(ini, L"App", L"ManualSpeed");
     if (!v.empty()) p.speedHz = static_cast<float>(_wtof(v.c_str()));
     if (p.speedHz < 0.f || p.speedHz > 10.f) p.speedHz = 0.5f;
+    auto num = [&](const wchar_t* key, float* out, float lo, float hi) {
+        const std::wstring x = Read(ini, L"App", key);
+        if (x.empty()) return;
+        const float f = static_cast<float>(_wtof(x.c_str()));
+        if (f >= lo && f <= hi) *out = f;
+    };
+    num(L"RainbowHueStart", &p.rainbowHueStart, 0, 360);
+    num(L"RainbowHueSpan", &p.rainbowHueSpan, 10, 360);
+    num(L"RainbowSaturation", &p.rainbowSaturation, 0, 1);
+    float spread = static_cast<float>(p.rainbowSpread);
+    num(L"RainbowSpread", &spread, 1, 4);
+    p.rainbowSpread = static_cast<int>(spread);
+    p.effectReverse = Read(ini, L"App", L"EffectReverse") == L"1";
     v = Read(ini, L"App", L"WhenIdle");
     if (_wcsicmp(v.c_str(), L"armourycrate") == 0) p.idle = IdleBehavior::ArmouryCrate;
     if (_wcsicmp(v.c_str(), L"rainbow") == 0) p.idle = IdleBehavior::Rainbow;
@@ -109,7 +122,18 @@ Prefs LoadPrefs(const std::wstring& ini) {
             const std::string v = item.substr(eq + 1);
             if (v == "screen") p.gameModes[item.substr(0, eq)] = GameMode::Screen;
             if (v == "idle") p.gameModes[item.substr(0, eq)] = GameMode::Idle;
+            if (v == "color") p.gameModes[item.substr(0, eq)] = GameMode::Color;
         }
+        if (bar == std::string::npos) break;
+        pos = bar + 1;
+    }
+    const std::string colors = Narrow(Read(ini, L"App", L"GameColors"));
+    for (size_t pos = 0; pos < colors.size();) {
+        size_t bar = colors.find('|', pos);
+        const std::string item = colors.substr(pos, bar - pos);
+        const size_t eq = item.find('=');
+        Rgb c;
+        if (eq != std::string::npos && FromHex(item.substr(eq + 1), &c)) p.gameColors[item.substr(0, eq)] = c;
         if (bar == std::string::npos) break;
         pos = bar + 1;
     }
@@ -147,6 +171,11 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     for (const auto& e : kEffectNames)
         if (e.kind == p.effect) WriteConfigValue(ini, L"App", L"ManualEffect", e.name);
     WriteConfigValue(ini, L"App", L"ManualSpeed", Num(p.speedHz));
+    WriteConfigValue(ini, L"App", L"RainbowHueStart", Num(p.rainbowHueStart));
+    WriteConfigValue(ini, L"App", L"RainbowHueSpan", Num(p.rainbowHueSpan));
+    WriteConfigValue(ini, L"App", L"RainbowSaturation", Num(p.rainbowSaturation));
+    WriteConfigValue(ini, L"App", L"RainbowSpread", Num(p.rainbowSpread));
+    WriteConfigValue(ini, L"App", L"EffectReverse", p.effectReverse ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"WhenIdle",
                      p.idle == IdleBehavior::Rainbow        ? L"rainbow"
                      : p.idle == IdleBehavior::Off          ? L"off"
@@ -167,9 +196,13 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     std::string modes;
     for (const auto& [key, mode] : p.gameModes) {
         if (mode == GameMode::Default) continue;
-        modes += (modes.empty() ? "" : "|") + key + (mode == GameMode::Screen ? "=screen" : "=idle");
+        modes += (modes.empty() ? "" : "|") + key +
+                 (mode == GameMode::Screen ? "=screen" : mode == GameMode::Color ? "=color" : "=idle");
     }
     WriteConfigValue(ini, L"App", L"GameModes", Widen(modes));
+    std::string colors;
+    for (const auto& [key, c] : p.gameColors) colors += (colors.empty() ? "" : "|") + key + "=" + ToHex(c);
+    WriteConfigValue(ini, L"App", L"GameColors", Widen(colors));
     std::string dash;
     for (size_t i = 0; i < p.dashboard.size(); ++i) dash += (i ? "," : "") + p.dashboard[i];
     WriteConfigValue(ini, L"App", L"Dashboard", Widen(dash.empty() ? "-" : dash));  // "-": all hidden

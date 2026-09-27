@@ -47,7 +47,9 @@ public:
 
         bool SameLighting(const Output& o) const {
             return stopped == o.stopped && fanTest == o.fanTest && fx.kind == o.fx.kind &&
-                   fx.color1 == o.fx.color1 && fx.color2 == o.fx.color2 && fx.speed == o.fx.speed;
+                   fx.color1 == o.fx.color1 && fx.color2 == o.fx.color2 && fx.speed == o.fx.speed &&
+                   fx.hueStart == o.fx.hueStart && fx.hueSpan == o.fx.hueSpan && fx.saturation == o.fx.saturation &&
+                   fx.spread == o.fx.spread && fx.reverse == o.fx.reverse;
         }
     };
 
@@ -63,6 +65,7 @@ public:
     Config& config() { return cfg_; }
     void Changed();
     void RememberManualColor();  // push the current manual color onto the recents list
+    void RememberColor(Rgb c);
 
     void SetGameSenseEnabled(bool enabled);
 
@@ -139,6 +142,7 @@ public:
 
 private:
     Output Decide() const;
+    void RainbowLook(fx::Params* p) const;  // the rainbow settings from Prefs
     void UpdateGames(uint64_t now);
     void UpdateFeeds(uint64_t now);
     // The running game whose lighting falls back to the screen's colors, if any.

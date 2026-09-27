@@ -28,6 +28,10 @@ struct UiState {
     bool dashEdit = false;  // dashboard "Customize" mode
     char hex[16] = "";
     bool hexEditing = false;
+    std::string hexSlot;  // which color editor the hex field being typed in belongs to
+    int colorSlot = 0;    // Lighting > Manual: which of the two colors is being edited
+    // Games List: the game whose page is open ("" = the list), and its built-in profile key.
+    std::string gameDetail, gameDetailProfile;
     char gameFilter[64] = "";
     // Built-in game feed setup state (Integrations page), re-checked every couple of seconds.
     unsigned long long feedCheckAt = 0;

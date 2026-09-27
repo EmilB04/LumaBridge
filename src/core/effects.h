@@ -27,6 +27,12 @@ struct Params {
     Rgb color1{0, 140, 255};
     Rgb color2{255, 255, 255};
     double speed = 0.5;  // cycles per second (0 = frozen for the moving effects)
+    // Rainbow (color cycle / rainbow wave): which hues, how vivid, how many around a fan.
+    double hueStart = 0;     // degrees
+    double hueSpan = 360;    // degrees; under 360 the hues go there and back, so rings stay seamless
+    double saturation = 1;   // 0 = white .. 1 = full color
+    double spread = 1;       // rainbow wave: rainbows around each ring
+    bool reverse = false;    // moving patterns turn the other way
 };
 
 // Does the effect change over time? (Static ones only need re-sending, not re-rendering.)
@@ -51,6 +57,15 @@ inline Rgb Lerp(Rgb a, Rgb b, double t) {
     return Rgb{ClampByte(a.r + (b.r - a.r) * t), ClampByte(a.g + (b.g - a.g) * t), ClampByte(a.b + (b.b - a.b) * t)};
 }
 
+// A color of the (customized) rainbow at `x` (0..1, wraps).
+inline Rgb RainbowAt(const Params& p, double x) {
+    x = Frac(x);
+    const double span = p.hueSpan < 1 ? 1 : p.hueSpan > 360 ? 360 : p.hueSpan;
+    const double hue = span >= 359.5 ? p.hueStart + x * 360.0 : p.hueStart + (1.0 - std::fabs(2.0 * x - 1.0)) * span;
+    const double sat = p.saturation < 0 ? 0 : p.saturation > 1 ? 1 : p.saturation;
+    return Lerp(Rgb{255, 255, 255}, FromHue(hue), sat);
+}
+
 // Stable pseudo-random value in [0, 1) per LED (same LED -> same value every frame).
 inline double Hash01(uint32_t x) {
     x ^= x >> 16;
@@ -66,7 +81,8 @@ inline double Hash01(uint32_t x) {
 inline Rgb Render(const Params& p, double t, int i, int count) {
     using namespace detail;
     if (count < 1) count = 1;
-    const double pos = static_cast<double>(i) / count;  // 0..1 around the ring
+    // 0..1 around the ring; mirrored when reversed, so moving patterns turn the other way.
+    const double pos = static_cast<double>(p.reverse && i % count ? count - i % count : i % count) / count;
     const double phase = t * p.speed;
     switch (p.kind) {
     case Kind::Breathing:
@@ -74,9 +90,9 @@ inline Rgb Render(const Params& p, double t, int i, int count) {
     case Kind::Strobe:
         return Frac(phase) < 0.5 ? p.color1 : Rgb{};
     case Kind::ColorCycle:
-        return FromHue(Frac(phase) * 360.0);
+        return RainbowAt(p, phase);
     case Kind::RainbowWave:
-        return FromHue(Frac(pos + phase) * 360.0);
+        return RainbowAt(p, pos * (p.spread > 0.1 ? p.spread : 0.1) + phase);
     case Kind::Gradient: {
         // Triangle wave so the ring is seamless: color1 at 0, color2 at 0.5, color1 at 1.
         const double x = Frac(pos + phase);

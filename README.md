@@ -14,14 +14,17 @@ OpenRGB, Artemis or other middleware.
   Every running game is listed, with whether it supports dynamic lighting. Counter-Strike 2,
   Rocket League and War Thunder light up through their official data feeds, and games
   without lighting can mirror the screen's colors ([docs/games.md](docs/games.md)).
-- **Manual mode:** color wheel, hex input, presets, brightness, and effects: static,
-  breathing, strobe, color cycle, and per-LED rainbow wave, gradient, comet and twinkle
-  that run around each ARGB fan.
+- **Manual mode:** effects (static, breathing, strobe, color cycle, and per-LED rainbow
+  wave, gradient, comet and twinkle that run around each ARGB fan), each with ready-made
+  presets such as gradients, a customizable rainbow (hue range, intensity, rainbows per fan,
+  direction), and the same color wheel, hex input and swatches for both colors.
 - **Calibration:** per-channel gains and gamma so Aura matches your other gear.
 - **Logitech devices** (mice, ...) follow along through G HUB's own LED SDK.
 - **Devices:** switch individual Aura devices on or off, and set up your fans (count, LEDs
   per fan, test pattern).
-- **Games:** one-click setup per SDK, with live status.
+- **Games List:** every game on the PC; open one to set up its built-in lighting (CS2,
+  Rocket League, War Thunder) or choose what it shows without lighting, including its own color.
+- **Integrations:** one-click setup per SDK, with live status.
 - Lives in the tray, starts with Windows if you want. The tray icon glows in the current
   color.
 

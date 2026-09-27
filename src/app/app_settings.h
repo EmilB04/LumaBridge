@@ -22,8 +22,9 @@ using ManualEffect = fx::Kind;
 // (stop + start Armoury Crate so it re-applies its effect).
 enum class IdleBehavior { ManualColor, Rainbow, Off, ArmouryCrate };
 
-// Per-game choice on the Games List page.
-enum class GameMode { Default, Screen, Idle };
+// Per-game choice on the Games List page: what shows while the game runs without lighting of
+// its own. Color: the game's own color (Prefs::gameColors).
+enum class GameMode { Default, Screen, Idle, Color };
 
 // Dashboard cards, in display order (ids; see ui.cpp). Cards not listed are hidden.
 inline const std::vector<std::string>& DefaultDashboard() {
@@ -38,6 +39,10 @@ struct Prefs {
     Rgb manualColor2{255, 255, 255};  // second color of gradient / comet / twinkle
     ManualEffect effect = ManualEffect::Static;
     float speedHz = 0.5f;  // effect cycles per second (0 = still, for gradients)
+    // Rainbow look (color cycle, rainbow wave and the idle rainbow): see fx::Params.
+    float rainbowHueStart = 0, rainbowHueSpan = 360, rainbowSaturation = 1;
+    int rainbowSpread = 1;
+    bool effectReverse = false;  // moving effects turn the other way
     IdleBehavior idle = IdleBehavior::ManualColor;
     // "Stop controlling the lights": remembered across restarts until resumed.
     bool lightingStopped = false;
@@ -52,6 +57,7 @@ struct Prefs {
     bool screenForUnsupported = false;
     // Per game (key: games::Normalize(name)): what it shows when it has no lighting of its own.
     std::map<std::string, GameMode> gameModes;
+    std::map<std::string, Rgb> gameColors;  // for GameMode::Color
     std::vector<std::string> dashboard = DefaultDashboard();
     int lhmPort = 8085;  // LibreHardwareMonitor's web server
     // Light Logitech devices (G HUB) along with Aura.

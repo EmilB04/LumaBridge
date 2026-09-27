@@ -128,6 +128,29 @@ static void TestEffects() {
     CHECK((Render(p, 0.0, 2, 3) == Rgb{0, 0, 255}));
     CHECK((Render(p, 1.0 / 3.0, 0, 3) == Rgb{0, 255, 0}));  // rotated one step
 
+    // Customized rainbows.
+    Params rb;
+    rb.kind = Kind::RainbowWave;
+    rb.speed = 0;
+    rb.reverse = true;
+    CHECK((Render(rb, 0.0, 0, 3) == Rgb{255, 0, 0}));
+    CHECK((Render(rb, 0.0, 1, 3) == Rgb{0, 0, 255}));  // the other way round
+    rb.reverse = false;
+    rb.spread = 2;
+    CHECK((Render(rb, 0.0, 0, 4) == Render(rb, 0.0, 2, 4)));  // two rainbows per ring
+    rb.spread = 1;
+    rb.saturation = 0;
+    CHECK((Render(rb, 0.0, 1, 3) == Rgb{255, 255, 255}));  // fully washed out
+    rb.saturation = 1;
+    rb.hueStart = 120;
+    rb.hueSpan = 120;  // green .. blue and back: seamless
+    CHECK((Render(rb, 0.0, 0, 4) == Rgb{0, 255, 0}));
+    CHECK((Render(rb, 0.0, 2, 4) == Rgb{0, 0, 255}));
+    CHECK((Render(rb, 0.0, 1, 4) == Render(rb, 0.0, 3, 4)));
+    rb.kind = Kind::ColorCycle;
+    rb.speed = 1;
+    CHECK((Render(rb, 0.5, 0, 1) == Rgb{0, 0, 255}));
+
     p.kind = Kind::Gradient;
     p.speed = 0;
     CHECK(!IsAnimated(p));

@@ -195,10 +195,19 @@ void Controller::Changed() {
     dirtySince_ = GetTickCount64();
 }
 
-void Controller::RememberManualColor() {
+void Controller::RainbowLook(fx::Params* p) const {
+    p->hueStart = prefs_.rainbowHueStart;
+    p->hueSpan = prefs_.rainbowHueSpan;
+    p->saturation = prefs_.rainbowSaturation;
+    p->spread = prefs_.rainbowSpread;
+}
+
+void Controller::RememberManualColor() { RememberColor(prefs_.manualColor); }
+
+void Controller::RememberColor(Rgb c) {
     auto& r = prefs_.recentColors;
-    r.erase(std::remove(r.begin(), r.end(), prefs_.manualColor), r.end());
-    r.insert(r.begin(), prefs_.manualColor);
+    r.erase(std::remove(r.begin(), r.end(), c), r.end());
+    r.insert(r.begin(), c);
     if (r.size() > Prefs::kMaxRecent) r.resize(Prefs::kMaxRecent);
     Changed();
 }
@@ -254,6 +263,8 @@ Controller::Output Controller::Decide() const {
         o.fx.color1 = prefs_.manualColor;
         o.fx.color2 = prefs_.manualColor2;
         o.fx.speed = prefs_.effect == ManualEffect::Static ? 0 : prefs_.speedHz;
+        RainbowLook(&o.fx);
+        o.fx.reverse = prefs_.effectReverse;
         return o;
     };
 
@@ -293,6 +304,14 @@ Controller::Output Controller::Decide() const {
             o.fx.speed = 0;
             return o;
         }
+        // A running game with its own color (Games List).
+        for (const GameStatus& g : games_) {
+            if (g.mode != GameMode::Color) continue;
+            auto c = prefs_.gameColors.find(games::Normalize(g.game.name));
+            Output o = lit((g.game.name + " - its color").c_str());
+            o.fx.color1 = c == prefs_.gameColors.end() ? prefs_.manualColor : c->second;
+            return o;
+        }
         // A game without (or not yet sending) dynamic lighting is running: say so.
         std::string idle = "No game running";
         if (!games_.empty()) {
@@ -307,6 +326,7 @@ Controller::Output Controller::Decide() const {
             r.fx.kind = fx::Kind::RainbowWave;
             r.fx.color1 = Rgb{170, 60, 255};  // icon tint; the effect itself is every hue
             r.fx.speed = 0.1;                 // one slow turn every 10 s
+            RainbowLook(&r.fx);
             return r;
         }
         case IdleBehavior::Off: {
@@ -441,7 +461,7 @@ const Controller::GameStatus* Controller::ScreenColorsGame() const {
     if (tracker_.Active()) return nullptr;  // a game is lighting things itself
     for (const GameStatus& g : games_) {
         if (g.mode == GameMode::Screen) return &g;
-        if (g.mode == GameMode::Idle) continue;
+        if (g.mode == GameMode::Idle || g.mode == GameMode::Color) continue;
         const bool builtIn = g.profile && g.profile->kind == games::ProfileKind::BuiltIn;
         if (prefs_.screenForUnsupported && !builtIn && !games::SupportsLighting(g.support)) return &g;
     }
