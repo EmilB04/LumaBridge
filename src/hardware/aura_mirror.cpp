@@ -151,19 +151,22 @@ void AuraMirror::Spectrum(int periodMs) {
     Wake();
 }
 
-void AuraMirror::SetPattern(const fx::Params& params, const fx::FanLayout& fans, bool fanTest) {
+void AuraMirror::SetPattern(const fx::Params& params, const fx::FanLayout& fans, bool fanTest, const fx::Params* board) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         Pattern& p = pattern_;
-        const bool same = p.active && p.params.kind == params.kind && p.params.color1 == params.color1 &&
-                          p.params.color2 == params.color2 && p.params.speed == params.speed &&
+        const fx::Params& b = board ? *board : params;
+        const bool same = p.active && fx::SameParams(p.params, params) && fx::SameParams(p.board, b) &&
                           p.fans == fans && p.fanTest == fanTest;
         if (same) return;
         // Keep the effect's clock when only colors change (a game updating its color every
         // frame shouldn't restart a strobe's phase).
-        if (!p.active || p.params.kind != params.kind || p.params.speed != params.speed) p.startedAt = GetTickCount64();
+        if (!p.active || p.params.kind != params.kind || p.params.speed != params.speed || p.board.kind != b.kind ||
+            p.board.speed != b.speed)
+            p.startedAt = GetTickCount64();
         p.active = true;
         p.params = params;
+        p.board = b;
         p.fans = fans;
         p.fanTest = fanTest;
         ++p.version;
@@ -298,7 +301,7 @@ void AuraMirror::Run() {
             // What a single-color receiver (the routed path) would show: LED 0.
             const double t = static_cast<double>(now - pattern.startedAt) / 1000.0;
             color = fx::Render(pattern.params, t, 0, 1);
-            animating = !pattern.fanTest && fx::IsAnimated(pattern.params);
+            animating = !pattern.fanTest && (fx::IsAnimated(pattern.params) || fx::IsAnimated(pattern.board));
         }
 
         app = routeToApp_ ? FindApp() : nullptr;
@@ -395,7 +398,7 @@ void AuraMirror::Run() {
                     if (fans && pattern.fanTest) fx::RenderFanTest(pattern.fans, &f, devs[i].lightCount);
                     else if (fans) fx::RenderFans(pattern.params, t, pattern.fans, &f, devs[i].lightCount);
                     else if (pattern.fanTest) f.assign(static_cast<size_t>(devs[i].lightCount), Rgb{});
-                    else fx::RenderStrip(pattern.params, t, devs[i].lightCount, &f);
+                    else fx::RenderStrip(pattern.board, t, devs[i].lightCount, &f);
                     for (auto& c : f) c = ApplyCorrection(cc, c);
                 }
                 if (aura.SetFrames(frames)) {

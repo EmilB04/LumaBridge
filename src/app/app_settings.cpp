@@ -157,6 +157,16 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (!v.empty()) p.logitechDevices = v != L"0";
     v = Read(ini, L"Dashboard", L"LhmPort");
     if (!v.empty()) p.lhmPort = _wtoi(v.c_str());
+    for (const char* id : device::All()) {
+        DeviceLighting d;
+        if (DecodeDevice(Narrow(Read(ini, L"Lighting", (L"Device." + Widen(id)).c_str())), &d)) p.deviceLighting[id] = d;
+    }
+    std::vector<std::string> items{device::kBoard, device::kRam, device::kMouse, device::kKeyboard};
+    for (int i = 0; i < 8; ++i) items.push_back(FanItem(i));
+    for (const std::string& item : items) {
+        Spot s;
+        if (DecodeSpot(Narrow(Read(ini, L"Lighting", (L"Spot." + Widen(item)).c_str())), &s)) p.setupSpots[item] = s;
+    }
     const std::wstring manual = Read(ini, L"App", L"ManualGames");
     for (size_t pos = 0; pos < manual.size();) {
         size_t bar = manual.find(L'|', pos);
@@ -215,6 +225,11 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"AzothKeyboard", p.azothKeyboard ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"RamLighting", p.ramLighting ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"RamRelease", p.ramRelease == 1 ? L"off" : p.ramRelease == 2 ? L"keep" : L"rainbow");
+
+    for (const auto& [id, d] : p.deviceLighting)
+        WriteConfigValue(ini, L"Lighting", (L"Device." + Widen(id)).c_str(), Widen(EncodeDevice(d)));
+    for (const auto& [item, spot] : p.setupSpots)
+        WriteConfigValue(ini, L"Lighting", (L"Spot." + Widen(item)).c_str(), Widen(EncodeSpot(spot)));
 
     WriteConfigValue(ini, L"Color", L"Brightness", Num(cfg.auraCorrection.brightness * 100.0));
     WriteConfigValue(ini, L"Color", L"GainR", Num(cfg.auraCorrection.gainR * 100.0));

@@ -35,6 +35,12 @@ struct Params {
     bool reverse = false;    // moving patterns turn the other way
 };
 
+inline bool SameParams(const Params& a, const Params& b) {
+    return a.kind == b.kind && a.color1 == b.color1 && a.color2 == b.color2 && a.speed == b.speed &&
+           a.hueStart == b.hueStart && a.hueSpan == b.hueSpan && a.saturation == b.saturation && a.spread == b.spread &&
+           a.reverse == b.reverse;
+}
+
 // Does the effect change over time? (Static ones only need re-sending, not re-rendering.)
 inline bool IsAnimated(const Params& p) {
     return p.kind != Kind::Static && !(p.kind == Kind::Gradient && p.speed <= 0);

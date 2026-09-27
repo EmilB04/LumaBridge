@@ -45,12 +45,23 @@ public:
         fx::Params fx;         // the effect (games: Static, or Strobe while they flash)
         bool fanTest = false;  // fans show the layout test pattern (Devices page)
         std::string label;     // "Battlefield 1 - Logitech LIGHTSYNC", "Manual color", ...
+        // Devices with their own look (device::kFans, ...) while your own lighting shows;
+        // the others show `fx`.
+        std::map<std::string, fx::Params> devices;
 
+        const fx::Params& For(const std::string& id) const {
+            auto it = devices.find(id);
+            return it != devices.end() ? it->second : fx;
+        }
         bool SameLighting(const Output& o) const {
-            return stopped == o.stopped && fanTest == o.fanTest && fx.kind == o.fx.kind &&
-                   fx.color1 == o.fx.color1 && fx.color2 == o.fx.color2 && fx.speed == o.fx.speed &&
-                   fx.hueStart == o.fx.hueStart && fx.hueSpan == o.fx.hueSpan && fx.saturation == o.fx.saturation &&
-                   fx.spread == o.fx.spread && fx.reverse == o.fx.reverse;
+            if (stopped != o.stopped || fanTest != o.fanTest || !fx::SameParams(fx, o.fx) ||
+                devices.size() != o.devices.size())
+                return false;
+            for (const auto& [id, p] : devices) {
+                auto it = o.devices.find(id);
+                if (it == o.devices.end() || !fx::SameParams(p, it->second)) return false;
+            }
+            return true;
         }
     };
 

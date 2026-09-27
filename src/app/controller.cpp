@@ -92,7 +92,7 @@ void Controller::UpdateLogitech() {
                 logitechNote_ = g.game.name + " lights them through G HUB";
                 break;
             }
-    logitech_.Set(output_.fx, own);
+    logitech_.Set(output_.For(device::kMouse), own);
 }
 
 std::wstring Controller::GameDir(const char* profileKey) const {
@@ -267,12 +267,9 @@ Controller::Output Controller::Decide() const {
     };
     auto manual = [&](const char* label) {
         Output o = lit(label);
-        o.fx.kind = prefs_.effect;
-        o.fx.color1 = prefs_.manualColor;
-        o.fx.color2 = prefs_.manualColor2;
-        o.fx.speed = prefs_.effect == ManualEffect::Static ? 0 : prefs_.speedHz;
-        RainbowLook(&o.fx);
-        o.fx.reverse = prefs_.effectReverse;
+        o.fx = ToParams(MainLook(prefs_));
+        for (const auto& [id, d] : prefs_.deviceLighting)
+            if (d.own) o.devices[id] = ToParams(d.look);
         return o;
     };
 
@@ -435,7 +432,8 @@ void Controller::Apply(const Output& out) {
         mirror_.Start(c, nullptr, "LumaBridge app", /*routeToApp=*/false);
         mirrorHz_ = c.maxUpdateHz;
     }
-    mirror_.SetPattern(out.fx, cfg_.argbFans, out.fanTest);
+    const fx::Params& board = out.For(device::kBoard);
+    mirror_.SetPattern(out.For(device::kFans), cfg_.argbFans, out.fanTest, &board);
 }
 
 void Controller::UpdateFeeds(uint64_t now) {
@@ -522,8 +520,8 @@ void Controller::Tick() {
     }
     output_ = next;
     UpdateLogitech();
-    azoth_.Set(output_.fx, cfg_.auraCorrection.brightness, prefs_.azothKeyboard && !output_.stopped);
-    hardware_.SetRam(output_.fx, cfg_.auraCorrection.brightness, prefs_.ramLighting, !output_.stopped, prefs_.ramRelease);
+    azoth_.Set(output_.For(device::kKeyboard), cfg_.auraCorrection.brightness, prefs_.azothKeyboard && !output_.stopped);
+    hardware_.SetRam(output_.For(device::kRam), cfg_.auraCorrection.brightness, prefs_.ramLighting, !output_.stopped, prefs_.ramRelease);
     if (now - sensorsPushedAt_ >= 500) {
         sensorsPushedAt_ = now;
         monitor_.SetBuiltInSensors(hardware_.Sensors(), hardware_.chip());

@@ -10,6 +10,7 @@
 
 #include "color.h"
 #include "config.h"
+#include "device_lighting.h"
 #include "effects.h"
 
 namespace luma::app {
@@ -68,8 +69,47 @@ struct Prefs {
     bool ramLighting = false;
     // What the RAM shows when LumaBridge lets go of it: 0 its own rainbow, 1 off, 2 the last color.
     int ramRelease = 0;
+    // Per device (device::kFans, ...): its own look, or following the main one.
+    std::map<std::string, DeviceLighting> deviceLighting;
+    // The Lighting page's "Your setup" canvas: where each item sits (see DefaultSpot).
+    std::map<std::string, Spot> setupSpots;
     static constexpr size_t kMaxRecent = 8;
 };
+
+// The main look (all devices that don't have their own), as stored in Prefs.
+inline Look MainLook(const Prefs& p) {
+    Look l;
+    l.effect = p.effect;
+    l.color1 = p.manualColor;
+    l.color2 = p.manualColor2;
+    l.speedHz = p.speedHz;
+    l.hueStart = p.rainbowHueStart;
+    l.hueSpan = p.rainbowHueSpan;
+    l.saturation = p.rainbowSaturation;
+    l.spread = p.rainbowSpread;
+    l.reverse = p.effectReverse;
+    return l;
+}
+inline void SetMainLook(Prefs& p, const Look& l) {
+    p.effect = l.effect;
+    p.manualColor = l.color1;
+    p.manualColor2 = l.color2;
+    p.speedHz = l.speedHz;
+    p.rainbowHueStart = l.hueStart;
+    p.rainbowHueSpan = l.hueSpan;
+    p.rainbowSaturation = l.saturation;
+    p.rainbowSpread = l.spread;
+    p.effectReverse = l.reverse;
+}
+// A device's look right now: its own, or the main one.
+inline Look DeviceLook(const Prefs& p, const std::string& id) {
+    auto it = p.deviceLighting.find(id);
+    return it != p.deviceLighting.end() && it->second.own ? it->second.look : MainLook(p);
+}
+inline Spot SetupSpot(const Prefs& p, const std::string& item) {
+    auto it = p.setupSpots.find(item);
+    return it != p.setupSpots.end() ? it->second : DefaultSpot(item);
+}
 
 Prefs LoadPrefs(const std::wstring& iniPath);
 // Writes [App] plus the shared keys the app lets you edit.

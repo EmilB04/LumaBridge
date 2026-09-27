@@ -496,13 +496,6 @@ void CardTitle(const Fonts& f, const char* title, Icon icon) {
     CardTitle(f, title);
 }
 
-void PreviewCard(Controller& ctl, const Fonts& f) {
-    BeginCard("preview");
-    CardTitle(f, "Preview", Icon::Fan);
-    LightsPreview(ctl.output(), ctl.config().argbFans, BoardLedCount(ctl));
-    Muted("Fans on the ARGB header, as set up on the Devices page.");
-    EndCard();
-}
 
 // ---- Dashboard ------------------------------------------------------------------------
 
@@ -1012,9 +1005,20 @@ void BrightnessCard(Controller& ctl, const Fonts& f) {
     EndCard();
 }
 
-void RainbowCard(Controller& ctl, const Fonts& f, bool showSpread);
+bool RainbowCard(Controller& ctl, const Fonts& f, Look& p, bool showSpread);
 
-void AutoPage(Controller& ctl, const Fonts& f) {
+// The main look's rainbow (Auto mode's rainbow between games).
+void MainRainbowCard(Controller& ctl, const Fonts& f) {
+    Look l = MainLook(ctl.prefs());
+    if (RainbowCard(ctl, f, l, true)) {
+        SetMainLook(ctl.prefs(), l);
+        ctl.Changed();
+    }
+}
+
+void SetupCard(Controller& ctl, UiState& ui, const Fonts& f, bool selectable);
+
+void AutoPage(Controller& ctl, UiState& ui, const Fonts& f) {
     BeginCard("now");
     CardTitle(f, "Dynamic lighting", Icon::Game);
     Muted("Games drive your lights. When several are running, the one that changed color most recently wins.");
@@ -1120,8 +1124,8 @@ void AutoPage(Controller& ctl, const Fonts& f) {
           "Choose per game on the Games List page.");
     EndCard();
 
-    if (ctl.prefs().idle == IdleBehavior::Rainbow) RainbowCard(ctl, f, true);
-    PreviewCard(ctl, f);
+    if (ctl.prefs().idle == IdleBehavior::Rainbow) MainRainbowCard(ctl, f);
+    SetupCard(ctl, ui, f, false);
     BrightnessCard(ctl, f);
 }
 
@@ -1216,28 +1220,26 @@ fx::Params PresetParams(const Preset& p) {
 
 bool Near(float a, float b) { return std::fabs(a - b) < 0.001f; }
 
-bool PresetActive(const Prefs& p, const Preset& x) {
+bool PresetActive(const Look& p, const Preset& x) {
     if (p.effect != x.kind || (x.kind != fx::Kind::Static && !Near(p.speedHz, x.speed))) return false;
     if (IsRainbow(x.kind))
-        return Near(p.rainbowHueStart, x.hueStart) && Near(p.rainbowHueSpan, x.hueSpan) &&
-               Near(p.rainbowSaturation, x.saturation) && (x.kind == fx::Kind::ColorCycle || p.rainbowSpread == x.spread);
-    return p.manualColor == x.c1 && (!fx::UsesSecondColor(x.kind) || p.manualColor2 == x.c2);
+        return Near(p.hueStart, x.hueStart) && Near(p.hueSpan, x.hueSpan) && Near(p.saturation, x.saturation) &&
+               (x.kind == fx::Kind::ColorCycle || p.spread == x.spread);
+    return p.color1 == x.c1 && (!fx::UsesSecondColor(x.kind) || p.color2 == x.c2);
 }
 
-void ApplyPreset(Controller& ctl, const Preset& x) {
-    Prefs& p = ctl.prefs();
+void ApplyPreset(Controller& ctl, Look& p, const Preset& x) {
     p.effect = x.kind;
     if (x.kind != fx::Kind::Static) p.speedHz = x.speed;
     if (IsRainbow(x.kind)) {
-        p.rainbowHueStart = x.hueStart;
-        p.rainbowHueSpan = x.hueSpan;
-        p.rainbowSaturation = x.saturation;
-        if (x.kind == fx::Kind::RainbowWave) p.rainbowSpread = x.spread;
-        ctl.Changed();
+        p.hueStart = x.hueStart;
+        p.hueSpan = x.hueSpan;
+        p.saturation = x.saturation;
+        if (x.kind == fx::Kind::RainbowWave) p.spread = x.spread;
     } else {
-        p.manualColor = x.c1;
-        if (fx::UsesSecondColor(x.kind)) p.manualColor2 = x.c2;
-        ctl.RememberManualColor();
+        p.color1 = x.c1;
+        if (fx::UsesSecondColor(x.kind)) p.color2 = x.c2;
+        ctl.RememberColor(p.color1);
     }
 }
 
@@ -1258,8 +1260,8 @@ void EffectStrip(const fx::Params& fx, ImVec2 a, ImVec2 b, float rounding) {
 }
 
 // The presets of the current effect as tiles with a live preview; click to apply.
-void PresetTiles(Controller& ctl) {
-    const Prefs& p = ctl.prefs();
+bool PresetTiles(Controller& ctl, Look& p) {
+    bool changed = false;
     const float w = 128 * S(), h = 60 * S(), gap = 8 * S();
     const float avail = ImGui::GetContentRegionAvail().x;
     const int perRow = std::max(1, static_cast<int>((avail + gap) / (w + gap)));
@@ -1280,8 +1282,12 @@ void PresetTiles(Controller& ctl) {
         EffectStrip(PresetParams(x), ImVec2(a.x + 8 * S(), a.y + 8 * S()), ImVec2(b.x - 8 * S(), a.y + 30 * S()), 6 * S());
         dl->AddText(ImVec2(a.x + 10 * S(), a.y + 36 * S()), Hex(active ? kText : hovered ? kText : kMuted), x.name);
         ImGui::PopID();
-        if (clicked) ApplyPreset(ctl, x);
+        if (clicked) {
+            ApplyPreset(ctl, p, x);
+            changed = true;
+        }
     }
+    return changed;
 }
 
 // ---- Colors ---------------------------------------------------------------------------
@@ -1392,8 +1398,7 @@ bool ColorTab(const char* label, Rgb c, bool selected, float width) {
 
 // ---- Rainbow --------------------------------------------------------------------------
 
-void RainbowCard(Controller& ctl, const Fonts& f, bool showSpread) {
-    Prefs& p = ctl.prefs();
+bool RainbowCard(Controller&, const Fonts& f, Look& p, bool showSpread) {
     BeginCard("rainbow");
     CardTitle(f, "Rainbow", Icon::Palette);
     Muted("Pick which part of the spectrum to use and how vivid it is. Used by Color cycle, Rainbow wave "
@@ -1403,45 +1408,47 @@ void RainbowCard(Controller& ctl, const Fonts& f, bool showSpread) {
     fx::Params look;
     look.kind = fx::Kind::RainbowWave;
     look.speed = 0;
-    look.hueStart = p.rainbowHueStart;
-    look.hueSpan = p.rainbowHueSpan;
-    look.saturation = p.rainbowSaturation;
+    look.hueStart = p.hueStart;
+    look.hueSpan = p.hueSpan;
+    look.saturation = p.saturation;
     const ImVec2 a = ImGui::GetCursorScreenPos();
     const float w = ImGui::GetContentRegionAvail().x;
     EffectStrip(look, a, ImVec2(a.x + w, a.y + 18 * S()), 9 * S());
     ImGui::Dummy(ImVec2(w, 18 * S()));
     bool changed = false;
-    changed |= LabeledSlider("Starting hue", &p.rainbowHueStart, 0.f, 360.f, "%.0f\xC2\xB0");
-    changed |= LabeledSlider("Range of hues", &p.rainbowHueSpan, 10.f, 360.f,
-                             p.rainbowHueSpan >= 359.5f ? "Full spectrum" : "%.0f\xC2\xB0");
-    float sat = p.rainbowSaturation * 100.f;
+    changed |= LabeledSlider("Starting hue", &p.hueStart, 0.f, 360.f, "%.0f\xC2\xB0");
+    changed |= LabeledSlider("Range of hues", &p.hueSpan, 10.f, 360.f,
+                             p.hueSpan >= 359.5f ? "Full spectrum" : "%.0f\xC2\xB0");
+    float sat = p.saturation * 100.f;
     if (LabeledSlider("Color intensity", &sat, 0.f, 100.f, sat >= 99.5f ? "Vivid" : "%.0f%%")) {
-        p.rainbowSaturation = sat / 100.f;
+        p.saturation = sat / 100.f;
         changed = true;
     }
     if (showSpread) {
         ImGui::TextUnformatted("Rainbows around each fan");
         static const char* kSpread[] = {"1", "2", "3", "4"};
-        int spread = std::clamp(p.rainbowSpread, 1, 4) - 1;
+        int spread = std::clamp(p.spread, 1, 4) - 1;
         if (Segmented("spread", &spread, kSpread, 4, std::min(320 * S(), ImGui::GetContentRegionAvail().x))) {
-            p.rainbowSpread = spread + 1;
+            p.spread = spread + 1;
             changed = true;
         }
     }
-    if (changed) ctl.Changed();
     ImGui::Dummy(ImVec2(0, 2 * S()));
     if (ImGui::Button("Reset rainbow")) {
-        p.rainbowHueStart = 0;
-        p.rainbowHueSpan = 360;
-        p.rainbowSaturation = 1;
-        p.rainbowSpread = 1;
-        ctl.Changed();
+        p.hueStart = 0;
+        p.hueSpan = 360;
+        p.saturation = 1;
+        p.spread = 1;
+        changed = true;
     }
     EndCard();
+    return changed;
 }
 
-void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
-    Prefs& p = ctl.prefs();
+// Everything to edit a look: effect, presets, speed, and its colors or rainbow. Returns
+// true when it changed.
+bool LookEditor(Controller& ctl, UiState& ui, const Fonts& f, Look& p) {
+    bool changed = false;
     BeginCard("effect");
     CardTitle(f, "Effect", Icon::Lighting);
     const float full = ImGui::GetContentRegionAvail().x;
@@ -1449,32 +1456,32 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
         const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
         if (p.effect == ManualEffect::ColorCycle) p.speedHz = std::min(p.speedHz, 0.5f);
         else if (e.maxSpeed > 0) p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
-        ctl.Changed();
+        changed = true;
     }
     const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
     Muted("%s", e.help);
     ImGui::Dummy(ImVec2(0, 4 * S()));
     ImGui::TextUnformatted("Presets");
-    PresetTiles(ctl);
+    changed |= PresetTiles(ctl, p);
     ImGui::Dummy(ImVec2(0, 4 * S()));
     if (p.effect == ManualEffect::ColorCycle) {
         float seconds = 1.f / std::max(p.speedHz, 0.02f);
         if (LabeledSlider("One full cycle every", &seconds, 2.f, 60.f, "%.0f seconds")) {
             p.speedHz = 1.f / seconds;
-            ctl.Changed();
+            changed = true;
         }
     } else if (e.maxSpeed > 0) {
         p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
-        if (LabeledSlider("Speed", &p.speedHz, e.minSpeed, e.maxSpeed, e.speedFmt)) ctl.Changed();
+        if (LabeledSlider("Speed", &p.speedHz, e.minSpeed, e.maxSpeed, e.speedFmt)) changed = true;
     }
     if (p.effect == ManualEffect::RainbowWave || p.effect == ManualEffect::Gradient || p.effect == ManualEffect::Comet) {
         ImGui::Dummy(ImVec2(0, 2 * S()));
-        if (Toggle("Reverse direction", &p.effectReverse)) ctl.Changed();
+        if (Toggle("Reverse direction", &p.reverse)) changed = true;
     }
     EndCard();
 
     if (IsRainbow(p.effect)) {
-        RainbowCard(ctl, f, p.effect == ManualEffect::RainbowWave);
+        changed |= RainbowCard(ctl, f, p, p.effect == ManualEffect::RainbowWave);
     } else {
         BeginCard("colors");
         const bool two = fx::UsesSecondColor(p.effect);
@@ -1484,29 +1491,323 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
             const char* first = p.effect == ManualEffect::Twinkle ? "Base color" : p.effect == ManualEffect::Comet ? "Comet" : "First color";
             const float swapW = 70 * S(), gap = 8 * S();
             const float tabW = (ImGui::GetContentRegionAvail().x - swapW - gap * 2) / 2;
-            if (ColorTab((std::string(first) + "##c1").c_str(), p.manualColor, ui.colorSlot == 0, tabW)) ui.colorSlot = 0;
+            if (ColorTab((std::string(first) + "##c1").c_str(), p.color1, ui.colorSlot == 0, tabW)) ui.colorSlot = 0;
             ImGui::SameLine(0, gap);
-            if (ColorTab((std::string(kSecondName[static_cast<int>(p.effect)]) + "##c2").c_str(), p.manualColor2,
+            if (ColorTab((std::string(kSecondName[static_cast<int>(p.effect)]) + "##c2").c_str(), p.color2,
                          ui.colorSlot == 1, tabW))
                 ui.colorSlot = 1;
             ImGui::SameLine(0, gap);
             if (ImGui::Button("Swap", ImVec2(swapW, 44 * S()))) {
-                std::swap(p.manualColor, p.manualColor2);
-                ctl.Changed();
+                std::swap(p.color1, p.color2);
+                changed = true;
             }
             ImGui::Dummy(ImVec2(0, 6 * S()));
         } else {
             ui.colorSlot = 0;
         }
         if (ui.colorSlot == 0) {
-            if (ColorEditor(ctl, ui, &p.manualColor, "color1")) ctl.Changed();
+            changed |= ColorEditor(ctl, ui, &p.color1, "color1");
         } else {
-            if (ColorEditor(ctl, ui, &p.manualColor2, "color2")) ctl.Changed();
+            changed |= ColorEditor(ctl, ui, &p.color2, "color2");
         }
         EndCard();
     }
 
-    PreviewCard(ctl, f);
+    return changed;
+}
+
+// ---- Your setup: every device with its live effect, placed like the real thing -----------
+
+// One thing on the canvas: a fan, the motherboard, the memory, the mouse or the keyboard.
+struct SetupItem {
+    std::string item;    // key in Prefs::setupSpots
+    const char* device;  // device::kFans, ...
+    ImVec2 size;
+    int fan = -1;        // fans: which one
+};
+
+// What a device shows right now (grey while LumaBridge isn't controlling the lights).
+const fx::Params* LiveParams(const Controller& ctl, const char* id) {
+    return ctl.output().stopped ? nullptr : &ctl.output().For(id);
+}
+
+Rgb LiveAt(const fx::Params* p, double t, int i, int n) {
+    return p ? fx::Render(*p, t, i, n) : Rgb{50, 54, 64};
+}
+
+void Glow(ImDrawList* dl, ImVec2 c, float r, Rgb col) {
+    dl->AddCircleFilled(c, r * 2.4f, Col(col, 38), 20);
+    dl->AddCircleFilled(c, r, Col(col), 16);
+}
+
+void DrawFan(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& leds, int fan, int per) {
+    const ImVec2 c(a.x + size.x / 2, a.y + size.y / 2);
+    const float r = size.x / 2;
+    dl->AddRectFilled(a, ImVec2(a.x + size.x, a.y + size.y), Hex(0x0A0C10), 10 * S());
+    dl->AddCircleFilled(c, r * 0.9f, Hex(0x07080B), 48);
+    dl->AddCircleFilled(c, r * 0.28f, Hex(kCardHover), 32);  // hub
+    for (int b = 0; b < 7; ++b) {  // blades
+        const float ang = 6.2831853f * b / 7 + static_cast<float>(ImGui::GetTime()) * 0.8f;
+        dl->AddLine(ImVec2(c.x + std::cos(ang) * r * 0.3f, c.y + std::sin(ang) * r * 0.3f),
+                    ImVec2(c.x + std::cos(ang + 0.5f) * r * 0.72f, c.y + std::sin(ang + 0.5f) * r * 0.72f),
+                    Hex(0x2A3040), 3 * S());
+    }
+    const float ringR = r * 0.8f;
+    const float dot = std::clamp(ringR * 3.14159f / per * 0.7f, 1.4f * S(), 4.5f * S());
+    for (int i = 0; i < per; ++i) {
+        const Rgb led = leds[static_cast<size_t>(fan * per + i)];
+        const float ang = -1.5707963f + 6.2831853f * i / per;
+        Glow(dl, ImVec2(c.x + std::cos(ang) * ringR, c.y + std::sin(ang) * ringR), dot, led);
+    }
+}
+
+void DrawBoard(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& leds) {
+    const ImVec2 b(a.x + size.x, a.y + size.y);
+    dl->AddRectFilled(a, b, Hex(0x10141B), 6 * S());
+    dl->AddRect(a, b, Hex(0x2A3142), 6 * S(), 0, 1.2f * S());
+    // CPU socket, memory slots, a PCIe slot.
+    const float u = size.x / 20;
+    dl->AddRectFilled(ImVec2(a.x + 6 * u, a.y + 4 * u), ImVec2(a.x + 11 * u, a.y + 9 * u), Hex(0x1C2230), 3 * S());
+    dl->AddRect(ImVec2(a.x + 6 * u, a.y + 4 * u), ImVec2(a.x + 11 * u, a.y + 9 * u), Hex(0x3A4356), 3 * S());
+    for (int i = 0; i < 4; ++i)
+        dl->AddRectFilled(ImVec2(a.x + (13 + i * 1.3f) * u, a.y + 3 * u), ImVec2(a.x + (13.6f + i * 1.3f) * u, a.y + 10 * u),
+                          Hex(0x222938), 1 * S());
+    dl->AddRectFilled(ImVec2(a.x + 3 * u, a.y + 12.5f * u), ImVec2(a.x + 15 * u, a.y + 13.3f * u), Hex(0x222938), 1 * S());
+    // Its LEDs along the left edge (the I/O cover), top to bottom.
+    const int n = static_cast<int>(leds.size());
+    for (int i = 0; i < n; ++i) {
+        const float y = a.y + size.y * (0.12f + 0.76f * (n > 1 ? static_cast<float>(i) / (n - 1) : 0.5f));
+        Glow(dl, ImVec2(a.x + 2.2f * u, y), 3 * S(), leds[static_cast<size_t>(i)]);
+    }
+}
+
+void DrawRam(ImDrawList* dl, ImVec2 a, ImVec2 size, int sticks, const fx::Params* p, double t) {
+    const float gap = 6 * S();
+    const float w = (size.x - gap * (sticks - 1)) / sticks;
+    for (int s = 0; s < sticks; ++s) {
+        const ImVec2 sa(a.x + s * (w + gap), a.y), sb(sa.x + w, a.y + size.y);
+        dl->AddRectFilled(sa, sb, Hex(0x151A23), 3 * S());
+        dl->AddRect(sa, sb, Hex(0x2A3142), 3 * S());
+        // The light bar on top: 5 LEDs.
+        for (int i = 0; i < 5; ++i) {
+            const Rgb c = LiveAt(p, t, i, 5);
+            const float y0 = sa.y + 4 * S() + i * (size.y * 0.32f / 5);
+            dl->AddRectFilled(ImVec2(sa.x + 2 * S(), y0), ImVec2(sb.x - 2 * S(), y0 + size.y * 0.32f / 5 - 1 * S()), Col(c));
+            dl->AddRectFilled(ImVec2(sa.x - 3 * S(), y0 - 2 * S()), ImVec2(sb.x + 3 * S(), y0 + size.y * 0.32f / 5 + 1 * S()),
+                              Col(c, 30), 3 * S());
+        }
+    }
+}
+
+// The G502 X Plus from above: its light strip runs along the bottom curve (6 LEDs, thumb
+// side first) and up the right side (2).
+void DrawMouse(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& leds) {
+    const ImVec2 b(a.x + size.x, a.y + size.y);
+    const float w = size.x, h = size.y;
+    dl->AddRectFilled(ImVec2(a.x + w * 0.08f, a.y), ImVec2(b.x - w * 0.08f, b.y), Hex(0x151922), w * 0.42f);
+    dl->AddRect(ImVec2(a.x + w * 0.08f, a.y), ImVec2(b.x - w * 0.08f, b.y), Hex(0x2A3142), w * 0.42f, 0, 1.2f * S());
+    const float mid = a.x + w / 2;
+    dl->AddLine(ImVec2(mid, a.y + 2 * S()), ImVec2(mid, a.y + h * 0.38f), Hex(0x2A3142), 1.5f * S());       // buttons
+    dl->AddRectFilled(ImVec2(mid - w * 0.06f, a.y + h * 0.10f), ImVec2(mid + w * 0.06f, a.y + h * 0.26f), Hex(0x2A3142),
+                      w * 0.05f);  // wheel
+    dl->AddLine(ImVec2(a.x + w * 0.1f, a.y + h * 0.38f), ImVec2(b.x - w * 0.1f, a.y + h * 0.38f), Hex(0x222838), 1 * S());
+    const float cx = a.x + w / 2, cy = a.y + h * 0.66f, rx = w * 0.36f, ry = h * 0.24f;
+    for (int i = 0; i < 6; ++i) {  // bottom curve, left to right
+        const float ang = 3.14159f * (0.92f - 0.62f * i / 5.f);
+        Glow(dl, ImVec2(cx + std::cos(ang) * rx, cy + std::sin(ang) * ry), 2.6f * S(), leds[static_cast<size_t>(i)]);
+    }
+    for (int i = 0; i < 2; ++i)  // up the right side
+        Glow(dl, ImVec2(b.x - w * 0.14f, cy + ry * 0.35f - i * h * 0.12f), 2.6f * S(), leds[static_cast<size_t>(6 + i)]);
+}
+
+// The ROG Azoth (75 %): one color under every key.
+void DrawKeyboard(ImDrawList* dl, ImVec2 a, ImVec2 size, Rgb c) {
+    const ImVec2 b(a.x + size.x, a.y + size.y);
+    dl->AddRectFilled(a, b, Hex(0x12161E), 8 * S());
+    dl->AddRect(a, b, Hex(0x2A3142), 8 * S(), 0, 1.2f * S());
+    const float pad = 7 * S(), gap = 2.5f * S();
+    const int cols = 16, rows = 6;
+    const float kw = (size.x - 2 * pad - gap * (cols - 1)) / cols, kh = (size.y - 2 * pad - gap * (rows - 1)) / rows;
+    for (int r = 0; r < rows; ++r)
+        for (int k = 0; k < cols; ++k) {
+            if (r == 0 && k >= 13) continue;  // the screen and knob
+            const ImVec2 ka(a.x + pad + k * (kw + gap), a.y + pad + r * (kh + gap));
+            dl->AddRectFilled(ImVec2(ka.x - 1, ka.y - 1), ImVec2(ka.x + kw + 1, ka.y + kh + 1), Col(c, 90), 3 * S());
+            dl->AddRectFilled(ka, ImVec2(ka.x + kw, ka.y + kh), Hex(0x1A1F2A), 2.5f * S());
+        }
+    const ImVec2 oa(a.x + pad + 13 * (kw + gap), a.y + pad);
+    dl->AddRectFilled(oa, ImVec2(b.x - pad - kw - gap, oa.y + kh), Hex(0x05070A), 2 * S());  // the screen
+    dl->AddCircleFilled(ImVec2(b.x - pad - kw / 2, oa.y + kh / 2), kh * 0.45f, Hex(0x2A3142), 16);  // the knob
+}
+
+// The canvas. `selectable`: clicking a device selects it for editing (Manual mode).
+void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
+    Prefs& prefs = ctl.prefs();
+    const float W = ImGui::GetContentRegionAvail().x;
+    const float H = std::clamp(W * 0.52f, 300 * S(), 480 * S());
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(o, ImVec2(o.x + W, o.y + H), Hex(0x0B0E14), 12 * S());
+    for (float x = o.x + 20 * S(); x < o.x + W; x += 24 * S())  // dot grid
+        for (float y = o.y + 20 * S(); y < o.y + H; y += 24 * S()) dl->AddCircleFilled(ImVec2(x, y), 1 * S(), Hex(0x1C2230), 4);
+
+    // What's there.
+    const fx::FanLayout& layout = ctl.config().argbFans;
+    std::vector<SetupItem> items;
+    for (int i = 0; i < layout.Fans(); ++i) items.push_back({FanItem(i), device::kFans, ImVec2(84 * S(), 84 * S()), i});
+    items.push_back({device::kBoard, device::kBoard, ImVec2(180 * S(), 150 * S())});
+    const int sticks = std::max(ctl.hardware().sticks(), 2);
+    if (prefs.ramLighting) items.push_back({device::kRam, device::kRam, ImVec2(sticks * 22 * S(), 120 * S())});
+    if (prefs.azothKeyboard) items.push_back({device::kKeyboard, device::kKeyboard, ImVec2(300 * S(), 110 * S())});
+    if (prefs.logitechDevices) items.push_back({device::kMouse, device::kMouse, ImVec2(70 * S(), 112 * S())});
+
+    // Live colors.
+    const double t = ImGui::GetTime();
+    std::vector<Rgb> fanLeds, boardLeds, mouseLeds(8);
+    const fx::Params* fanP = LiveParams(ctl, device::kFans);
+    if (fanP) fx::RenderFans(*fanP, t, layout, &fanLeds);
+    else fanLeds.assign(static_cast<size_t>(layout.TotalLeds()), Rgb{50, 54, 64});
+    const fx::Params* boardP = LiveParams(ctl, device::kBoard);
+    const int nBoard = BoardLedCount(ctl);
+    boardLeds.resize(static_cast<size_t>(nBoard));
+    for (int i = 0; i < nBoard; ++i) boardLeds[static_cast<size_t>(i)] = LiveAt(boardP, t, i, nBoard);
+    const fx::Params* mouseP = LiveParams(ctl, device::kMouse);
+    const bool perLed = ctl.logitech().mouseEffect();  // else the mouse shows one color
+    for (int i = 0; i < 8; ++i) mouseLeds[static_cast<size_t>(i)] = perLed ? LiveAt(mouseP, t, i, 8) : LiveAt(mouseP, t, 0, 1);
+
+    // Where: the saved spot, kept inside the canvas.
+    auto rectOf = [&](const SetupItem& it) {
+        const Spot s = SetupSpot(prefs, it.item);
+        float x = o.x + s.x * W - it.size.x / 2, y = o.y + s.y * H - it.size.y / 2;
+        x = std::clamp(x, o.x + 6 * S(), o.x + W - it.size.x - 6 * S());
+        y = std::clamp(y, o.y + 6 * S(), o.y + H - it.size.y - 22 * S());
+        return ImVec2(x, y);
+    };
+
+    // The item being dragged goes on top.
+    std::stable_sort(items.begin(), items.end(), [&](const SetupItem& a, const SetupItem& b) {
+        return (a.item == ui.dragItem) < (b.item == ui.dragItem);
+    });
+    ImGui::PushID("setup");
+    for (const SetupItem& it : items) {
+        const ImVec2 a = rectOf(it);
+        ImGui::SetCursorScreenPos(a);
+        ImGui::InvisibleButton(it.item.c_str(), it.size);
+        const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
+        if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3 * S())) {
+            ui.dragItem = it.item;
+            Spot s = SetupSpot(prefs, it.item);
+            // From the item's clamped place, so a drag never starts with a jump.
+            s.x = (a.x + it.size.x / 2 - o.x + ImGui::GetIO().MouseDelta.x) / W;
+            s.y = (a.y + it.size.y / 2 - o.y + ImGui::GetIO().MouseDelta.y) / H;
+            prefs.setupSpots[it.item] = ClampSpot(s);
+        }
+        if (ImGui::IsItemDeactivated()) {
+            if (ui.dragItem == it.item) {
+                ui.dragItem.clear();
+                ctl.Changed();  // save the layout
+            } else if (selectable) {
+                ui.lightTarget = ui.lightTarget == it.device ? "" : it.device;
+            }
+        }
+        if (hovered || active) ImGui::SetMouseCursor(active ? ImGuiMouseCursor_ResizeAll : ImGuiMouseCursor_Hand);
+
+        const ImVec2 b(a.x + it.size.x, a.y + it.size.y);
+        if (it.device == device::kFans) DrawFan(dl, a, it.size, fanLeds, it.fan, layout.LedsPerFan());
+        else if (it.device == device::kBoard) DrawBoard(dl, a, it.size, boardLeds);
+        else if (it.device == device::kRam) DrawRam(dl, a, it.size, sticks, LiveParams(ctl, device::kRam), t);
+        else if (it.device == device::kMouse) DrawMouse(dl, a, it.size, mouseLeds);
+        else if (it.device == device::kKeyboard) DrawKeyboard(dl, a, it.size, LiveAt(LiveParams(ctl, device::kKeyboard), t, 0, 1));
+
+        const bool selected = selectable && ui.lightTarget == it.device;
+        if (selected || hovered)
+            dl->AddRect(ImVec2(a.x - 4 * S(), a.y - 4 * S()), ImVec2(b.x + 4 * S(), b.y + 4 * S()),
+                        Hex(selected ? kAccentHover : kBorder), 10 * S(), 0, (selected ? 2.f : 1.2f) * S());
+        // The name under it; fans are numbered.
+        char label[32];
+        if (it.fan >= 0) snprintf(label, sizeof label, "Fan %d", it.fan + 1);
+        else snprintf(label, sizeof label, "%s", device::Name(it.device));
+        const ImVec2 ts = ImGui::CalcTextSize(label);
+        const bool own = [&] {
+            auto d = prefs.deviceLighting.find(it.device);
+            return d != prefs.deviceLighting.end() && d->second.own;
+        }();
+        dl->AddText(ImVec2(a.x + it.size.x / 2 - ts.x / 2, b.y + 3 * S()), Hex(selected ? kText : kMuted), label);
+        if (own) dl->AddCircleFilled(ImVec2(a.x + it.size.x / 2 + ts.x / 2 + 7 * S(), b.y + 3 * S() + ts.y / 2), 3 * S(),
+                                     Hex(kAccentHover), 12);
+    }
+    ImGui::PopID();
+    ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + H));
+    ImGui::Dummy(ImVec2(W, 6 * S()));
+}
+
+void SetupCard(Controller& ctl, UiState& ui, const Fonts& f, bool selectable) {
+    BeginCard("setup");
+    CardTitle(f, "Your setup", Icon::Grid);
+    Muted(selectable ? "Drag the devices to where they are on your desk. Click one to give it its own lighting; "
+                       "a dot next to the name means it has its own."
+                     : "Drag the devices to where they are on your desk. Games light them all alike.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    SetupCanvas(ctl, ui, selectable);
+    if (ImGui::Button("Reset layout")) {
+        ctl.prefs().setupSpots.clear();
+        ctl.Changed();
+    }
+    ImGui::SameLine();
+    Muted("Fans, board and memory come from the Devices page; turn on the keyboard, mouse or RAM there to see them here.");
+    EndCard();
+}
+
+// Lighting > Manual: your setup on top, then the lighting of everything or one device.
+void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
+    Prefs& p = ctl.prefs();
+    SetupCard(ctl, ui, f, true);
+
+    // Which lighting to edit: everything, or one device.
+    std::vector<std::string> ids{""};
+    std::vector<const char*> labels{"All devices"};
+    for (const char* id : device::All()) {
+        if ((id == std::string(device::kRam) && !p.ramLighting) || (id == std::string(device::kMouse) && !p.logitechDevices) ||
+            (id == std::string(device::kKeyboard) && !p.azothKeyboard))
+            continue;
+        ids.push_back(id);
+        labels.push_back(device::Name(id));
+    }
+    int sel = 0;
+    for (size_t i = 0; i < ids.size(); ++i)
+        if (ids[i] == ui.lightTarget) sel = static_cast<int>(i);
+    ui.lightTarget = ids[static_cast<size_t>(sel)];  // a device that was turned off: back to all
+    if (Segmented("target", &sel, labels.data(), static_cast<int>(labels.size()), ImGui::GetContentRegionAvail().x))
+        ui.lightTarget = ids[static_cast<size_t>(sel)];
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+
+    if (ui.lightTarget.empty()) {
+        Look l = MainLook(p);
+        if (LookEditor(ctl, ui, f, l)) {
+            SetMainLook(p, l);
+            ctl.Changed();
+        }
+    } else {
+        DeviceLighting& d = p.deviceLighting[ui.lightTarget];
+        const char* name = device::Name(ui.lightTarget);
+        BeginCard("device");
+        CardTitle(f, name, Icon::Lighting);
+        int own = d.own ? 1 : 0;
+        const char* modes[] = {"Same as all devices", "Its own lighting"};
+        if (Segmented("own", &own, modes, 2, std::min(420 * S(), ImGui::GetContentRegionAvail().x))) {
+            if (own && !d.own && d.look == Look{}) d.look = MainLook(p);  // start from what it shows now
+            d.own = own == 1;
+            ctl.Changed();
+        }
+        if (ui.lightTarget == device::kKeyboard)
+            Muted("The Azoth shows one color at a time: the effect's first LED.");
+        else if (ui.lightTarget == device::kMouse)
+            Muted("A G502 X Plus shows the effect LED by LED; other Logitech mice show one color.");
+        else if (!d.own)
+            Muted("It shows the same lighting as the rest. Pick \"Its own lighting\" to set it apart.");
+        EndCard();
+        if (d.own && LookEditor(ctl, ui, f, d.look)) ctl.Changed();
+    }
     BrightnessCard(ctl, f);
 }
 
@@ -2666,7 +2967,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
 
     switch (ui.page) {
     case Page::Lighting:
-        if (ctl.prefs().mode == Mode::Auto) AutoPage(ctl, f);
+        if (ctl.prefs().mode == Mode::Auto) AutoPage(ctl, ui, f);
         else ManualPage(ctl, ui, f);
         break;
     case Page::Devices: DevicesPage(ctl, integrations, ui, f); break;

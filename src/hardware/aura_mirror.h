@@ -48,9 +48,11 @@ public:
     void Spectrum(int periodMs);  // rainbow: every hue once per period
     void StopEffects();
     // Per-LED effect (app only): rendered for every device each frame, ARGB headers as
-    // `fans`. `fanTest` shows the layout test pattern on the fans instead. Any of the
-    // single-color calls above switches back to single-color mode.
-    void SetPattern(const fx::Params& params, const fx::FanLayout& fans, bool fanTest = false);
+    // `fans`. `fanTest` shows the layout test pattern on the fans instead. `board`, if
+    // given, is the effect of the devices other than ARGB headers (the motherboard's LEDs).
+    // Any of the single-color calls above switches back to single-color mode.
+    void SetPattern(const fx::Params& params, const fx::FanLayout& fans, bool fanTest = false,
+                    const fx::Params* board = nullptr);
     void Save();
     void Restore();
 
@@ -83,6 +85,7 @@ private:
     struct Pattern {
         bool active = false;
         fx::Params params;
+        fx::Params board;  // the devices other than ARGB headers
         fx::FanLayout fans;
         bool fanTest = false;
         uint64_t startedAt = 0;  // effect time 0 (GetTickCount64)

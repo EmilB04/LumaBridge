@@ -28,6 +28,7 @@
 #include "friendly_names.h"
 #include "azoth_protocol.h"
 #include "logitech_hidpp.h"
+#include "device_lighting.h"
 #include "hyperx_ram.h"
 #include "hw_sensors.h"
 #include "lightfx_state.h"
@@ -901,6 +902,48 @@ static void TestLogitechHidpp() {
     CHECK(g.size() == 3 && g[1][4] == 6 && g[1][8] == 5 && g[1][12] == 6 && g[1][16] == 6 && g[1][17] == 4);
 }
 
+static void TestDeviceLighting() {
+    using namespace luma::app;
+    DeviceLighting d;
+    d.own = true;
+    d.look.effect = luma::fx::Kind::Gradient;
+    d.look.color1 = luma::Rgb{0xFF, 0x1A, 0x00};
+    d.look.color2 = luma::Rgb{0x00, 0x80, 0xFF};
+    d.look.speedHz = 0.25f;
+    d.look.hueStart = 170;
+    d.look.hueSpan = 90;
+    d.look.saturation = 0.45f;
+    d.look.spread = 2;
+    d.look.reverse = true;
+    const std::string enc = EncodeDevice(d);
+    CHECK(enc == "1|5|FF1A00|0080FF|0.25|170|90|0.45|2|1");
+    DeviceLighting back;
+    CHECK(DecodeDevice(enc, &back) && back.own && back.look == d.look);
+    CHECK(!DecodeDevice("", &back) && !DecodeDevice("1|5|FF1A00", &back));
+    CHECK(!DecodeDevice("1|99|FF1A00|0080FF|0.25|170|90|0.45|2|1", &back));  // no such effect
+    CHECK(!DecodeDevice("1|5|FF1A0|0080FF|0.25|170|90|0.45|2|1", &back));    // bad color
+    CHECK(!DecodeDevice("1|5|FF1A00|0080FF|25|170|90|0.45|2|1", &back));     // speed out of range
+    CHECK(DecodeDevice("0|0|000000|FFFFFF|0.5|0|360|1|9|0", &back) && !back.own && back.look.spread == 1);
+
+    // Static never moves; the rest keep their speed.
+    Look l;
+    CHECK(ToParams(l).speed == 0);
+    l.effect = luma::fx::Kind::Comet;
+    l.reverse = true;
+    const luma::fx::Params p = ToParams(l);
+    CHECK(p.kind == luma::fx::Kind::Comet && p.speed == 0.5 && p.reverse && p.color1 == l.color1);
+
+    // The canvas.
+    Spot s;
+    CHECK(DecodeSpot(EncodeSpot(Spot{0.25f, 0.75f}), &s) && s == (Spot{0.25f, 0.75f}));
+    CHECK(DecodeSpot("1.5,-2", &s) && s == (Spot{1, 0}));
+    CHECK(!DecodeSpot("0.5", &s));
+    CHECK(FanItem(3) == "fan3");
+    const Spot f0 = DefaultSpot("fan0"), f3 = DefaultSpot("fan3");
+    CHECK(f3.x > f0.x && f3.y == f0.y);  // the fourth fan starts a second column
+    for (const char* id : device::All()) CHECK(device::Name(id)[0] != 0);
+}
+
 static void TestHyperXRam() {
     using namespace luma::app::ram;
     std::array<luma::Rgb, kMaxLeds> colors{};
@@ -989,6 +1032,7 @@ int main() {
     TestFriendlyNames();
     TestAzoth();
     TestLogitechHidpp();
+    TestDeviceLighting();
     TestHyperXRam();
     TestHwSensors();
     TestIpc();

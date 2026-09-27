@@ -30,6 +30,8 @@ struct UiState {
     bool hexEditing = false;
     std::string hexSlot;  // which color editor the hex field being typed in belongs to
     int colorSlot = 0;    // Lighting > Manual: which of the two colors is being edited
+    std::string lightTarget;  // Lighting > Manual: the device being edited ("" = all devices)
+    std::string dragItem;     // Lighting: the item being dragged on the "Your setup" canvas
     // Games List: the game whose page is open ("" = the list), and its built-in profile key.
     std::string gameDetail, gameDetailProfile;
     char gameFilter[64] = "";
