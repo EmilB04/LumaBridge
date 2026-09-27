@@ -7,10 +7,12 @@
 //                          cycle, fixed), byte for byte as G HUB sends them
 //   hidpp-probe --perkey   also tries coloring the LEDs one by one (per-key lighting
 //                          0x8081: set zones, then end the frame)
-//   hidpp-probe --map      interactive: lights one zone at a time and asks which LED lit
-//                          (numbered as in G HUB's picture: 1-6 along the bottom from the
-//                          thumb side, 7-8 up the right side), then checks the order with a
-//                          moving dot. Saved to %LOCALAPPDATA%\LumaBridge\mouse-map.txt
+//   hidpp-probe --map      interactive guide: lights one zone at a time in red and asks
+//                          which light it is (numbered as in G HUB's picture: 1-6 along the
+//                          bottom from the thumb side, 7-8 up the right side), then checks
+//                          the result with a running light and a color per light. The
+//                          details go to hidpp-probe.txt, the map also to mouse-map.txt (both in
+//                          %LOCALAPPDATA%\LumaBridge)
 //
 // What G HUB sent (USB capture through the receiver 046D:C547, device index 1): long HID++
 // reports "11 01 <feature> <function|swid> ...". SetRgbClusterEffect (0x8071 function 1):
@@ -41,6 +43,7 @@ extern "C" {
 namespace {
 
 FILE* g_out = nullptr;
+bool g_quiet = false;  // --map: the details go only to the file, the console shows the guide
 
 void Log(const char* fmt, ...) {
     va_list a;
@@ -48,7 +51,7 @@ void Log(const char* fmt, ...) {
     char buf[2048];
     vsnprintf(buf, sizeof buf, fmt, a);
     va_end(a);
-    printf("%s\n", buf);
+    if (!g_quiet) printf("%s\n", buf);
     if (g_out) {
         fprintf(g_out, "%s\n", buf);
         fflush(g_out);
@@ -202,6 +205,49 @@ const char* FeatureName(uint16_t id) {
     }
 }
 
+// The --map guide's text: always on the console (and in the file).
+void Say(const char* fmt, ...) {
+    va_list a;
+    va_start(a, fmt);
+    char buf[2048];
+    vsnprintf(buf, sizeof buf, fmt, a);
+    va_end(a);
+    printf("%s\n", buf);
+    if (g_out) {
+        fprintf(g_out, "%s\n", buf);
+        fflush(g_out);
+    }
+}
+
+std::string Ask(const char* q) {
+    printf("%s ", q);
+    fflush(stdout);
+    char line[128] = {};
+    if (!fgets(line, sizeof line, stdin)) return std::string();
+    std::string s(line);
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
+    if (g_out) {
+        fprintf(g_out, "%s %s\n", q, s.c_str());
+        fflush(g_out);
+    }
+    return s;
+}
+
+// The numbers in an answer ("3", "3 4", "3,4").
+std::vector<int> Numbers(const std::string& s) {
+    std::vector<int> out;
+    int n = -1;
+    for (char c : s + " ") {
+        if (c >= '0' && c <= '9') {
+            n = (n < 0 ? 0 : n * 10) + (c - '0');
+        } else if (n >= 0) {
+            out.push_back(n);
+            n = -1;
+        }
+    }
+    return out;
+}
+
 void Pause(const char* what, DWORD ms) {
     Log("  %s", what);
     Sleep(ms);
@@ -221,11 +267,18 @@ int wmain(int argc, wchar_t** argv) {
         outPath = dir + L"\\hidpp-probe.txt";
     }
     g_out = _wfopen(outPath.c_str(), L"w");
+    g_quiet = map;
+    if (map) {
+        Say("");
+        Say("  Mapping the lights of your Logitech mouse");
+        Say("  ----------------------------------------");
+        Say("  Close LumaBridge first. Looking for the mouse...");
+    }
     Log("LumaBridge HID++ probe%s", test ? " (--test: shows effects)" : perkey ? " (--perkey: colors LEDs)" : map ? " (--map: maps the LEDs)" : " (read-only)");
 
     const auto devices = OpenAll();
     if (devices.empty()) {
-        Log("No Logitech HID++ interface found.");
+        Say("No Logitech HID++ interface found.");
         return 1;
     }
     int found = 0;
@@ -341,92 +394,104 @@ int wmain(int argc, wchar_t** argv) {
                 auto white = [](int) { return C{0xFF, 0xFF, 0xFF}; };
                 auto colors = [](int z) { return rainbow[z % 9]; };
                 if (map) {
-                    auto ask = [](const char* q) {
-                        printf("%s ", q);
-                        fflush(stdout);
-                        char line[128] = {};
-                        if (!fgets(line, sizeof line, stdin)) return std::string();
-                        std::string s(line);
-                        while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
-                        return s;
-                    };
-                    Log("  Mapping the LEDs. Press Enter for the default in [brackets].");
-                    std::string mode = ask("  Which way worked in --perkey? 1 = A (nothing first), 2 = B, 3 = C [3]:");
-                    Log("    mode: %s", mode.empty() ? "3" : mode.c_str());
-                    if (mode.empty() || mode == "2" || mode == "3") {
-                        const uint8_t e = mode == "2" ? 3 : 4;
-                        auto r = Request(d.h, dev, rgb, 1, {0xFF, e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01});
-                        Log("    whole-mouse effect %u %s", e, r.empty() ? "refused" : "accepted");
-                    }
-                    static const char* names[9] = {"red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "white"};
-                    std::string legend;
-                    for (int z : zones) legend += "zone " + std::to_string(z) + " " + names[z % 9] + ", ";
-                    frame("every zone its own color", colors, 0);
-                    Log("    %s", legend.c_str());
-                    Log("    you saw: %s", ask("  Which colors do you see, LED 1 to 8? (e.g. red orange yellow ...)").c_str());
-
-                    Log("  One zone at a time. Number the LEDs like G HUB's picture: 1-6 along the bottom curve from the thumb side (left), 7-8 up the right side (7 lower, 8 upper).");
-                    std::vector<std::pair<int, int>> area;  // (zone, area; 0 = nothing)
+                    // The mouse's whole-mouse effect 4 first: per-key frames showed after it.
+                    auto r = Request(d.h, dev, rgb, 1, {0xFF, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01});
+                    Log("    whole-mouse effect 4 %s", r.empty() ? "refused" : "accepted");
+                    Say("  Found it.");
+                    Say("");
+                    Say("  Number the lights like G HUB's picture:");
+                    Say("");
+                    Say("                                   8");
+                    Say("                                  7     <- right side, 7 low, 8 high");
+                    Say("      1   2   3   4   5   6");
+                    Say("      ^ bottom curve, left (thumb side) to right");
+                    Say("");
+                    Say("  One light at a time turns RED; the others glow dim white.");
+                    Say("  Type its number and press Enter. If nothing is red, type 0.");
+                    Say("  If several are red, type them all (like 3 4). Just Enter shows it again.");
+                    Say("");
+                    std::vector<std::pair<int, std::vector<int>>> leds;  // zone -> the lights it lit
                     for (size_t i = 0; i < zones.size(); ++i) {
                         const int z = zones[i];
                         char what[48];
-                        snprintf(what, sizeof what, "zone %d red, the rest off", z);
-                        frame(what, [z](int k) { return k == z ? C{0xFF, 0, 0} : C{0, 0, 0}; }, 0);
-                        std::string a = ask("    Which LED lit? (1-8; several: the first; 0 = nothing; r = show again):");
-                        if (a == "r") {
+                        snprintf(what, sizeof what, "zone %d red", z);
+                        frame(what, [z](int k) { return k == z ? C{0xFF, 0, 0} : C{0x18, 0x18, 0x18}; }, 0);
+                        char q[64];
+                        snprintf(q, sizeof q, "  [%zu of %zu] Which light is red?", i + 1, zones.size());
+                        const std::string a = Ask(q);
+                        auto nums = Numbers(a);
+                        if (nums.empty()) {  // Enter or something unclear: show it again
                             --i;
                             continue;
                         }
-                        const int n = atoi(a.c_str());
-                        Log("    zone %d -> LED %d%s%s", z, n, a.empty() || isdigit(static_cast<unsigned char>(a[0])) ? "" : "  note: ",
-                            a.empty() || isdigit(static_cast<unsigned char>(a[0])) ? "" : a.c_str());
-                        area.push_back({z, n});
+                        if (nums.size() == 1 && nums[0] == 0) nums.clear();
+                        leds.push_back({z, nums});
                     }
-                    int areas = 0;
-                    for (auto& [z, n] : area) areas = n > areas ? n : areas;
+                    // Light n -> the zones that lit it.
+                    auto zonesOf = [&](int n) {
+                        std::vector<int> out;
+                        for (auto& [z, ns] : leds)
+                            for (int x : ns)
+                                if (x == n) out.push_back(z);
+                        return out;
+                    };
+                    Say("");
+                    Say("  What you told me:");
                     std::string summary;
-                    for (int n = 1; n <= areas; ++n) {
-                        summary += "LED " + std::to_string(n) + ": zone";
-                        for (auto& [z, m] : area)
-                            if (m == n) summary += " " + std::to_string(z);
-                        summary += "; ";
+                    for (int n = 1; n <= 8; ++n) {
+                        auto zs = zonesOf(n);
+                        std::string list;
+                        for (int z : zs) list += " " + std::to_string(z);
+                        Say("    light %d: %s", n, zs.empty() ? "no zone lit it" : ("zone" + list).c_str());
                     }
-                    Log("  Map: %s", summary.c_str());
+                    for (auto& [z, ns] : leds)
+                        if (ns.empty()) Say("    zone %d: lit nothing", z);
 
-                    if (areas > 0) {
-                        Log("  Check: a red dot runs from LED 1 to LED %d, three times.", areas);
-                        for (int round = 0; round < 3; ++round)
-                            for (int n = 1; n <= areas; ++n) {
-                                auto dot = [&](int k) {
-                                    for (auto& [z, m] : area)
-                                        if (z == k) return m == n ? C{0xFF, 0, 0} : C{0, 0, 0x30};
-                                    return C{0, 0, 0};
-                                };
-                                char what[32];
-                                snprintf(what, sizeof what, "LED %d", n);
-                                frame(what, dot, 600);
-                            }
-                        Log("    %s", ask("  Did the dot run smoothly along the bottom and up the right side? (y / n + what you saw):").c_str());
-                        Log("  Check: each LED its own color (1 red, 2 green, 3 blue, 4 yellow, 5 purple, 6 cyan, 7 red, 8 green).");
-                        static const C areaColors[6] = {{255, 0, 0}, {0, 255, 0}, {0, 40, 255}, {255, 230, 0}, {150, 0, 255}, {0, 230, 255}};
-                        frame("LEDs colored", [&](int k) {
-                            for (auto& [z, m] : area)
-                                if (z == k && m > 0) return areaColors[(m - 1) % 6];
-                            return C{0, 0, 0};
-                        }, 0);
-                        Log("    %s", ask("  Does each LED show its own clean color? (y / n + what you saw):").c_str());
-                    }
+                    Say("");
+                    Say("  Check 1: a red light now runs from 1 to 8, three times. Watch it.");
+                    for (int round = 0; round < 3; ++round)
+                        for (int n = 1; n <= 8; ++n) {
+                            const auto zs = zonesOf(n);
+                            char what[32];
+                            snprintf(what, sizeof what, "light %d", n);
+                            frame(what, [&](int k) {
+                                for (int z : zs)
+                                    if (z == k) return C{0xFF, 0, 0};
+                                return C{0x10, 0x10, 0x10};
+                            }, 500);
+                        }
+                    Ask("  Did it run in order, 1 to 8, one light at a time? (y/n, and what was wrong)");
+
+                    Say("");
+                    Say("  Check 2: every light its own color: 1 red, 2 orange, 3 yellow, 4 green,");
+                    Say("           5 cyan, 6 blue, 7 purple, 8 pink.");
+                    static const C lightColors[8] = {{255, 0, 0},  {255, 110, 0}, {255, 230, 0}, {0, 255, 0},
+                                                     {0, 230, 255}, {0, 40, 255}, {150, 0, 255}, {255, 0, 150}};
+                    frame("each light its own color", [&](int k) {
+                        for (int n = 1; n <= 8; ++n)
+                            for (int z : zonesOf(n))
+                                if (z == k) return lightColors[n - 1];
+                        return C{0, 0, 0};
+                    }, 0);
+                    Ask("  Is every light the right color? (y/n, and which were wrong)");
+
                     wchar_t appData2[MAX_PATH];
                     if (GetEnvironmentVariableW(L"LOCALAPPDATA", appData2, MAX_PATH)) {
                         std::wstring mp = std::wstring(appData2) + L"\\LumaBridge\\mouse-map.txt";
                         if (FILE* f = _wfopen(mp.c_str(), L"w")) {
-                            fprintf(f, "G502 X PLUS zones -> LEDs (G HUB's numbering: 1-6 bottom from the thumb side, 7-8 right side)\n");
-                            for (auto& [z, n] : area) fprintf(f, "zone %d LED %d\n", z, n);
+                            fprintf(f, "G502 X PLUS: zone -> lights (G HUB's numbering: 1-6 bottom from the thumb side, 7-8 right side)\n");
+                            for (auto& [z, ns] : leds) {
+                                fprintf(f, "zone %d:", z);
+                                for (int n : ns) fprintf(f, " %d", n);
+                                fprintf(f, "\n");
+                            }
                             fclose(f);
-                            Log("  Saved the map to %ls", mp.c_str());
                         }
                     }
-                    Log("  Mapping done. Pick your effect in G HUB again to get it back.");
+                    Say("");
+                    Say("  Done, thank you! Send me this file:");
+                    Say("    %ls", outPath.c_str());
+                    Say("  Then pick your lighting in G HUB again to get it back.");
                 } else {
                 Log("  A: straight away (watch the mouse):");
                 frame("A1: all LEDs white?", white);
@@ -469,7 +534,7 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
     for (const Device& d : devices) CloseHandle(d.h);
-    if (!found) Log("No HID++ 2.0 device answered (is the mouse on and awake?).");
+    if (!found) Say("The mouse didn't answer. Is it switched on? Move it to wake it and try again.");
     Log("");
     Log("Saved to %ls", outPath.c_str());
     if (g_out) fclose(g_out);
