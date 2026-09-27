@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(LumaBridge LANGUAGES CXX VERSION 0.2.6)
+project(LumaBridge LANGUAGES CXX VERSION 0.2.7)
 
 if(NOT WIN32)
     message(STATUS "Non-Windows host: only the portable core tests will be built.")
@@ -138,6 +138,7 @@ if(LUMA_ARCH STREQUAL "x64")
         src/app/controller.cpp
         src/app/app_settings.cpp
         src/app/integrations.cpp
+        src/app/armoury_crate.cpp
         src/app/res/app.rc)
     target_include_directories(lumabridge_app PRIVATE src/app)
     target_link_libraries(lumabridge_app PRIVATE imgui aura_bridge gamesense luma_common shell32 ole32 advapi32 dbghelp)

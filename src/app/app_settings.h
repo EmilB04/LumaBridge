@@ -13,15 +13,19 @@
 namespace luma::app {
 
 enum class Mode { Auto, Manual };
-enum class ManualEffect { Static, Breathing, Strobe };
-enum class IdleBehavior { ArmouryCrate, ManualColor };
+enum class ManualEffect { Static, Breathing, Strobe, Rainbow };
+// What Auto mode shows when no game is sending lighting. ArmouryCrate hands the lights back
+// (stop + start Armoury Crate so it re-applies its effect).
+enum class IdleBehavior { ManualColor, Rainbow, Off, ArmouryCrate };
 
 struct Prefs {
     Mode mode = Mode::Auto;
     Rgb manualColor{0, 140, 255};
     ManualEffect effect = ManualEffect::Static;
-    float speedHz = 0.5f;  // breathing cycles / strobe flashes per second
-    IdleBehavior idle = IdleBehavior::ArmouryCrate;
+    float speedHz = 0.5f;  // breathing cycles / strobe flashes / rainbow cycles per second
+    IdleBehavior idle = IdleBehavior::ManualColor;
+    // "Stop controlling the lights": remembered across restarts until resumed.
+    bool lightingStopped = false;
     bool startMinimized = true;
     std::vector<Rgb> recentColors;  // most recent first, max kMaxRecent
     static constexpr size_t kMaxRecent = 8;

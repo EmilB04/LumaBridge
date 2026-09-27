@@ -44,6 +44,7 @@ public:
     void SetStatic(Rgb c);
     void Flash(Rgb c, int durationMs, int intervalMs);
     void Pulse(Rgb c, int durationMs, int intervalMs);
+    void Spectrum(int periodMs);  // rainbow: every hue once per period
     void StopEffects();
     void Save();
     void Restore();

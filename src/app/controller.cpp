@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <iterator>
 
+#include "armoury_crate.h"
 #include "log.h"
 
 namespace luma::app {
@@ -40,17 +41,31 @@ bool Controller::Init() {
 }
 
 void Controller::ResumeAura() {
-    LUMA_INFO("Aura control resumed by the user");
+    LUMA_INFO("lighting control resumed by the user");
     auraPaused_ = false;
+    if (prefs_.lightingStopped) {
+        prefs_.lightingStopped = false;
+        Changed();
+    }
     outputApplied_ = false;
 }
 
-void Controller::Shutdown() {
+void Controller::StopLighting() {
+    LUMA_INFO("lighting control stopped by the user");
+    prefs_.lightingStopped = true;
+    Changed();
+}
+
+void Controller::Shutdown(bool handBack) {
     if (shutDown_) return;
     shutDown_ = true;
     if (dirty_) SaveAll(iniPath_, prefs_, cfg_);
     gameSense_.Stop();
-    mirror_.Stop();  // hands Aura back to Armoury Crate
+    const bool wasControlling = mirror_.IsRunning();
+    mirror_.Stop();
+    // Exiting LumaBridge gives the lights back to Armoury Crate (not during a Windows
+    // shutdown: Armoury Crate re-applies its lighting at the next boot anyway).
+    if (wasControlling && handBack) LaunchArmouryCrate();
     WriteConfigValue(iniPath_, L"App", L"Running", L"0");
     LUMA_INFO("LumaBridge app exiting");
 }
@@ -119,6 +134,7 @@ Controller::Output Controller::Decide() const {
         switch (prefs_.effect) {
         case ManualEffect::Breathing: o.kind = Output::Kind::Breathing; break;
         case ManualEffect::Strobe: o.kind = Output::Kind::Strobe; break;
+        case ManualEffect::Rainbow: o.kind = Output::Kind::Rainbow; break;
         default: o.kind = Output::Kind::Static; o.hz = 0; break;
         }
         return o;
@@ -127,6 +143,11 @@ Controller::Output Controller::Decide() const {
     if (auraPaused_) {
         Output o;
         o.label = "Paused after an unexpected exit";
+        return o;
+    }
+    if (prefs_.lightingStopped) {
+        Output o;
+        o.label = "Stopped - LumaBridge isn't controlling the lights";
         return o;
     }
     if (prefs_.mode == Mode::Manual) return manual("Manual color");
@@ -139,17 +160,38 @@ Controller::Output Controller::Decide() const {
         o.label = s->game + " - " + s->sdk;
         return o;
     }
-    if (prefs_.idle == IdleBehavior::ManualColor) return manual("No game running - your color");
-    Output o;
-    o.label = "No game running - released to Armoury Crate";
-    return o;
+    switch (prefs_.idle) {
+    case IdleBehavior::Rainbow: {
+        Output o;
+        o.kind = Output::Kind::Rainbow;
+        o.color = Rgb{170, 60, 255};  // icon/preview tint; the effect itself cycles
+        o.hz = 0.1;                   // one slow cycle every 10 s
+        o.label = "No game running - rainbow";
+        return o;
+    }
+    case IdleBehavior::Off: {
+        Output o;
+        o.kind = Output::Kind::Static;
+        o.label = "No game running - lights off";
+        return o;
+    }
+    case IdleBehavior::ArmouryCrate: {
+        Output o;  // Kind::Stopped: hand back
+        o.label = "No game running - Armoury Crate";
+        return o;
+    }
+    default:
+        return manual("No game running - your color");
+    }
 }
 
 void Controller::Apply(const Output& out) {
-    if (out.kind == Output::Kind::ArmouryCrate) {
+    if (out.kind == Output::Kind::Stopped) {
         if (mirror_.IsRunning()) {
-            LUMA_INFO("handing Aura back to Armoury Crate");
+            LUMA_INFO("no longer controlling the lights - handing back to Armoury Crate");
             mirror_.Stop();
+            // After a crash-loop pause LumaBridge never took the lights, so nothing to hand back.
+            if (!auraPaused_) LaunchArmouryCrate();
         }
         return;
     }
@@ -165,6 +207,9 @@ void Controller::Apply(const Output& out) {
         break;
     case Output::Kind::Strobe:
         mirror_.Flash(out.color, 0, static_cast<int>(500.0 / out.hz));
+        break;
+    case Output::Kind::Rainbow:
+        mirror_.Spectrum(static_cast<int>(1000.0 / out.hz));
         break;
     default:
         mirror_.SetStatic(out.color);

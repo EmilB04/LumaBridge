@@ -13,7 +13,7 @@ namespace luma {
 
 class LightingState {
 public:
-    enum class Effect { None, Flash, Pulse };
+    enum class Effect { None, Flash, Pulse, Spectrum };
 
     // LOGI_LED_DURATION_INFINITE
     static constexpr int kInfinite = 0;
@@ -33,6 +33,11 @@ public:
     // Pulse: smooth fade color -> off -> color with a period of intervalMs.
     void StartPulse(Rgb c, int durationMs, int intervalMs, uint64_t nowMs) {
         StartEffect(Effect::Pulse, c, durationMs, intervalMs, nowMs);
+    }
+
+    // Spectrum: cycles through every hue once per periodMs, until StopEffects / a set call.
+    void StartSpectrum(int periodMs, uint64_t nowMs) {
+        StartEffect(Effect::Spectrum, Rgb{}, kInfinite, periodMs, nowMs);
     }
 
     void StopEffects() {
@@ -66,6 +71,12 @@ public:
                 interval_;
             const double k = 0.5 + 0.5 * std::cos(phase * 2.0 * 3.14159265358979323846);
             return Scale(effectColor_, k);
+        }
+        case Effect::Spectrum: {
+            const double phase =
+                static_cast<double>((nowMs - effectStart_) % static_cast<uint64_t>(interval_)) /
+                interval_;
+            return FromHue(phase * 360.0);
         }
         case Effect::None:
         default:

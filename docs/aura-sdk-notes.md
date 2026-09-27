@@ -18,8 +18,15 @@ ROG STRIX B550-F (USB `0B05:1939`, firmware `AULA3-AR42-0222`):
   flicker every 2 s on a B550-F), so it isn't repeated.
 - Nothing is ever written to the controller's flash.
 - **Handing back:** the controller has no "give control back" command, and restarting
-  ASUS's lighting service does not restore Armoury Crate's effect. The lights keep the last
-  color until Armoury Crate applies its lighting again.
+  ASUS's lighting service doesn't restore Armoury Crate's effect. Starting the Armoury
+  Crate app does (it re-applies its current Aura Sync effect). So handing back means:
+  stop sending colors, then start Armoury Crate. LumaBridge does this for the idle choice
+  "Armoury Crate", for **Stop controlling the lights**, and when you exit it. (While Armoury
+  Crate's services were hung after SDK crashes, only a reboot helped.)
+- Armoury Crate lists every program that has used the Aura SDK under **Game list**
+  (lighting priority) above its own "Aura Sync". Programs that crashed while holding SDK
+  control left Aura Sync in standby and its services hung until a reboot. LumaBridge's
+  app no longer uses the SDK.
 - RAM (e.g. HyperX Fury) sits on SMBus, not USB, and would need a kernel driver, so it
   isn't supported.
 

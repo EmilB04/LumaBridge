@@ -36,7 +36,7 @@ constexpr UINT WM_TRAY = WM_APP + 1;
 constexpr UINT WM_SHOW_WINDOW = WM_APP + 2;
 constexpr UINT_PTR kTickTimer = 1;
 constexpr UINT kTickMs = 50;
-enum : UINT { kMenuOpen = 1, kMenuAuto, kMenuManual, kMenuExit };
+enum : UINT { kMenuOpen = 1, kMenuAuto, kMenuManual, kMenuPause, kMenuExit };
 
 Controller g_ctl;
 Integrations g_integrations;
@@ -239,7 +239,7 @@ HICON MakeOrbIcon(Rgb c) {
 
 void UpdateTray(bool add) {
     const auto& out = g_ctl.output();
-    Rgb c = out.kind == Controller::Output::Kind::ArmouryCrate ? Rgb{120, 124, 140} : out.color;
+    Rgb c = out.kind == Controller::Output::Kind::Stopped ? Rgb{120, 124, 140} : out.color;
     if (c.IsBlack()) c = Rgb{40, 40, 48};
     bool iconChanged = add || c != g_trayColor;
     if (iconChanged) {
@@ -275,6 +275,8 @@ void TrayMenu() {
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING | (manual ? 0 : MF_CHECKED), kMenuAuto, L"Auto (games)");
     AppendMenuW(m, MF_STRING | (manual ? MF_CHECKED : 0), kMenuManual, L"Manual color");
+    AppendMenuW(m, MF_STRING, kMenuPause,
+                g_ctl.auraPaused() ? L"Resume lighting control" : L"Stop controlling the lights");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, kMenuExit, L"Exit");
     SetMenuDefaultItem(m, kMenuOpen, FALSE);
@@ -287,6 +289,10 @@ void TrayMenu() {
     case kMenuOpen: ShowMain(); break;
     case kMenuAuto: g_ctl.prefs().mode = Mode::Auto; g_ctl.Changed(); break;
     case kMenuManual: g_ctl.prefs().mode = Mode::Manual; g_ctl.Changed(); break;
+    case kMenuPause:
+        if (g_ctl.auraPaused()) g_ctl.ResumeAura();
+        else g_ctl.StopLighting();
+        break;
     case kMenuExit: PostQuitMessage(0); break;
     }
 }
@@ -336,7 +342,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Windows ends the process right after this returns, so record the clean exit (and
         // hand back the lights) now; otherwise the next start would think LumaBridge crashed.
         if (wp) {
-            g_ctl.Shutdown();
+            g_ctl.Shutdown(/*handBack=*/false);
             PostQuitMessage(0);
         }
         return 0;

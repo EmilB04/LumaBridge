@@ -72,12 +72,15 @@ ForwardToGG=1
 ; auto (games drive the lights) | manual
 Mode=auto
 ManualColor=#008CFF
-; static | breathing | strobe
+; static | breathing | strobe | rainbow
 ManualEffect=static
-; cycles / flashes per second
+; cycles / flashes per second (rainbow: full color cycles per second, e.g. 0.1 = every 10 s)
 ManualSpeed=0.5
-; What Auto mode shows between games: armourycrate | manual
-WhenIdle=armourycrate
+; What Auto mode shows between games: manual | rainbow | off | armourycrate
+; (armourycrate = hand the lights back and start Armoury Crate so it re-applies its effect)
+WhenIdle=manual
+; 1 = "Stop controlling the lights" (remembered until resumed)
+LightingStopped=0
 StartMinimized=1
 
 [Log]

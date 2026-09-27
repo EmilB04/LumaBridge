@@ -57,7 +57,9 @@ Rgb PreviewColor(const Controller::Output& o) {
     }
     case Controller::Output::Kind::Strobe:
         return std::fmod(t * o.hz, 1.0) < 0.5 ? o.color : Rgb{};
-    case Controller::Output::Kind::ArmouryCrate:
+    case Controller::Output::Kind::Rainbow:
+        return FromHue(std::fmod(t * o.hz, 1.0) * 360.0);
+    case Controller::Output::Kind::Stopped:
         return Rgb{60, 64, 76};
     default:
         return o.color;
@@ -229,16 +231,21 @@ void AutoPage(Controller& ctl, const Fonts& f) {
 
     BeginCard("idle");
     CardTitle(f, "When no game is running");
-    int idle = ctl.prefs().idle == IdleBehavior::ManualColor ? 1 : 0;
-    const char* labels[] = {"Release to Armoury Crate", "My manual color"};
-    if (Segmented("idle", &idle, labels, 2, ImGui::GetContentRegionAvail().x)) {
-        ctl.prefs().idle = idle ? IdleBehavior::ManualColor : IdleBehavior::ArmouryCrate;
+    int idle = static_cast<int>(ctl.prefs().idle);
+    const char* labels[] = {"My manual color", "Rainbow", "Off", "Armoury Crate"};
+    if (Segmented("idle", &idle, labels, 4, ImGui::GetContentRegionAvail().x)) {
+        ctl.prefs().idle = static_cast<IdleBehavior>(idle);
         ctl.Changed();
     }
     ImGui::Dummy(ImVec2(0, 4 * S()));
-    Muted("%s", idle ? "Your manual color (and effect) shows between games."
-                     : "LumaBridge stops sending colors between games. The lights keep their last color "
-                       "until Armoury Crate applies its lighting again (for example when you open it).");
+    static const char* kIdleHelp[] = {
+        "Your manual color and effect (Lighting > Manual) show between games.",
+        "A slow rainbow cycles across the motherboard and fans between games.",
+        "The motherboard and fans stay dark between games.",
+        "Between games LumaBridge hands the lights back and starts Armoury Crate, which "
+        "re-applies its own effect (its window opens).",
+    };
+    Muted("%s", kIdleHelp[idle]);
     EndCard();
 
     BrightnessCard(ctl, f);
@@ -286,13 +293,23 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
         ImGui::Dummy(ImVec2(0, 6 * S()));
         ImGui::TextUnformatted("Effect");
         int effect = static_cast<int>(p.effect);
-        const char* effects[] = {"Static", "Breathing", "Strobe"};
-        if (Segmented("effect", &effect, effects, 3, colW)) {
+        const char* effects[] = {"Static", "Breathing", "Strobe", "Rainbow"};
+        if (Segmented("effect", &effect, effects, 4, colW)) {
             p.effect = static_cast<ManualEffect>(effect);
+            if (p.effect == ManualEffect::Rainbow && p.speedHz > 1.f) p.speedHz = 0.1f;
             ctl.Changed();
         }
-        if (p.effect != ManualEffect::Static) {
+        if (p.effect == ManualEffect::Rainbow) {
             ImGui::Dummy(ImVec2(0, 4 * S()));
+            Muted("Cycles through every color; the color picked above isn't used.");
+            float seconds = 1.f / std::max(p.speedHz, 0.02f);
+            if (LabeledSlider("One full cycle every", &seconds, 2.f, 60.f, "%.0f seconds")) {
+                p.speedHz = 1.f / seconds;
+                ctl.Changed();
+            }
+        } else if (p.effect != ManualEffect::Static) {
+            ImGui::Dummy(ImVec2(0, 4 * S()));
+            if (p.speedHz < 0.1f) p.speedHz = 0.1f;
             if (LabeledSlider("Speed", &p.speedHz, 0.1f, p.effect == ManualEffect::Strobe ? 10.f : 3.f,
                               "%.1f per second"))
                 ctl.Changed();
@@ -524,6 +541,19 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
     if (ImGui::Checkbox("Start minimized to the tray", &ctl.prefs().startMinimized)) ctl.Changed();
     EndCard();
 
+    BeginCard("handback");
+    CardTitle(f, "Armoury Crate");
+    Muted("Stopping hands the motherboard and fans back to Armoury Crate: LumaBridge stops sending "
+          "colors and starts Armoury Crate, which re-applies its own effect. Exiting LumaBridge "
+          "does the same.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    if (ctl.auraPaused()) {
+        if (PrimaryButton("Resume lighting control")) ctl.ResumeAura();
+    } else if (ImGui::Button("Stop controlling the lights")) {
+        ctl.StopLighting();
+    }
+    EndCard();
+
     BeginCard("trouble");
     CardTitle(f, "Troubleshooting");
     if (ImGui::Button("Open log folder")) {
@@ -676,10 +706,14 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
 
     if (ctl.auraPaused()) {
         BeginCard("paused");
-        Pill("Lighting control paused", kAmber);
+        const bool byUser = ctl.pause() == Controller::Pause::ByUser;
+        Pill(byUser ? "Not controlling the lights" : "Lighting control paused", kAmber);
         ImGui::Dummy(ImVec2(0, 2 * S()));
-        Muted("LumaBridge closed unexpectedly the last time it controlled your lights, so it is "
-              "leaving them to Armoury Crate for now. Details are in the log folder (Settings).");
+        if (byUser)
+            Muted("You stopped LumaBridge's lighting and handed it back to Armoury Crate.");
+        else
+            Muted("LumaBridge closed unexpectedly the last time it controlled your lights, so it is "
+                  "leaving them alone for now. Details are in the log folder (Settings).");
         if (PrimaryButton("Resume lighting control")) ctl.ResumeAura();
         EndCard();
     }

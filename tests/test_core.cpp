@@ -68,6 +68,26 @@ static void SetKey(uint8_t* bmp, int x, int y, Rgb c) {
     p[3] = 255;
 }
 
+static void TestHue() {
+    CHECK((FromHue(0) == Rgb{255, 0, 0}));
+    CHECK((FromHue(120) == Rgb{0, 255, 0}));
+    CHECK((FromHue(240) == Rgb{0, 0, 255}));
+    CHECK((FromHue(60) == Rgb{255, 255, 0}));
+    CHECK((FromHue(360) == Rgb{255, 0, 0}));
+    CHECK((FromHue(-120) == Rgb{0, 0, 255}));
+
+    LightingState s;
+    s.SetStatic(Rgb{1, 1, 1});
+    s.StartSpectrum(3000, 1000);
+    CHECK((s.Evaluate(1000) == Rgb{255, 0, 0}));
+    CHECK((s.Evaluate(2000) == Rgb{0, 255, 0}));
+    CHECK((s.Evaluate(3000) == Rgb{0, 0, 255}));
+    CHECK((s.Evaluate(4000) == Rgb{255, 0, 0}));
+    CHECK(s.IsAnimating(1000000));
+    s.StopEffects();
+    CHECK((s.Evaluate(5000) == Rgb{1, 1, 1}));
+}
+
 static void TestBitmap() {
     uint8_t bmp[kLogiBitmapSize];
     std::memset(bmp, 0, sizeof bmp);
@@ -365,6 +385,7 @@ int main() {
     TestPercent();
     TestAuraPacking();
     TestCorrection();
+    TestHue();
     TestBitmap();
     TestColorRefs();
     TestState();

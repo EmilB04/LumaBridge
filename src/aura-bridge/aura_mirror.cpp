@@ -138,6 +138,14 @@ void AuraMirror::Pulse(Rgb c, int durationMs, int intervalMs) {
     Wake();
 }
 
+void AuraMirror::Spectrum(int periodMs) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        state_.StartSpectrum(periodMs, GetTickCount64());
+    }
+    Wake();
+}
+
 void AuraMirror::StopEffects() {
     {
         std::lock_guard<std::mutex> lock(mutex_);

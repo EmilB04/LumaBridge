@@ -29,7 +29,8 @@ class Controller {
 public:
     // What is currently being shown, for the UI.
     struct Output {
-        enum class Kind { ArmouryCrate, Static, Breathing, Strobe } kind = Kind::ArmouryCrate;
+        // Stopped: LumaBridge isn't driving the lights (paused or stopped by the user).
+        enum class Kind { Stopped, Static, Breathing, Strobe, Rainbow } kind = Kind::Stopped;
         Rgb color{};
         double hz = 0;
         std::string label;  // "Battlefield 1 - Logitech LIGHTSYNC", "Manual color", ...
@@ -40,7 +41,8 @@ public:
     };
 
     bool Init();
-    void Shutdown();  // idempotent
+    // Idempotent. `handBack`: start Armoury Crate so it takes the lights back.
+    void Shutdown(bool handBack = true);
 
     void OnIpc(const ipc::Frame& f);
     void Tick();  // call every ~50 ms
@@ -53,11 +55,15 @@ public:
 
     void SetGameSenseEnabled(bool enabled);
 
-    // True when the previous run ended without a clean exit while LumaBridge controlled
-    // Aura: lighting control stays off until the user resumes it, so a crash in the Aura
-    // SDK can't turn into a crash loop.
-    bool auraPaused() const { return auraPaused_; }
+    // Lighting control is off either because the previous run didn't exit cleanly (crash-loop
+    // guard) or because the user chose "Stop controlling the lights". ResumeAura() clears both.
+    enum class Pause { None, AfterCrash, ByUser };
+    Pause pause() const {
+        return auraPaused_ ? Pause::AfterCrash : prefs_.lightingStopped ? Pause::ByUser : Pause::None;
+    }
+    bool auraPaused() const { return pause() != Pause::None; }
     void ResumeAura();
+    void StopLighting();
     void RescanDevices() { mirror_.Rescan(); }
 
     const Output& output() const { return output_; }

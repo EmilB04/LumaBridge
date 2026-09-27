@@ -59,11 +59,16 @@ Prefs LoadPrefs(const std::wstring& ini) {
     v = Read(ini, L"App", L"ManualEffect");
     if (_wcsicmp(v.c_str(), L"breathing") == 0) p.effect = ManualEffect::Breathing;
     if (_wcsicmp(v.c_str(), L"strobe") == 0) p.effect = ManualEffect::Strobe;
+    if (_wcsicmp(v.c_str(), L"rainbow") == 0) p.effect = ManualEffect::Rainbow;
     v = Read(ini, L"App", L"ManualSpeed");
     if (!v.empty()) p.speedHz = static_cast<float>(_wtof(v.c_str()));
-    if (p.speedHz < 0.1f || p.speedHz > 10.f) p.speedHz = 0.5f;
+    if (p.speedHz < 0.02f || p.speedHz > 10.f) p.speedHz = 0.5f;
     v = Read(ini, L"App", L"WhenIdle");
-    if (_wcsicmp(v.c_str(), L"manual") == 0) p.idle = IdleBehavior::ManualColor;
+    if (_wcsicmp(v.c_str(), L"armourycrate") == 0) p.idle = IdleBehavior::ArmouryCrate;
+    if (_wcsicmp(v.c_str(), L"rainbow") == 0) p.idle = IdleBehavior::Rainbow;
+    if (_wcsicmp(v.c_str(), L"off") == 0) p.idle = IdleBehavior::Off;
+    v = Read(ini, L"App", L"LightingStopped");
+    p.lightingStopped = v == L"1";
     v = Read(ini, L"App", L"StartMinimized");
     if (!v.empty()) p.startMinimized = v != L"0";
 
@@ -84,9 +89,15 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"ManualEffect",
                      p.effect == ManualEffect::Breathing ? L"breathing"
                      : p.effect == ManualEffect::Strobe  ? L"strobe"
+                     : p.effect == ManualEffect::Rainbow ? L"rainbow"
                                                          : L"static");
     WriteConfigValue(ini, L"App", L"ManualSpeed", Num(p.speedHz));
-    WriteConfigValue(ini, L"App", L"WhenIdle", p.idle == IdleBehavior::ManualColor ? L"manual" : L"armourycrate");
+    WriteConfigValue(ini, L"App", L"WhenIdle",
+                     p.idle == IdleBehavior::Rainbow        ? L"rainbow"
+                     : p.idle == IdleBehavior::Off          ? L"off"
+                     : p.idle == IdleBehavior::ArmouryCrate ? L"armourycrate"
+                                                            : L"manual");
+    WriteConfigValue(ini, L"App", L"LightingStopped", p.lightingStopped ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"StartMinimized", p.startMinimized ? L"1" : L"0");
     std::string recent;
     for (size_t i = 0; i < p.recentColors.size(); ++i) recent += (i ? "," : "") + ToHex(p.recentColors[i]);

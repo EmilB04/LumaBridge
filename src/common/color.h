@@ -39,6 +39,21 @@ inline Rgb Scale(Rgb c, double factor) {
     return Rgb{ClampByte(c.r * factor), ClampByte(c.g * factor), ClampByte(c.b * factor)};
 }
 
+// Fully saturated color at `hueDeg` (0 = red, 120 = green, 240 = blue).
+inline Rgb FromHue(double hueDeg) {
+    double h = std::fmod(hueDeg, 360.0);
+    if (h < 0) h += 360.0;
+    const double x = 1.0 - std::fabs(std::fmod(h / 60.0, 2.0) - 1.0);
+    double r = 0, g = 0, b = 0;
+    if (h < 60) { r = 1; g = x; }
+    else if (h < 120) { r = x; g = 1; }
+    else if (h < 180) { g = 1; b = x; }
+    else if (h < 240) { g = x; b = 1; }
+    else if (h < 300) { r = x; b = 1; }
+    else { r = 1; b = x; }
+    return Rgb{ClampByte(r * 255), ClampByte(g * 255), ClampByte(b * 255)};
+}
+
 // Per-brand calibration: LEDs from different vendors render the same RGB triple differently.
 struct ColorCorrection {
     double brightness = 1.0;  // overall multiplier, 0..1 (values > 1 allowed, output is clamped)
