@@ -35,3 +35,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure
+
+  # Pushing a tag like v0.2.0 publishes a GitHub Release with one ready-to-use zip:
+  # the app + x64 DLLs at the top level, the 32-bit DLLs in x86\ (the install scripts
+  # pick them up from there for 32-bit games).
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, core-tests-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Assemble zip
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          mkdir -p "pkg/LumaBridge"
+          cp -r artifacts/LumaBridge-x64/. "pkg/LumaBridge/"
+          mkdir -p "pkg/LumaBridge/x86"
+          cp artifacts/LumaBridge-Win32/*.dll "pkg/LumaBridge/x86/"
+          (cd pkg && zip -r -9 "../LumaBridge-${TAG}.zip" LumaBridge)
+          ls -l "LumaBridge-${TAG}.zip"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NOTES="docs/releases/${TAG}.md"
+          ARGS=(--title "LumaBridge ${TAG}")
+          if [ -f "$NOTES" ]; then ARGS+=(--notes-file "$NOTES"); else ARGS+=(--generate-notes); fi
+          # 0.x versions are marked as pre-releases until verified on real hardware.
+          case "$TAG" in v0.*) ARGS+=(--prerelease) ;; esac
+          gh release create "$TAG" "LumaBridge-${TAG}.zip" "${ARGS[@]}"
