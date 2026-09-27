@@ -10,6 +10,15 @@ device I/O. `LogiLedShutdown` hands the devices back to G HUB's profile. That ha
 whenever LumaBridge isn't controlling the lights, or a game lights Logitech gear itself.
 Code: [`src/app/peripherals/logitech_output.cpp`](../src/app/peripherals/logitech_output.cpp).
 
+### Mouse zones (test)
+
+The mouse gets one color today. To find out whether G HUB lets an app color the G502 X
+Plus's zones separately, exit LumaBridge and run `tools\logiled-harness.exe --zones`
+(add a number for the seconds per step; the default is 2). It loads G HUB's DLL and calls
+`LogiLedSetLightingForTargetZone` for mouse zones 0-7. First it gives each zone its own
+color at once, then it lights one zone at a time in white. It prints which zones G HUB
+accepted.
+
 ## ASUS ROG Azoth (wired or wireless, experimental)
 
 Captured from Armoury Crate with USBPcap on a wired Azoth (USB `0B05:1A83`, firmware

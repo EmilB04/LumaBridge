@@ -3,12 +3,18 @@
 // without launching a game.
 //
 //   logiled-harness <path-to-dll> [seconds-per-step]
+//   logiled-harness --zones [path-to-dll] [seconds-per-step]
+//
+// --zones paints the mouse's lighting zones through LogiLedSetLightingForTargetZone, to find
+// out how many zones of a mouse (G502 X Plus) G HUB lets an app color separately. Without a
+// path it uses G HUB's own DLL.
 #include <windows.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
+#include <cwctype>
 
 #include "../../src/integrations/logitech/logiled_api.h"
 
@@ -25,20 +31,65 @@ void Step(const char* what) {
     Sleep(g_stepMs);
 }
 
+// Zone colors: red, green, blue, yellow, magenta, cyan, white, orange (percentages).
+constexpr int kZoneColors[][3] = {{100, 0, 0},   {0, 100, 0},     {0, 0, 100},     {100, 100, 0},
+                                  {100, 0, 100}, {0, 100, 100}, {100, 100, 100}, {100, 50, 0}};
+constexpr const char* kZoneNames[] = {"red", "green", "blue", "yellow", "magenta", "cyan", "white", "orange"};
+constexpr int kZones = 8;
+constexpr int kMouse = 3;  // LogiLed::DeviceType::Mouse
+
+int ZoneTest() {
+    std::printf("\nZone test (LogiLedSetLightingForTargetZone, device type mouse):\n");
+    if (!pLogiLedSetLightingForTargetZone) {
+        std::printf("  this DLL has no LogiLedSetLightingForTargetZone\n");
+        return 1;
+    }
+    std::printf("1) Every zone its own color at once. Note which color is where on the mouse.\n");
+    pLogiLedSetLighting(0, 0, 0);
+    Sleep(300);
+    bool accepted[kZones] = {};
+    for (int z = 0; z < kZones; ++z) {
+        accepted[z] = pLogiLedSetLightingForTargetZone(kMouse, z, kZoneColors[z][0], kZoneColors[z][1], kZoneColors[z][2]);
+        std::printf("  zone %d -> %-7s %s\n", z, kZoneNames[z], accepted[z] ? "accepted" : "refused");
+    }
+    Sleep(g_stepMs * 3);
+
+    std::printf("2) One zone at a time, white, the rest off. Note what lights for each.\n");
+    for (int z = 0; z < kZones; ++z) {
+        if (!accepted[z]) continue;
+        for (int o = 0; o < kZones; ++o)
+            if (accepted[o]) pLogiLedSetLightingForTargetZone(kMouse, o, 0, 0, 0);
+        pLogiLedSetLightingForTargetZone(kMouse, z, 100, 100, 100);
+        char what[32];
+        std::snprintf(what, sizeof what, "zone %d white", z);
+        Step(what);
+    }
+    std::printf("Done. Please report: which zones were accepted, and what lit up in 1) and 2).\n");
+    return 0;
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
     if (argc < 2) {
-        std::fwprintf(stderr, L"usage: logiled-harness <path-to-dll> [seconds-per-step]\n");
+        std::fwprintf(stderr, L"usage: logiled-harness <path-to-dll> [seconds-per-step]\n"
+                              L"       logiled-harness --zones [path-to-dll] [seconds-per-step]\n");
         return 2;
     }
-    if (argc >= 3) g_stepMs = static_cast<DWORD>(_wtoi(argv[2])) * 1000;
+    const bool zones = std::wcscmp(argv[1], L"--zones") == 0;
+    wchar_t ghub[MAX_PATH] = {};
+    ExpandEnvironmentStringsW(L"%ProgramFiles%\\LGHUB\\sdks\\sdk_legacy_led_x64.dll", ghub, MAX_PATH);
+    int arg = zones ? 2 : 1;
+    const wchar_t* dll = ghub;
+    if (arg < argc && !(zones && iswdigit(argv[arg][0]))) dll = argv[arg++];
+    if (arg < argc) g_stepMs = static_cast<DWORD>(_wtoi(argv[arg])) * 1000;
 
-    HMODULE m = LoadLibraryW(argv[1]);
+    HMODULE m = LoadLibraryW(dll);
     if (!m) {
-        std::fwprintf(stderr, L"LoadLibrary(%ls) failed: %lu\n", argv[1], GetLastError());
+        std::fwprintf(stderr, L"LoadLibrary(%ls) failed: %lu\n", dll, GetLastError());
         return 1;
     }
+    std::wprintf(L"Loaded %ls\n", dll);
 
     int missing = 0;
 #define LUMA_HARNESS_RESOLVE(ret, name, params, args)                                   \
@@ -62,6 +113,14 @@ int wmain(int argc, wchar_t** argv) {
 
     Sleep(500);  // G HUB needs a moment after init before it accepts colors
     if (pLogiLedSetTargetDevice) pLogiLedSetTargetDevice(7 /* LOGI_DEVICETYPE_ALL */);
+
+    if (zones) {
+        const int r = ZoneTest();
+        pLogiLedShutdown();
+        std::printf("LogiLedShutdown done\n");
+        FreeLibrary(m);
+        return r;
+    }
 
     std::printf("Static colors (LogiLedSetLighting):\n");
     pLogiLedSetLighting(100, 0, 0);
