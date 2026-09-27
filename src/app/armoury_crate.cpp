@@ -55,6 +55,29 @@ std::wstring FindArmouryCrateAppId() {
     return exact.empty() ? partial : exact;
 }
 
+constexpr wchar_t kHandbackTask[] = L"\\LumaBridge\\Hand back lighting";
+
+// Runs a console tool without a window and returns its exit code (-1 on failure/timeout).
+int RunHidden(std::wstring cmdLine, DWORD timeoutMs) {
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(nullptr, cmdLine.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si,
+                        &pi))
+        return -1;
+    DWORD code = static_cast<DWORD>(-1);
+    if (WaitForSingleObject(pi.hProcess, timeoutMs) == WAIT_OBJECT_0) GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return static_cast<int>(code);
+}
+
+std::wstring Schtasks(const wchar_t* verb) {
+    wchar_t sys[MAX_PATH];
+    GetSystemDirectoryW(sys, MAX_PATH);
+    return L"\"" + std::wstring(sys) + L"\\schtasks.exe\" " + verb + L" /tn \"" + kHandbackTask + L"\"";
+}
+
 }  // namespace
 
 bool LaunchArmouryCrate() {
@@ -72,6 +95,18 @@ bool LaunchArmouryCrate() {
         LUMA_WARN("hand-back: could not start Armoury Crate (%s), error %d", Narrow(id).c_str(),
                   static_cast<int>(reinterpret_cast<INT_PTR>(r)));
     return ok;
+}
+
+
+bool HandbackTaskInstalled() { return RunHidden(Schtasks(L"/query"), 10000) == 0; }
+
+void HandBackLighting() {
+    if (RunHidden(Schtasks(L"/run"), 10000) == 0) {
+        LUMA_INFO("hand-back: restarting the Aura controller (it reloads Armoury Crate's saved effect)");
+        return;
+    }
+    LUMA_INFO("hand-back: silent hand-back not set up (Games page) - opening Armoury Crate instead");
+    LaunchArmouryCrate();
 }
 
 }  // namespace luma::app

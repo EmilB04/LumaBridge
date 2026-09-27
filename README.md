@@ -66,28 +66,40 @@ been run against real hardware yet.** Start with the checks under
    click; Chroma and AlienFX ask for admin once; Corsair is per game).
 4. Start a game. It appears on the **Lighting** page, and your Aura devices follow it.
 
-Hardware check: run `powershell -ExecutionPolicy Bypass -File .\Run-HardwareTest.ps1` from
-the LumaBridge folder. It tests your lighting step by step and produces one report to share.
+Hardware check: run `powershell -ExecutionPolicy Bypass -File .\tools\Run-HardwareTest.ps1`
+from the LumaBridge folder. It tests your lighting step by step and produces one report to share.
 
 Troubleshooting: **Settings → Open log folder** (`%LOCALAPPDATA%\LumaBridge`). Each piece
 writes its own log (`lumabridge-app.log`, `lumabridge.log` for the Logitech proxy,
 `lumabridge-chroma.log`, …).
 
+## What's in the download
+
+```
+LumaBridge\
+  LumaBridge.exe              the app, the only thing you normally start
+  LumaBridge.ini.example      all settings (the app edits them for you)
+  integrations\               game SDK stand-ins, installed from the app's Games page
+    x86\                      32-bit versions for older games
+  tools\                      hardware tests (Run-HardwareTest.ps1 runs them all)
+  scripts\                    install helpers the app runs for you
+```
+
 ## Repo layout
 
 ```
-src/app            LumaBridge.exe: UI (Dear ImGui + D3D11), tray, controller, integrations
-src/aura-bridge    Aura COM wrapper (late-bound IDispatch) + mirror worker thread
-src/proxy-dll      Logitech LED SDK proxy
-src/chroma-emu     Razer Chroma emulator
-src/corsair-emu    Corsair CUE SDK emulator
-src/lightfx-emu    Alienware LightFX emulator
-src/gamesense      SteelSeries GameSense engine + HTTP server
-src/common         color math, effects, config, log, JSON, IPC (mostly portable, unit tested)
-tools/             aura-test (list/set Aura devices), logiled-harness (fake LIGHTSYNC game)
-tests/             unit tests (run on any OS)
-scripts/           install helpers the app calls (also usable by hand)
-docs/              SDK notes, build guide, roadmap, screenshots
+src/app/                       LumaBridge.exe: UI (Dear ImGui + D3D11), tray, controller
+src/core/                      shared: colors, effects, config, log, JSON, IPC
+src/hardware/                  reaching Aura hardware: aura-usb/ (default), aura-sdk/, the mirror
+src/integrations/logitech/     Logitech LED SDK proxy (pass-through to G HUB)
+src/integrations/razer/        Razer Chroma emulator
+src/integrations/corsair/      Corsair CUE SDK emulator
+src/integrations/alienware/    Alienware LightFX emulator
+src/integrations/steelseries/  SteelSeries GameSense server (+ forwarding to GG)
+tools/                         aura-test, aura-usb-test, ram-probe, logiled-harness
+scripts/                       install helpers + Run-HardwareTest.ps1
+tests/                         unit tests (run on any OS)
+docs/                          SDK notes, build guide, roadmap, release notes, screenshots
 ```
 
 ## Known limits

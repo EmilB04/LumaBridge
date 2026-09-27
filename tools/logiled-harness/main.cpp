@@ -10,7 +10,7 @@
 #include <cstring>
 #include <cwchar>
 
-#include "../../src/proxy-dll/logiled_api.h"
+#include "../../src/integrations/logitech/logiled_api.h"
 
 namespace {
 

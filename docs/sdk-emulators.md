@@ -13,7 +13,7 @@ sends the colors to Aura.
 | Alienware AlienFX | `LightFX.dll` from System32 | LightFX emulator DLL | System32, admin once |
 
 All of them feed the same place. While the LumaBridge app runs, the DLLs inside games
-send their colors to the app (`WM_COPYDATA`, [`src/common/ipc.h`](../src/common/ipc.h)).
+send their colors to the app (`WM_COPYDATA`, [`src/core/ipc.h`](../src/core/ipc.h)).
 The app is then the only thing talking to Aura, and it decides what to show (Auto mode:
 most recently active game; Manual mode: your color). Without the app, the DLLs leave Aura
 alone. ASUS's Aura library runs inside whichever process calls it, and a crash in one of
@@ -33,7 +33,7 @@ Azoth included. Per-key output on the Azoth is milestone 4.
 
 ## Razer Chroma
 
-`RzChromaSDK64.dll` / `RzChromaSDK.dll` ([`src/chroma-emu`](../src/chroma-emu)).
+`RzChromaSDK64.dll` / `RzChromaSDK.dll` ([`src/integrations/razer`](../src/integrations/razer)).
 
 | Export | Behavior |
 |---|---|
@@ -58,7 +58,7 @@ does this), which isn't built yet.
 
 ## SteelSeries GameSense
 
-Built into the app ([`src/gamesense`](../src/gamesense)). On start it listens on
+Built into the app ([`src/integrations/steelseries`](../src/integrations/steelseries)). On start it listens on
 `127.0.0.1:49713` (loopback only, `[GameSense] Port`) and writes
 `%ProgramData%\SteelSeries\SteelSeries Engine 3\coreProps.json`. On exit it removes the
 file, or restores SteelSeries GG's copy if there was one.
@@ -93,7 +93,7 @@ GG's file is restored. Forwarding only ever goes to a loopback address, and
 
 ## Corsair iCUE (CUE SDK 2.x / 3.x)
 
-`CUESDK.x64_2019.dll` / `CUESDK_2019.dll` ([`src/corsair-emu`](../src/corsair-emu)).
+`CUESDK.x64_2019.dll` / `CUESDK_2019.dll` ([`src/integrations/corsair`](../src/integrations/corsair)).
 Games ship this DLL themselves, so it's installed per game. **Games → Corsair → Add to a
 game…** finds every `CUESDK*.dll` in the folder you pick, backs it up and replaces it.
 
@@ -111,7 +111,7 @@ API and isn't emulated yet. The installer warns when a game uses it.
 
 ## Alienware AlienFX (LightFX)
 
-`LightFX.dll` ([`src/lightfx-emu`](../src/lightfx-emu)): one virtual desktop device with
+`LightFX.dll` ([`src/integrations/alienware`](../src/integrations/alienware)): one virtual desktop device with
 one light that covers every location. It supports the buffered
 `Light`/`SetLightColor` + `Update` model, the brightness byte, `ActionColor(Ex)` pulse and
 morph (morph jumps to the end color), and `SetTiming`. There are few titles, mostly

@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     Run it from the LumaBridge folder:
-        powershell -ExecutionPolicy Bypass -File .\Run-HardwareTest.ps1
+        powershell -ExecutionPolicy Bypass -File .\tools\Run-HardwareTest.ps1
 
     What it does:
       1. Collects system info: motherboard, Windows version, ASUS services, ASUS USB devices.
@@ -80,8 +80,9 @@ Write-Host 'Keep an eye on your PC: you will be asked what lights up.' -Foregrou
 # ---- 1. System info ---------------------------------------------------------------------
 Section 'System'
 Log ("Date:        " + (Get-Date -Format 'yyyy-MM-dd HH:mm'))
-$exe = Join-Path $dir 'LumaBridge.exe'
-if (Test-Path $exe) { Log ("LumaBridge:  " + (Get-Item $exe).VersionInfo.ProductVersion) }
+$exe = @((Join-Path $dir 'LumaBridge.exe'), (Join-Path (Split-Path -Parent $dir) 'LumaBridge.exe')) |
+    Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($exe) { Log ("LumaBridge:  " + (Get-Item $exe).VersionInfo.ProductVersion) }
 Log ("Windows:     " + [Environment]::OSVersion.VersionString)
 $board = Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue
 if ($board) { Log ("Motherboard: $($board.Manufacturer) $($board.Product)") }

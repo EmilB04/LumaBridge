@@ -1,8 +1,8 @@
 # Logitech LED SDK (LogiLed) exports
 
-Source of truth in code: [`src/proxy-dll/logiled_api.h`](../src/proxy-dll/logiled_api.h),
+Source of truth in code: [`src/integrations/logitech/logiled_api.h`](../src/integrations/logitech/logiled_api.h),
 a single X-macro list that generates the typedefs, the `GetProcAddress` table and the
-pass-through exports. [`exports.def`](../src/proxy-dll/exports.def) pins the undecorated
+pass-through exports. [`exports.def`](../src/integrations/logitech/exports.def) pins the undecorated
 export names.
 
 Signatures follow `LogitechLEDLib.h` from LED SDK 8.87 / 9.x. The header declares no calling

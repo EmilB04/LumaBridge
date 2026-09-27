@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(LumaBridge LANGUAGES CXX VERSION 0.2.7)
+project(LumaBridge LANGUAGES CXX VERSION 0.2.8)
 
 if(NOT WIN32)
     message(STATUS "Non-Windows host: only the portable core tests will be built.")
@@ -29,7 +29,7 @@ endif()
 enable_testing()
 add_executable(test_core tests/test_core.cpp)
 target_include_directories(test_core PRIVATE
-    src/common src/chroma-emu src/corsair-emu src/lightfx-emu src/gamesense src/app src/aura-usb)
+    src/core src/integrations/razer src/integrations/corsair src/integrations/alienware src/integrations/steelseries src/app src/hardware/aura-usb)
 add_test(NAME test_core COMMAND test_core)
 
 if(NOT WIN32)
@@ -46,29 +46,29 @@ endif()
 
 # ---- common + aura-bridge ------------------------------------------------------------
 add_library(luma_common STATIC
-    src/common/config.cpp
-    src/common/log.cpp
-    src/common/module_bootstrap.cpp)
-target_include_directories(luma_common PUBLIC src/common)
+    src/core/config.cpp
+    src/core/log.cpp
+    src/core/module_bootstrap.cpp)
+target_include_directories(luma_common PUBLIC src/core)
 
 # Direct USB access to the motherboard's Aura controller (the default way to reach the
 # hardware; the Aura SDK reports no devices on current Armoury Crate versions).
-add_library(aura_usb STATIC src/aura-usb/aura_usb.cpp src/aura-usb/usb_aura.cpp)
-target_include_directories(aura_usb PUBLIC src/aura-usb)
+add_library(aura_usb STATIC src/hardware/aura-usb/aura_usb.cpp src/hardware/aura-usb/usb_aura.cpp)
+target_include_directories(aura_usb PUBLIC src/hardware/aura-usb)
 target_link_libraries(aura_usb PUBLIC luma_common hid setupapi)
 
 add_library(aura_bridge STATIC
-    src/aura-bridge/aura_bridge.cpp
-    src/aura-bridge/aura_mirror.cpp)
-target_include_directories(aura_bridge PUBLIC src/aura-bridge)
+    src/hardware/aura-sdk/aura_bridge.cpp
+    src/hardware/aura_mirror.cpp)
+target_include_directories(aura_bridge PUBLIC src/hardware src/hardware/aura-sdk)
 target_link_libraries(aura_bridge PUBLIC luma_common aura_usb ole32 oleaut32 uuid)
 
 # ---- proxy DLL -----------------------------------------------------------------------
 add_library(lumabridge_proxy SHARED
-    src/proxy-dll/dllmain.cpp
-    src/proxy-dll/exports.cpp
-    src/proxy-dll/real_logiled.cpp
-    src/proxy-dll/exports.def)
+    src/integrations/logitech/dllmain.cpp
+    src/integrations/logitech/exports.cpp
+    src/integrations/logitech/real_logiled.cpp
+    src/integrations/logitech/exports.def)
 target_link_libraries(lumabridge_proxy PRIVATE aura_bridge luma_common advapi32)
 set_target_properties(lumabridge_proxy PROPERTIES
     OUTPUT_NAME "LumaBridge_${LUMA_ARCH}"
@@ -94,14 +94,14 @@ function(luma_emulator target dir output_x64 output_x86)
     endif()
 endfunction()
 
-luma_emulator(chroma_emu chroma-emu RzChromaSDK64 RzChromaSDK
-    src/chroma-emu/dllmain.cpp src/chroma-emu/chroma_exports.cpp src/chroma-emu/chroma_exports.def)
+luma_emulator(chroma_emu integrations/razer RzChromaSDK64 RzChromaSDK
+    src/integrations/razer/dllmain.cpp src/integrations/razer/chroma_exports.cpp src/integrations/razer/chroma_exports.def)
 # CUE SDK 3.x (VS2019 toolset) names; the install script copies it over whichever CUESDK*.dll
 # a game ships.
-luma_emulator(corsair_emu corsair-emu CUESDK.x64_2019 CUESDK_2019
-    src/corsair-emu/dllmain.cpp src/corsair-emu/corsair_exports.cpp src/corsair-emu/corsair_exports.def)
-luma_emulator(lightfx_emu lightfx-emu LightFX LightFX
-    src/lightfx-emu/dllmain.cpp src/lightfx-emu/lightfx_exports.cpp src/lightfx-emu/lightfx_exports.def)
+luma_emulator(corsair_emu integrations/corsair CUESDK.x64_2019 CUESDK_2019
+    src/integrations/corsair/dllmain.cpp src/integrations/corsair/corsair_exports.cpp src/integrations/corsair/corsair_exports.def)
+luma_emulator(lightfx_emu integrations/alienware LightFX LightFX
+    src/integrations/alienware/dllmain.cpp src/integrations/alienware/lightfx_exports.cpp src/integrations/alienware/lightfx_exports.def)
 
 # ---- LumaBridge app (x64 only: it's a normal desktop app) ----------------------------
 if(LUMA_ARCH STREQUAL "x64")
@@ -128,8 +128,8 @@ if(LUMA_ARCH STREQUAL "x64")
         target_compile_options(imgui PRIVATE -w)
     endif()
 
-    add_library(gamesense STATIC src/gamesense/gamesense_server.cpp src/gamesense/gg_forwarder.cpp)
-    target_include_directories(gamesense PUBLIC src/gamesense)
+    add_library(gamesense STATIC src/integrations/steelseries/gamesense_server.cpp src/integrations/steelseries/gg_forwarder.cpp)
+    target_include_directories(gamesense PUBLIC src/integrations/steelseries)
     target_link_libraries(gamesense PUBLIC luma_common ws2_32 winhttp)
 
     add_executable(lumabridge_app WIN32
@@ -161,15 +161,26 @@ add_executable(logiled-harness tools/logiled-harness/main.cpp)
 add_executable(aura-usb-test tools/aura-usb-test/main.cpp)
 target_link_libraries(aura-usb-test PRIVATE aura_usb)
 
+# Read-only SMBus probe for RAM lighting controllers (needs the PawnIO driver at runtime;
+# PawnIOLib.dll is loaded dynamically, nothing to link).
+add_executable(ram-probe tools/ram-probe/main.cpp)
+
 if(MINGW)
     # wmain entry points
     target_link_options(aura-test PRIVATE -municode)
     target_link_options(logiled-harness PRIVATE -municode)
     target_link_options(aura-usb-test PRIVATE -municode)
+    target_link_options(ram-probe PRIVATE -municode)
 endif()
 
-install(TARGETS lumabridge_proxy chroma_emu corsair_emu lightfx_emu aura-test aura-usb-test logiled-harness
-        RUNTIME DESTINATION .)
+# Release layout:
+#   LumaBridge.exe, LumaBridge.ini.example     the app (x64 build only)
+#   integrations\                              game SDK stand-ins (x86\ added by the release job)
+#   tools\                                     hardware tests
+#   scripts\                                   install helpers the app runs
+install(TARGETS lumabridge_proxy chroma_emu corsair_emu lightfx_emu RUNTIME DESTINATION integrations)
+install(TARGETS aura-test aura-usb-test ram-probe logiled-harness RUNTIME DESTINATION tools)
+install(FILES scripts/Run-HardwareTest.ps1 DESTINATION tools)
+install(FILES scripts/Install-LogiLedProxy.ps1 scripts/Install-SdkEmulators.ps1 scripts/Install-HandbackTask.ps1
+        DESTINATION scripts)
 install(FILES config/LumaBridge.ini.example DESTINATION .)
-install(FILES scripts/Install-LogiLedProxy.ps1 scripts/Install-SdkEmulators.ps1 scripts/Run-HardwareTest.ps1
-        DESTINATION .)

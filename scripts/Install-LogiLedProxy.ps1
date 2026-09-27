@@ -37,9 +37,11 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $Clsid = '{a6519e67-7632-4375-afdf-caa889744403}'
-$Root = Split-Path -Parent $PSScriptRoot
+$Root = Split-Path -Parent $PSScriptRoot   # the LumaBridge folder (this script is in scripts\)
 if (-not $ProxyPath) {
+    $sub = if ($Arch -eq 'x86') { 'integrations\x86' } else { 'integrations' }
     $candidates = @(
+        (Join-Path $Root "$sub\LumaBridge_$Arch.dll"),
         (Join-Path $Root "LumaBridge_$Arch.dll"),
         (Join-Path $PSScriptRoot "LumaBridge_$Arch.dll")
     )

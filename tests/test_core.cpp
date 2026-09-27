@@ -1,5 +1,5 @@
 // Unit tests for the platform-independent core. Builds on any OS:
-//   g++ -std=c++17 -I src/common -I src/chroma-emu -I src/corsair-emu -I src/lightfx-emu -I src/gamesense tests/test_core.cpp -o test_core && ./test_core
+//   g++ -std=c++17 -I src/core -I src/integrations/razer -I src/integrations/corsair -I src/integrations/alienware -I src/integrations/steelseries tests/test_core.cpp -o test_core && ./test_core
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

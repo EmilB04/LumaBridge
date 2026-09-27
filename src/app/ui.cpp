@@ -242,8 +242,8 @@ void AutoPage(Controller& ctl, const Fonts& f) {
         "Your manual color and effect (Lighting > Manual) show between games.",
         "A slow rainbow cycles across the motherboard and fans between games.",
         "The motherboard and fans stay dark between games.",
-        "Between games LumaBridge hands the lights back and starts Armoury Crate, which "
-        "re-applies its own effect (its window opens).",
+        "Between games LumaBridge hands the lights back to Armoury Crate's own effect. Set up "
+        "\"Armoury Crate hand-back\" on the Games page once to make this silent.",
     };
     Muted("%s", kIdleHelp[idle]);
     EndCard();
@@ -475,7 +475,7 @@ void GamesPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const 
         } else if (it.state == IntegrationState::Conflict) {
             if (ImGui::Button("Replace vendor runtime")) in.Install(it.id, L"", true);
         } else {
-            if (PrimaryButton(it.id == "logitech" ? "Set up" : "Install")) in.Install(it.id);
+            if (PrimaryButton(it.id == "logitech" || it.id == "handback" ? "Set up" : "Install")) in.Install(it.id);
         }
         ImGui::EndDisabled();
         EndCard();
@@ -543,9 +543,9 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
 
     BeginCard("handback");
     CardTitle(f, "Armoury Crate");
-    Muted("Stopping hands the motherboard and fans back to Armoury Crate: LumaBridge stops sending "
-          "colors and starts Armoury Crate, which re-applies its own effect. Exiting LumaBridge "
-          "does the same.");
+    Muted("Stopping hands the motherboard and fans back to Armoury Crate's own effect. Exiting "
+          "LumaBridge does the same. With \"Armoury Crate hand-back\" set up (Games page) this is "
+          "silent; otherwise Armoury Crate opens and you click an effect once.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
     if (ctl.auraPaused()) {
         if (PrimaryButton("Resume lighting control")) ctl.ResumeAura();

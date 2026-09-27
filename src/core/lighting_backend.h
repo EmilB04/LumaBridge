@@ -1,6 +1,6 @@
 // A way to reach Aura hardware. Two implementations:
-//   - UsbAura    (src/aura-usb): the motherboard's Aura USB controller, directly. Default.
-//   - AuraBridge (src/aura-bridge): ASUS's Aura SDK (COM). Opt-in: on current Armoury Crate
+//   - UsbAura    (src/hardware/aura-usb): the motherboard's Aura USB controller, directly. Default.
+//   - AuraBridge (src/hardware): ASUS's Aura SDK (COM). Opt-in: on current Armoury Crate
 //     versions it reports no devices, and one of its device plug-ins can fail-fast the
 //     process that loads it.
 // Used from a single worker thread (AuraMirror).

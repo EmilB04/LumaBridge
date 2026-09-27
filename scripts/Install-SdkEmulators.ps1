@@ -33,7 +33,7 @@ $SearchDirs = @($PSScriptRoot, (Split-Path -Parent $PSScriptRoot)) | Select-Obje
 
 function Find-Built([string] $name) {
     foreach ($d in $SearchDirs) {
-        foreach ($p in @("$d\$name", "$d\x64\$name", "$d\x86\$name",
+        foreach ($p in @("$d\integrations\$name", "$d\integrations\x86\$name", "$d\$name", "$d\x64\$name", "$d\x86\$name",
                          "$d\build\x64\Release\$name", "$d\build\x86\Release\$name")) {
             if (Test-Path $p) { return (Resolve-Path $p).Path }
         }
@@ -118,7 +118,8 @@ switch ($Sdk) {
             Assert-Admin
             if (-not [Environment]::Is64BitProcess) { throw 'Run from 64-bit PowerShell.' }
             $targets = @(@{ Src = (Find-Built $files.x64); Dst = "$env:WINDIR\System32\$($files.x64)" })
-            $x86 = $SearchDirs | ForEach-Object { "$_\x86\$($files.x86)" } | Where-Object { Test-Path $_ } | Select-Object -First 1
+            $x86 = $SearchDirs | ForEach-Object { "$_\integrations\x86\$($files.x86)", "$_\x86\$($files.x86)" } |
+                   Where-Object { Test-Path $_ } | Select-Object -First 1
             if ($x86) { $targets += @{ Src = $x86; Dst = "$env:WINDIR\SysWOW64\$($files.x86)" } }
         }
         foreach ($t in $targets) {

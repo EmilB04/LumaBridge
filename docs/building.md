@@ -21,10 +21,14 @@ cmake --install build/x64 --config Release --prefix dist   # app, DLLs, tools, s
 ```
 
 Use preset `vs-x86` for 32-bit games (DLLs only; the app is x64). BF1 is 64-bit only.
-For 32-bit Chroma/LightFX games, copy the x86 DLLs into an `x86\` folder next to the app,
-and the install script will put them in SysWOW64 too.
+For 32-bit Chroma/LightFX games, copy the x86 DLLs into `integrations\x86\`, and the install
+script will put them in SysWOW64 too. The release zip already has them there.
 
-Output (in `build/x64/Release/`):
+Build output lands in `build/x64/Release/`. `cmake --install` arranges it the way the
+release zip is laid out: the app at the top, game DLLs in `integrations\`, test tools in
+`tools\`, install scripts in `scripts\`.
+
+Files:
 
 | File | Purpose |
 |---|---|

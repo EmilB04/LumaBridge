@@ -43,8 +43,8 @@ jobs:
 
   # Pushing a tag like v0.2.0 -- or running this workflow from the Actions tab with a
   # release_version -- publishes a GitHub Release with one ready-to-use zip:
-  # the app + x64 DLLs at the top level, the 32-bit DLLs in x86\ (the install scripts
-  # pick them up from there for 32-bit games).
+  # the x64 build's layout (app, integrations\, tools\, scripts\) plus the 32-bit
+  # game DLLs in integrations\x86\ (the install scripts pick them up from there).
   release:
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_version != '')
     needs: [windows, core-tests-linux]
@@ -62,8 +62,8 @@ jobs:
         run: |
           mkdir -p "pkg/LumaBridge"
           cp -r artifacts/LumaBridge-x64/. "pkg/LumaBridge/"
-          mkdir -p "pkg/LumaBridge/x86"
-          cp artifacts/LumaBridge-Win32/*.dll "pkg/LumaBridge/x86/"
+          mkdir -p "pkg/LumaBridge/integrations/x86"
+          cp artifacts/LumaBridge-Win32/integrations/*.dll "pkg/LumaBridge/integrations/x86/"
           (cd pkg && zip -r -9 "../LumaBridge-${TAG}.zip" LumaBridge)
           ls -l "LumaBridge-${TAG}.zip"
       - name: Publish release

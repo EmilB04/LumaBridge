@@ -64,8 +64,8 @@ void Controller::Shutdown(bool handBack) {
     const bool wasControlling = mirror_.IsRunning();
     mirror_.Stop();
     // Exiting LumaBridge gives the lights back to Armoury Crate (not during a Windows
-    // shutdown: Armoury Crate re-applies its lighting at the next boot anyway).
-    if (wasControlling && handBack) LaunchArmouryCrate();
+    // shutdown: the controller reloads Armoury Crate's saved effect at the next boot anyway).
+    if (wasControlling && handBack) HandBackLighting();
     WriteConfigValue(iniPath_, L"App", L"Running", L"0");
     LUMA_INFO("LumaBridge app exiting");
 }
@@ -191,7 +191,7 @@ void Controller::Apply(const Output& out) {
             LUMA_INFO("no longer controlling the lights - handing back to Armoury Crate");
             mirror_.Stop();
             // After a crash-loop pause LumaBridge never took the lights, so nothing to hand back.
-            if (!auraPaused_) LaunchArmouryCrate();
+            if (!auraPaused_) HandBackLighting();
         }
         return;
     }

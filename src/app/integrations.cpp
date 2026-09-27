@@ -1,5 +1,7 @@
 #include "integrations.h"
 
+#include "armoury_crate.h"
+
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
@@ -111,7 +113,7 @@ void Integrations::Refresh(bool gsRunning, int gsPort, bool gsOk, bool foundGG, 
         Integration it{"logitech", "Logitech LIGHTSYNC",
                        "Battlefield 1 and other LIGHTSYNC games. Your Logitech devices keep working.",
                        IntegrationState::NotInstalled, ""};
-        const std::wstring proxy = appDir_ + L"\\LumaBridge_x64.dll";
+        const std::wstring proxy = appDir_ + L"\\integrations\\LumaBridge_x64.dll";
         const std::wstring user = ReadDefault(HKEY_CURRENT_USER, kLogiClsidKey, KEY_WOW64_64KEY);
         const std::wstring machine = ReadDefault(HKEY_LOCAL_MACHINE, kLogiClsidKey, KEY_WOW64_64KEY);
         if (!user.empty() && _wcsicmp(user.c_str(), proxy.c_str()) == 0) {
@@ -132,7 +134,7 @@ void Integrations::Refresh(bool gsRunning, int gsPort, bool gsOk, bool foundGG, 
                          const char* vendorRuntime) {
         Integration it{id, name, desc, IntegrationState::NotInstalled, ""};
         const std::wstring installed = sys + L"\\" + dll;
-        const std::wstring ours = appDir_ + L"\\" + dll;
+        const std::wstring ours = appDir_ + L"\\integrations\\" + dll;
         if (Exists(installed)) {
             if (SameFile(installed, ours)) {
                 it.state = IntegrationState::Active;
@@ -177,6 +179,20 @@ void Integrations::Refresh(bool gsRunning, int gsPort, bool gsOk, bool foundGG, 
                                  "Games ship their own iCUE file, so add LumaBridge to each game folder.",
                                  IntegrationState::PerGame, "Per game"});
 
+    {
+        Integration it{"handback", "Armoury Crate hand-back",
+                       "Lets LumaBridge give the lights back to Armoury Crate silently (no window, no clicks) by "
+                       "restarting the motherboard's lighting controller, which then reloads Armoury Crate's effect.",
+                       IntegrationState::NotInstalled, ""};
+        if (HandbackTaskInstalled()) {
+            it.state = IntegrationState::Active;
+            it.detail = "Set up";
+        } else {
+            it.detail = "Needs administrator approval once. Without it, LumaBridge opens Armoury Crate instead.";
+        }
+        items_.push_back(it);
+    }
+
     systemDll("lightfx", "Alienware AlienFX", "Older titles with Alienware lighting.", L"LightFX.dll",
               "Alienware Command Center");
 }
@@ -184,6 +200,8 @@ void Integrations::Refresh(bool gsRunning, int gsPort, bool gsOk, bool foundGG, 
 void Integrations::Install(const std::string& id, const std::wstring& gameDir, bool force) {
     if (id == "logitech") {
         Run("Logitech LIGHTSYNC set up", L"Install-LogiLedProxy.ps1", L"", false);
+    } else if (id == "handback") {
+        Run("Silent hand-back set up", L"Install-HandbackTask.ps1", L"", true);
     } else if (id == "gamesense") {
         Run("GameSense folder repaired", L"Install-SdkEmulators.ps1", L"-Sdk GameSense", true);
     } else {
@@ -199,6 +217,10 @@ void Integrations::Install(const std::string& id, const std::wstring& gameDir, b
 void Integrations::Remove(const std::string& id, const std::wstring& gameDir) {
     if (id == "logitech") {
         Run("Logitech LIGHTSYNC removed", L"Install-LogiLedProxy.ps1", L"-Uninstall", false);
+        return;
+    }
+    if (id == "handback") {
+        Run("Silent hand-back removed", L"Install-HandbackTask.ps1", L"-Uninstall", true);
         return;
     }
     std::wstring sdk = id == "chroma" ? L"Chroma" : id == "lightfx" ? L"LightFX" : L"Corsair";
@@ -221,7 +243,8 @@ void Integrations::Run(const std::string& what, const std::wstring& script, cons
         std::lock_guard<std::mutex> lock(msgMutex_);
         message_ = "Working...";
     }
-    std::wstring params = L"-NoProfile -ExecutionPolicy Bypass -File \"" + appDir_ + L"\\" + script + L"\" " + args;
+    std::wstring params =
+        L"-NoProfile -ExecutionPolicy Bypass -File \"" + appDir_ + L"\\scripts\\" + script + L"\" " + args;
     worker_ = std::thread([this, what, params, elevated] {
         SHELLEXECUTEINFOW sei{};
         sei.cbSize = sizeof sei;

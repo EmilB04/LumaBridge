@@ -3,7 +3,7 @@
 ## Direct USB (default)
 
 LumaBridge talks to the motherboard's **AURA LED Controller** over USB HID, without
-Armoury Crate or the SDK below ([`src/aura-usb`](../src/aura-usb)). This was confirmed on a
+Armoury Crate or the SDK below ([`src/hardware/aura-usb`](../src/hardware/aura-usb)). This was confirmed on a
 ROG STRIX B550-F (USB `0B05:1939`, firmware `AULA3-AR42-0222`):
 
 - 65-byte reports with id `0xEC`. `EC 82` returns the firmware and `EC B0` the configuration
@@ -17,12 +17,19 @@ ROG STRIX B550-F (USB `0B05:1939`, firmware `AULA3-AR42-0222`):
   Re-sending the *mode* command periodically blanked the LEDs for an instant (a visible
   flicker every 2 s on a B550-F), so it isn't repeated.
 - Nothing is ever written to the controller's flash.
-- **Handing back:** the controller has no "give control back" command, and restarting
-  ASUS's lighting service doesn't restore Armoury Crate's effect. Starting the Armoury
-  Crate app does (it re-applies its current Aura Sync effect). So handing back means:
-  stop sending colors, then start Armoury Crate. LumaBridge does this for the idle choice
-  "Armoury Crate", for **Stop controlling the lights**, and when you exit it. (While Armoury
-  Crate's services were hung after SDK crashes, only a reboot helped.)
+- **Handing back:** the controller has no "give control back" command. Restarting
+  Armoury Crate's services or its motherboard helper (`Aac3572MbHal_x86`) doesn't restore
+  its effect, and opening Armoury Crate only does once you click an effect. What works is
+  **restarting the controller's USB device** (`pnputil /restart-device`, or disable and
+  enable in Device Manager). The controller then reloads the effect Armoury Crate saved
+  in it, the same thing that happens at boot. That needs admin rights, so
+  `scripts/Install-HandbackTask.ps1` (Games page → Armoury Crate hand-back → Set up)
+  registers a background scheduled task once, and LumaBridge starts it without a prompt
+  whenever it hands back: for the idle choice "Armoury Crate", **Stop controlling the
+  lights**, and exit. Without the task, LumaBridge opens Armoury Crate instead.
+- Armoury Crate's own device helpers on a B550-F + HyperX Fury system:
+  `Aac3572MbHal_x86` (motherboard), `Aac3572DramHal_x86` and `AacKingstonDramHal_x64/x86`
+  (RAM), started by `ArmouryCrate.Service` / `LightingService`.
 - Armoury Crate lists every program that has used the Aura SDK under **Game list**
   (lighting priority) above its own "Aura Sync". Programs that crashed while holding SDK
   control left Aura Sync in standby and its services hung until a reboot. LumaBridge's
@@ -38,7 +45,7 @@ ROG STRIX B550-F (USB `0B05:1939`, firmware `AULA3-AR42-0222`):
 > fail-fast the calling process inside ASUS's `AacKbHal_x64.dll` (Azoth keyboard plug-in).
 > It is kept only for older setups.
 
-Code: [`src/aura-bridge/aura_bridge.cpp`](../src/aura-bridge/aura_bridge.cpp).
+Code: [`src/hardware/aura-sdk/aura_bridge.cpp`](../src/hardware/aura-sdk/aura_bridge.cpp).
 
 ## Access model
 
