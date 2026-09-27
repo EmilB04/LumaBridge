@@ -24,6 +24,20 @@ audio visualizer) do light the strip LED by LED, but the SDK doesn't offer them 
 `tools\ghub-probe.exe` (read-only) can show whether G HUB's local WebSocket connection
 switches them.
 
+What `ghub-probe` found (G HUB with a G502 X Plus over LIGHTSPEED):
+- `lghub_agent.exe` serves JSON over a WebSocket on `127.0.0.1:9010`. `GET /devices/list`
+  and `GET /applications` answer, and the battery broadcasts come in. `/lighting/state`,
+  `/lighting/current`, `/devices/state`, `/sdk/state`, `/profiles/active` and `/games/state`
+  don't exist.
+- The mouse is `deviceCategory: MOUSE_RGB_PER_KEY`, `isPerKey: true`, with two zone types:
+  `ZONE_PRIMARY` (off, fixed, cycle, breathing) and `ZONE_ALL` (color wave, custom,
+  Logitech's signature effects).
+- Switching effects in G HUB changed only the battery report's lighting power use. None of
+  the lighting paths the probe subscribed to reported anything, so the paths G HUB's window
+  uses to set effects are still unknown.
+- G HUB also runs `logi_lamparray_service`, which offers its devices to Windows Dynamic
+  Lighting (the `LampArray` API, one color per LED).
+
 ## ASUS ROG Azoth (wired or wireless, experimental)
 
 Captured from Armoury Crate with USBPcap on a wired Azoth (USB `0B05:1A83`, firmware
