@@ -562,6 +562,8 @@ static void TestGameProfiles() {
     CHECK(FindProfile("x.exe", "RV There Yet?")->kind == ProfileKind::NoSupport);
     CHECK(FindProfile("DSX.exe", "DSX")->kind == ProfileKind::NotAGame);
     CHECK(FindProfile("bf1.exe", "")->kind == ProfileKind::VendorSdk);
+    CHECK(FindProfile("bf2042.exe", "")->blocked && FindProfile("bf1.exe", "")->blocked);
+    CHECK(!FindProfile("overwatch.exe", "")->blocked && !FindProfile("cs2.exe", "")->blocked);
     CHECK(FindProfile("notepad.exe", "Some Game") == nullptr);
     CHECK(std::strcmp(ProfileByKey("warthunder")->title, "War Thunder") == 0);
 }

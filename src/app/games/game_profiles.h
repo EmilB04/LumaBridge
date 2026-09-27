@@ -27,6 +27,9 @@ struct GameProfile {
     Feed feed;
     const char* how;        // one line: how it lights up
     const char* note;       // details / caveats
+    // Its own lighting can't reach LumaBridge (an anti-cheat keeps LumaBridge's DLLs out): while
+    // it runs, every device shows the screen's colors by default instead of waiting for it.
+    bool blocked = false;
 };
 
 inline const GameProfile* Profiles(size_t* count) {
@@ -49,15 +52,19 @@ inline const GameProfile* Profiles(size_t* count) {
          "Install Razer Chroma on the Integrations page. Blizzard's anti-cheat may refuse an "
          "unsigned DLL; if nothing happens, use Screen colors."},
         {"bf1", "Battlefield 1", {"bf1.exe"}, {"battlefield1"}, ProfileKind::VendorSdk, Feed::None,
-         "Logitech LIGHTSYNC / Razer Chroma",
-         "EA's anti-cheat keeps LumaBridge's DLL out of the game, so its lighting only reaches "
-         "Logitech / Razer gear. Screen colors works meanwhile."},
+         "Screen colors (its Logitech / Razer lighting can't reach LumaBridge)",
+         "The game lights Logitech and Razer gear through their own software, but EA's anti-cheat keeps "
+         "LumaBridge out of the game, so that lighting never reaches it. While it runs, every device shows "
+         "the screen's colors instead.", true},
         {"bf2042", "Battlefield 2042", {"bf2042.exe"}, {"battlefield2042"}, ProfileKind::VendorSdk, Feed::None,
-         "Logitech LIGHTSYNC / Razer Chroma",
-         "EA's anti-cheat keeps LumaBridge's DLL out of the game. Screen colors works meanwhile."},
+         "Screen colors (its Logitech / Razer lighting can't reach LumaBridge)",
+         "The game lights Logitech and Razer gear through their own software, but EA's anti-cheat keeps "
+         "LumaBridge out of the game, so that lighting never reaches it. While it runs, every device shows "
+         "the screen's colors instead.", true},
         {"bfv", "Battlefield V", {"bfv.exe"}, {"battlefieldv", "battlefield5"}, ProfileKind::VendorSdk, Feed::None,
-         "Limited Logitech / Razer support",
-         "EA's anti-cheat keeps LumaBridge's DLL out of the game. Screen colors works meanwhile."},
+         "Screen colors (its Logitech / Razer lighting can't reach LumaBridge)",
+         "EA's anti-cheat keeps LumaBridge out of the game, so its limited Logitech / Razer lighting never "
+         "reaches it. While it runs, every device shows the screen's colors instead.", true},
         {"bf6", "Battlefield 6", {"bf6.exe"}, {"battlefield6"}, ProfileKind::NoSupport, Feed::None,
          "No known lighting support", "Use Screen colors."},
         {"bombanana", "BOMBANANA!", {nullptr}, {"bombanana"}, ProfileKind::NoSupport, Feed::None,

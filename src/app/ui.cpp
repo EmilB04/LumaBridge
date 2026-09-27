@@ -2751,7 +2751,11 @@ void GameDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts&
             "Your choice for \"When no game is running\" (Lighting page) stays on while this game runs.",
             "The lights show this game's own color while it runs.",
         };
-        Muted("%s", kHelp[mode]);
+        if (mode == 0 && profile && profile->blocked)
+            Muted("The screen's colors on every device: EA's anti-cheat keeps the game's own lighting away from "
+                  "LumaBridge (it only reaches the vendors' software).");
+        else
+            Muted("%s", kHelp[mode]);
         if (mode == static_cast<int>(GameMode::Color)) {
             ImGui::Dummy(ImVec2(0, 4 * S()));
             Rgb& c = ctl.prefs().gameColors[key];

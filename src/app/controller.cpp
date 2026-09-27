@@ -91,7 +91,7 @@ void Controller::UpdateLogitech() {
         }
     if (own && !tracker_.Active())
         for (const GameStatus& g : games_)
-            if (g.profile && g.profile->kind == games::ProfileKind::VendorSdk &&
+            if (g.profile && g.profile->kind == games::ProfileKind::VendorSdk && !g.profile->blocked &&
                 std::string(g.profile->how).find("Logitech") != std::string::npos) {
                 own = false;  // e.g. Battlefield 1 talks to G HUB directly
                 logitechNote_ = g.game.name + " lights them through G HUB";
@@ -475,6 +475,8 @@ const Controller::GameStatus* Controller::ScreenColorsGame() const {
     for (const GameStatus& g : games_) {
         if (g.mode == GameMode::Screen) return &g;
         if (g.mode == GameMode::Idle || g.mode == GameMode::Color) continue;
+        // Its own lighting can't reach LumaBridge (anti-cheat): the screen's colors, not a wait.
+        if (g.profile && g.profile->blocked) return &g;
         const bool builtIn = g.profile && g.profile->kind == games::ProfileKind::BuiltIn;
         if (prefs_.screenForUnsupported && !builtIn && !games::SupportsLighting(g.support)) return &g;
     }

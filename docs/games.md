@@ -24,7 +24,7 @@ what's described, the app log (`lumabridge-app.log`) shows whether data arrived
 | Game | Notes |
 |---|---|
 | Overwatch 2 | Razer Chroma. Install Razer Chroma on the Integrations page. Blizzard's anti-cheat may refuse an unsigned DLL. |
-| Battlefield 1 / 2042 / V | Logitech LIGHTSYNC / Razer Chroma, but EA's anti-cheat keeps LumaBridge's DLLs out. Use Screen colors, or see `tools\ghub-probe.exe` for mirroring G HUB. |
+| Battlefield 1 / 2042 / V | Logitech LIGHTSYNC / Razer Chroma, but EA's anti-cheat keeps LumaBridge's DLLs out, so that lighting only reaches the vendors' software. While they run, every device shows the screen's colors (the default for these games). Reading the game's lighting back out of G HUB is being investigated with `tools\ghub-probe.exe --scan`. |
 
 ## Screen colors
 

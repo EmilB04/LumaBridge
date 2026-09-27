@@ -3,6 +3,9 @@
 // from outside the game, where anti-cheat has nothing to object to)?
 //
 //   ghub-probe [seconds=90] [extra/path ...]
+//   ghub-probe --scan [seconds=180]   first reads G HUB's installed files for the paths it uses
+//                                     (lighting / SDK / LED / effect ones) and listens on all of
+//                                     them: run it, then play a game that lights Logitech gear
 //
 // What it does, all read-only:
 //   1. lists G HUB's processes, the TCP ports they listen on and their named pipes;
@@ -20,6 +23,7 @@
 #include <tlhelp32.h>
 #include <winhttp.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
@@ -195,13 +199,81 @@ void ReceiveLoop(Socket* s, std::atomic<bool>* stop) {
     }
 }
 
+// Message paths ("/lighting/...") quoted in G HUB's installed files (its window's scripts and
+// its agent), the lighting-related ones. Read-only: the files are only read.
+std::set<std::string> ScanPaths() {
+    std::set<std::string> found;
+    wchar_t pf[MAX_PATH];
+    if (!ExpandEnvironmentStringsW(L"%ProgramFiles%\\LGHUB", pf, MAX_PATH)) return found;
+    std::vector<std::wstring> dirs{pf};
+    int files = 0;
+    while (!dirs.empty()) {
+        const std::wstring dir = dirs.back();
+        dirs.pop_back();
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do {
+            const std::wstring name = fd.cFileName;
+            if (name == L"." || name == L"..") continue;
+            const std::wstring path = dir + L"\\" + name;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                dirs.push_back(path);
+                continue;
+            }
+            const size_t dot = name.find_last_of(L'.');
+            const std::wstring ext = dot == std::wstring::npos ? L"" : name.substr(dot);
+            if (_wcsicmp(ext.c_str(), L".js") && _wcsicmp(ext.c_str(), L".asar") && _wcsicmp(ext.c_str(), L".exe") &&
+                _wcsicmp(ext.c_str(), L".dll") && _wcsicmp(ext.c_str(), L".json"))
+                continue;
+            const unsigned long long size = (static_cast<unsigned long long>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+            if (size > 400ull * 1024 * 1024) continue;
+            FILE* f = _wfopen(path.c_str(), L"rb");
+            if (!f) continue;
+            ++files;
+            std::vector<char> buf(1 << 20);
+            std::string carry;
+            size_t n;
+            while ((n = fread(buf.data(), 1, buf.size(), f)) > 0) {
+                std::string chunk = carry + std::string(buf.data(), n);
+                // A quote, then "/a/b..." of [a-z0-9_/-], then the same quote.
+                for (size_t i = 0; i + 2 < chunk.size(); ++i) {
+                    const char q = chunk[i];
+                    if ((q != '"' && q != '\'' && q != '`') || chunk[i + 1] != '/') continue;
+                    size_t j = i + 1;
+                    while (j < chunk.size() && j - i < 90) {
+                        const char c = chunk[j];
+                        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '/' || c == '-')) break;
+                        ++j;
+                    }
+                    if (j >= chunk.size() || chunk[j] != q) continue;
+                    const std::string p = chunk.substr(i + 1, j - i - 1);
+                    if (p.size() < 5 || std::count(p.begin(), p.end(), '/') < 2 || p.find("//") != std::string::npos) continue;
+                    for (const char* k : {"light", "sdk", "led", "effect", "color", "zone", "frame"})
+                        if (p.find(k) != std::string::npos) {
+                            found.insert(p);
+                            break;
+                        }
+                }
+                carry = chunk.size() > 100 ? chunk.substr(chunk.size() - 100) : chunk;
+            }
+            fclose(f);
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    Log("Scanned %d G HUB file(s): %zu lighting path(s).", files, found.size());
+    return found;
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
-    int seconds = argc > 1 ? _wtoi(argv[1]) : 90;
+    const bool scan = argc > 1 && _wcsicmp(argv[1], L"--scan") == 0;
+    const int first = scan ? 2 : 1;
+    int seconds = argc > first ? _wtoi(argv[first]) : (scan ? 180 : 90);
     if (seconds <= 0) seconds = 90;
     std::vector<std::string> extraPaths;
-    for (int i = 2; i < argc; ++i) extraPaths.push_back(Narrow(argv[i]));
+    for (int i = first + 1; i < argc; ++i) extraPaths.push_back(Narrow(argv[i]));
 
     wchar_t appData[MAX_PATH];
     std::wstring outPath = L"ghub-probe.txt";
@@ -213,6 +285,12 @@ int wmain(int argc, wchar_t** argv) {
     g_out = _wfopen(outPath.c_str(), L"w");
 
     Log("LumaBridge G HUB probe (read-only: GET / SUBSCRIBE only)");
+    if (scan) {
+        for (const std::string& p : ScanPaths()) {
+            Log("  path %s", p.c_str());
+            extraPaths.push_back(p);
+        }
+    }
     Log("G HUB processes:");
     const auto procs = GHubProcesses();
     for (const auto& [pid, exe] : procs) Log("  %s (pid %lu)", Narrow(exe).c_str(), pid);
@@ -261,6 +339,7 @@ int wmain(int argc, wchar_t** argv) {
         for (const auto& p : extraPaths) {
             Send(s.get(), "{\"msgId\":\"probe-" + std::to_string(++id) + "\",\"verb\":\"SUBSCRIBE\",\"path\":\"" + p + "\"}");
             Send(s.get(), "{\"msgId\":\"probe-" + std::to_string(++id) + "\",\"verb\":\"GET\",\"path\":\"" + p + "\"}");
+            Sleep(5);  // don't flood G HUB
         }
     }
 
