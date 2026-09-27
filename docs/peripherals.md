@@ -15,9 +15,9 @@ Code: [`src/app/peripherals/logitech_output.cpp`](../src/app/peripherals/logitec
 The mouse gets one color today. To find out whether G HUB lets an app color the G502 X
 Plus's zones separately, exit LumaBridge and run `tools\logiled-harness.exe --zones`
 (add a number for the seconds per step; the default is 2). It loads G HUB's DLL and calls
-`LogiLedSetLightingForTargetZone` for mouse zones 0-7. First it gives each zone its own
-color at once, then it lights one zone at a time in white. It prints which zones G HUB
-accepted.
+`LogiLedSetLightingForTargetZone` for mouse zones 0-7, after a whole-mouse control step.
+First run on a G502 X Plus (G HUB SDK 75.71.76): zones 0 and 1 accepted, 2-7 refused, and
+nothing changed on the mouse.
 
 ## ASUS ROG Azoth (wired or wireless, experimental)
 

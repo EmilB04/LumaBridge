@@ -38,23 +38,36 @@ constexpr const char* kZoneNames[] = {"red", "green", "blue", "yellow", "magenta
 constexpr int kZones = 8;
 constexpr int kMouse = 3;  // LogiLed::DeviceType::Mouse
 
+void ZonesAtOnce() {
+    for (int z = 0; z < kZones; ++z) {
+        const bool ok = pLogiLedSetLightingForTargetZone(kMouse, z, kZoneColors[z][0], kZoneColors[z][1], kZoneColors[z][2]);
+        if (ok) std::printf("  zone %d -> %s\n", z, kZoneNames[z]);
+    }
+    Step("(holding)");
+    Step("(holding)");
+}
+
 int ZoneTest() {
     std::printf("\nZone test (LogiLedSetLightingForTargetZone, device type mouse):\n");
     if (!pLogiLedSetLightingForTargetZone) {
         std::printf("  this DLL has no LogiLedSetLightingForTargetZone\n");
         return 1;
     }
-    std::printf("1) Every zone its own color at once. Note which color is where on the mouse.\n");
+    std::printf("A) Control: the whole mouse through LogiLedSetLighting.\n");
+    pLogiLedSetLighting(100, 0, 0);
+    Step("whole mouse red?");
     pLogiLedSetLighting(0, 0, 0);
-    Sleep(300);
+    Step("whole mouse off?");
+
+    std::printf("B) Every zone its own color at once (target: all devices).\n");
     bool accepted[kZones] = {};
     for (int z = 0; z < kZones; ++z) {
-        accepted[z] = pLogiLedSetLightingForTargetZone(kMouse, z, kZoneColors[z][0], kZoneColors[z][1], kZoneColors[z][2]);
-        std::printf("  zone %d -> %-7s %s\n", z, kZoneNames[z], accepted[z] ? "accepted" : "refused");
+        accepted[z] = pLogiLedSetLightingForTargetZone(kMouse, z, 0, 0, 0);
+        std::printf("  zone %d %s\n", z, accepted[z] ? "accepted" : "refused");
     }
-    Sleep(g_stepMs * 3);
+    ZonesAtOnce();
 
-    std::printf("2) One zone at a time, white, the rest off. Note what lights for each.\n");
+    std::printf("C) One zone at a time, white, the rest off.\n");
     for (int z = 0; z < kZones; ++z) {
         if (!accepted[z]) continue;
         for (int o = 0; o < kZones; ++o)
@@ -64,7 +77,20 @@ int ZoneTest() {
         std::snprintf(what, sizeof what, "zone %d white", z);
         Step(what);
     }
-    std::printf("Done. Please report: which zones were accepted, and what lit up in 1) and 2).\n");
+
+    std::printf("D) B again, over a lit mouse (whole mouse blue first).\n");
+    pLogiLedSetLighting(0, 0, 100);
+    Step("whole mouse blue?");
+    ZonesAtOnce();
+
+    if (pLogiLedSetTargetDevice) {
+        std::printf("E) B again, targeting RGB devices only.\n");
+        pLogiLedSetTargetDevice(2 /* LOGI_DEVICETYPE_RGB */);
+        Sleep(300);
+        pLogiLedSetLighting(0, 0, 0);
+        ZonesAtOnce();
+    }
+    std::printf("Done. Please report what the mouse showed at each step (A to E).\n");
     return 0;
 }
 
