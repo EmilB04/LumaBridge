@@ -23,6 +23,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "integrations.h"
+#include "setup_hardware.h"
 
 namespace luma::app {
 namespace {
@@ -1584,54 +1585,126 @@ void DrawFan(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& leds
 // Where the memory slots are on the board drawing.
 void RamArea(ImVec2 a, ImVec2 size, ImVec2* ra, ImVec2* rb) {
     const float u = size.x / 20;
-    *ra = ImVec2(a.x + 12.8f * u, a.y + 1.6f * u);
-    *rb = ImVec2(a.x + 18.6f * u, a.y + size.y - 3.4f * u);
+    *ra = ImVec2(a.x + 12.8f * u, a.y + 1.4f * u);
+    *rb = ImVec2(a.x + 18.8f * u, a.y + size.y - 3.2f * u);
 }
 
-// The motherboard: its own LEDs along the I/O cover on the left, and the memory in its slots.
-// `sticks` 0: the memory isn't lit (empty-looking slots). Each stick's five LEDs cover the
-// whole stick, top to bottom.
-void DrawBoard(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& leds, int sticks, const fx::Params* ram,
-               double t, double ramLevel) {
-    const ImVec2 b(a.x + size.x, a.y + size.y);
-    dl->AddRectFilled(a, b, Hex(0x10141B), 6 * S());
-    dl->AddRect(a, b, Hex(0x2A3142), 6 * S(), 0, 1.2f * S());
-    const float u = size.x / 20;
-    // CPU socket and a PCIe slot.
-    dl->AddRectFilled(ImVec2(a.x + 5.5f * u, a.y + 3 * u), ImVec2(a.x + 10.5f * u, a.y + 8 * u), Hex(0x1C2230), 3 * S());
-    dl->AddRect(ImVec2(a.x + 5.5f * u, a.y + 3 * u), ImVec2(a.x + 10.5f * u, a.y + 8 * u), Hex(0x3A4356), 3 * S());
-    dl->AddRectFilled(ImVec2(a.x + 4 * u, a.y + 11 * u), ImVec2(a.x + 11.5f * u, a.y + 11.7f * u), Hex(0x222938), 1 * S());
-    // Its LEDs along the left edge (the I/O cover), top to bottom.
-    const int n = static_cast<int>(leds.size());
-    for (int i = 0; i < n; ++i) {
-        const float y = a.y + size.y * (0.12f + 0.76f * (n > 1 ? static_cast<float>(i) / (n - 1) : 0.5f));
-        Glow(dl, ImVec2(a.x + 2.2f * u, y), 3 * S(), leds[static_cast<size_t>(i)]);
+// One memory stick, seen from above (its light bar): `style` shapes the lit parts; its five
+// LEDs run from the top to the bottom.
+void DrawStick(ImDrawList* dl, ImVec2 sa, ImVec2 sb, RamStyle style, const fx::Params* p, double t, double level) {
+    const float w = sb.x - sa.x, h = sb.y - sa.y;
+    dl->AddRectFilled(ImVec2(sa.x - w * 0.12f, sa.y - 2 * S()), ImVec2(sb.x + w * 0.12f, sb.y + 2 * S()), Hex(0x0C0F14),
+                      2 * S());  // the stick behind its light bar
+    auto ledAt = [&](float frac) {
+        const int led = std::clamp(static_cast<int>(frac * 5), 0, 4);
+        return LiveAt(p, t, led, 5, level);
+    };
+    auto part = [&](float y0, float y1, float slant = 0) {
+        const Rgb c = ledAt((y0 + y1) / 2);
+        const ImVec2 p0(sa.x, sa.y + y0 * h + slant * w), p1(sb.x, sa.y + y0 * h), p2(sb.x, sa.y + y1 * h),
+            p3(sa.x, sa.y + y1 * h + slant * w);
+        dl->AddRectFilled(ImVec2(sa.x - 3 * S(), sa.y + y0 * h - 1 * S()), ImVec2(sb.x + 3 * S(), sa.y + y1 * h + 1 * S()),
+                          Col(c, 28), 3 * S());  // glow
+        dl->AddQuadFilled(p0, p1, p2, p3, Col(c));
+    };
+    switch (style) {
+    case RamStyle::KingstonFury: {
+        // FURY Beast / Renegade RGB: two blocks, a long bar, the FURY badge, then stripes.
+        part(0.00f, 0.07f);
+        part(0.09f, 0.16f);
+        part(0.18f, 0.56f);
+        part(0.58f, 0.73f);
+        const float by = sa.y + 0.60f * h;  // the badge's lettering
+        dl->AddLine(ImVec2(sa.x + w * 0.35f, by + 0.11f * h), ImVec2(sb.x - w * 0.35f, by + 0.01f * h), Hex(0x000000, 110),
+                    std::max(1.f, w * 0.18f));
+        for (int i = 0; i < 4; ++i) part(0.76f + i * 0.06f, 0.80f + i * 0.06f);
+        break;
     }
-    // Four memory slots; sticks in A2 / B2 first (slots 2 and 4), like most boards want.
+    case RamStyle::HyperXFury:
+        // FURY RGB: one light bar, cut at an angle.
+        for (int i = 0; i < 5; ++i) part(i * 0.2f + 0.01f, i * 0.2f + 0.19f, -0.25f);
+        break;
+    default:
+        for (int i = 0; i < 5; ++i) part(i * 0.2f, i * 0.2f + 0.2f);
+        break;
+    }
+}
+
+// The ROG eye, in a `size` box at `c`: its strokes lit by the board's LEDs.
+void DrawRogEye(ImDrawList* dl, ImVec2 c, ImVec2 size, const std::vector<Rgb>& leds) {
+    // Strokes as fractions of the box (x, y from its top left).
+    static const std::vector<std::vector<ImVec2>> kStrokes = {
+        {{0.02f, 0.10f}, {0.40f, 0.34f}},                                        // the claws
+        {{0.14f, 0.00f}, {0.52f, 0.22f}},
+        {{0.00f, 0.62f}, {0.26f, 0.34f}, {0.62f, 0.26f}, {1.00f, 0.44f}},        // the eye, top
+        {{0.14f, 0.70f}, {0.46f, 0.86f}, {0.78f, 0.74f}, {1.00f, 0.44f}},        // bottom
+        {{0.36f, 0.50f}, {0.56f, 0.64f}, {0.70f, 0.52f}},                        // the pupil
+    };
+    const ImVec2 o(c.x - size.x / 2, c.y - size.y / 2);
+    for (size_t i = 0; i < kStrokes.size(); ++i) {
+        const Rgb col = leds.empty() ? Rgb{50, 54, 64} : leds[i * leds.size() / kStrokes.size()];
+        std::vector<ImVec2> pts;
+        for (const ImVec2& q : kStrokes[i]) pts.push_back(ImVec2(o.x + q.x * size.x, o.y + q.y * size.y));
+        dl->AddPolyline(pts.data(), static_cast<int>(pts.size()), Col(col, 50), 0, 7 * S());  // glow
+        dl->AddPolyline(pts.data(), static_cast<int>(pts.size()), Col(col), 0, 2.5f * S());
+    }
+}
+
+// The motherboard as the scan found it: the I/O cover top left (with the ROG eye or TUF badge
+// lit by its LEDs on those boards, else its LEDs along the edge), the CPU socket, and the
+// memory standing in its slots right of the CPU.
+void DrawBoard(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& leds, const SetupHardware& hw,
+               const std::array<bool, 4>& slots, bool ramLit, const fx::Params* ram, double t, double ramLevel) {
+    const ImVec2 b(a.x + size.x, a.y + size.y);
+    auto at = [&](float fx, float fy) { return ImVec2(a.x + fx * size.x, a.y + fy * size.y); };
+    dl->AddRectFilled(a, b, Hex(0x0F1218), 6 * S());
+    dl->AddRect(a, b, Hex(0x2A3142), 6 * S(), 0, 1.2f * S());
+    // The I/O cover.
+    const ImVec2 shroud[] = {at(0.02f, 0.02f), at(0.36f, 0.02f), at(0.36f, 0.56f), at(0.26f, 0.72f), at(0.02f, 0.72f)};
+    dl->AddConvexPolyFilled(shroud, 5, Hex(0x181C25));
+    dl->AddPolyline(shroud, 5, Hex(0x2E3546), ImDrawFlags_Closed, 1 * S());
+    for (int i = 0; i < 3; ++i)  // its angled lines, below the logo
+        dl->AddLine(at(0.04f, 0.50f - i * 0.06f), at(0.20f - i * 0.05f, 0.70f), Hex(0x232937), 1.5f * S());
+    // The CPU socket and a PCIe slot.
+    dl->AddRectFilled(at(0.42f, 0.16f), at(0.60f, 0.40f), Hex(0x1C2230), 3 * S());
+    dl->AddRect(at(0.42f, 0.16f), at(0.60f, 0.40f), Hex(0x3A4356), 3 * S());
+    dl->AddRectFilled(at(0.08f, 0.82f), at(0.60f, 0.86f), Hex(0x222938), 1 * S());
+
+    switch (hw.board) {
+    case BoardStyle::Rog:
+    case BoardStyle::RogStrix:
+        DrawRogEye(dl, at(0.19f, 0.30f), ImVec2(size.x * 0.28f, size.y * 0.32f), leds);
+        if (hw.board == BoardStyle::RogStrix)  // the red stripe under it (printed, not lit)
+            dl->AddLine(at(0.10f, 0.56f), at(0.30f, 0.66f), Hex(0xD01E2A), 2.5f * S());
+        break;
+    case BoardStyle::Tuf: {
+        const Rgb c = leds.empty() ? Rgb{50, 54, 64} : leds.front();
+        dl->AddRect(at(0.08f, 0.26f), at(0.30f, 0.42f), Col(c, 60), 3 * S(), 0, 6 * S());
+        dl->AddRect(at(0.08f, 0.26f), at(0.30f, 0.42f), Col(c), 3 * S(), 0, 2 * S());
+        break;
+    }
+    default: {
+        const int n = static_cast<int>(leds.size());
+        for (int i = 0; i < n; ++i) {
+            const float y = 0.10f + 0.56f * (n > 1 ? static_cast<float>(i) / (n - 1) : 0.5f);
+            Glow(dl, at(0.05f, y), 3 * S(), leds[static_cast<size_t>(i)]);
+        }
+        break;
+    }
+    }
+
+    // Four memory slots, A1 nearest the CPU.
     ImVec2 ra, rb;
     RamArea(a, size, &ra, &rb);
-    const float pitch = (rb.x - ra.x) / 4, w = pitch * 0.62f;
-    static const int kOrder[4] = {1, 3, 0, 2};
-    bool filled[4] = {};
-    for (int i = 0; i < std::min(sticks, 4); ++i) filled[kOrder[i]] = true;
+    const float pitch = (rb.x - ra.x) / 4, w = pitch * 0.5f;
     for (int slot = 0; slot < 4; ++slot) {
         const float x0 = ra.x + slot * pitch + (pitch - w) / 2;
         const ImVec2 sa(x0, ra.y), sb(x0 + w, rb.y);
-        if (!filled[slot]) {  // an empty slot
-            dl->AddRectFilled(ImVec2(sa.x + w * 0.2f, sa.y), ImVec2(sb.x - w * 0.2f, sb.y), Hex(0x222938), 1 * S());
+        if (!slots[static_cast<size_t>(slot)]) {  // an empty slot
+            dl->AddRectFilled(ImVec2(sa.x + w * 0.25f, sa.y), ImVec2(sb.x - w * 0.25f, sb.y), Hex(0x222938), 1 * S());
             continue;
         }
-        const float h = (sb.y - sa.y) / 5;
-        for (int led = 0; led < 5; ++led) {
-            const Rgb c = LiveAt(ram, t, led, 5, ramLevel);
-            const float y0 = sa.y + led * h;
-            dl->AddRectFilled(ImVec2(sa.x - 3 * S(), y0 - 1 * S()), ImVec2(sb.x + 3 * S(), y0 + h + 1 * S()), Col(c, 28),
-                              3 * S());  // glow
-            dl->AddRectFilled(ImVec2(sa.x, y0), ImVec2(sb.x, y0 + h), Col(c),
-                              led == 0 ? 2 * S() : led == 4 ? 2 * S() : 0,
-                              led == 0 ? ImDrawFlags_RoundCornersTop : led == 4 ? ImDrawFlags_RoundCornersBottom : 0);
-        }
-        dl->AddRect(sa, sb, Hex(0x000000, 90), 2 * S(), 0, 1 * S());
+        DrawStick(dl, sa, sb, hw.ram, ramLit ? ram : nullptr, t, ramLevel);
     }
 }
 
@@ -1717,10 +1790,13 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
     const fx::FanLayout& layout = ctl.config().argbFans;
     std::vector<SetupItem> items;
     for (int i = 0; i < layout.Fans(); ++i) items.push_back({FanItem(i), device::kFans, ImVec2(84 * S(), 84 * S()), i});
-    items.push_back({device::kBoard, device::kBoard, ImVec2(220 * S(), 170 * S())});
-    // The memory is drawn in the board's slots (and selected by clicking the sticks).
+    items.push_back({device::kBoard, device::kBoard, ImVec2(240 * S(), 180 * S())});
+    // The board and memory as the system scan found them. The memory is drawn in the board's
+    // slots (and selected by clicking the sticks); lit only when RAM lighting is on.
+    const SetupHardware hw = DetectSetup(ctl.monitor().Snapshot().smbios);
     const bool ramOn = prefs.ramLighting;
-    const int sticks = ramOn ? std::max(ctl.hardware().sticks(), 2) : 0;
+    const std::array<bool, 4> slots =
+        hw.slotsKnown ? hw.slots : GuessSlots(hw.sticks ? hw.sticks : std::max(ctl.hardware().sticks(), 2));
     if (prefs.azothKeyboard) items.push_back({device::kKeyboard, device::kKeyboard, ImVec2(330 * S(), 138 * S())});
     if (prefs.logitechDevices) items.push_back({device::kMouse, device::kMouse, ImVec2(70 * S(), 112 * S())});
 
@@ -1793,7 +1869,7 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
         const ImVec2 b(a.x + it.size.x, a.y + it.size.y);
         if (it.device == device::kFans) DrawFan(dl, a, it.size, fanLeds, it.fan, layout.LedsPerFan());
         else if (it.device == device::kBoard)
-            DrawBoard(dl, a, it.size, boardLeds, sticks, LiveParams(ctl, device::kRam), t, LiveLevel(ctl, device::kRam));
+            DrawBoard(dl, a, it.size, boardLeds, hw, slots, ramOn, LiveParams(ctl, device::kRam), t, LiveLevel(ctl, device::kRam));
         else if (it.device == device::kMouse) DrawMouse(dl, a, it.size, mouseLeds);
         else if (it.device == device::kKeyboard) DrawKeyboard(dl, a, it.size, LiveAt(LiveParams(ctl, device::kKeyboard), t, 0, 1, LiveLevel(ctl, device::kKeyboard)));
 
@@ -1811,7 +1887,7 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
             if (ramSelected || hoverRam)
                 dl->AddRect(ImVec2(ra.x - 5 * S(), ra.y - 4 * S()), ImVec2(rb.x + 5 * S(), rb.y + 4 * S()),
                             Hex(ramSelected ? kAccentHover : kBorder), 6 * S(), 0, (ramSelected ? 2.f : 1.2f) * S());
-            const char* name = device::Name(device::kRam);
+            const char* name = hw.ramName.empty() ? device::Name(device::kRam) : hw.ramName.c_str();
             const ImVec2 ns = ImGui::CalcTextSize(name);
             const ImVec2 np((ra.x + rb.x) / 2 - ns.x / 2, rb.y + 6 * S());
             dl->AddText(np, Hex(ramSelected ? kText : kMuted), name);
@@ -1819,8 +1895,9 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
                 dl->AddCircleFilled(ImVec2(np.x + ns.x + 7 * S(), np.y + ns.y / 2), 3 * S(), Hex(kAccentHover), 12);
         }
         // The name under it; fans are numbered.
-        char label[32];
+        char label[96];
         if (it.fan >= 0) snprintf(label, sizeof label, "Fan %d", it.fan + 1);
+        else if (isBoard && !hw.boardName.empty()) snprintf(label, sizeof label, "%s", hw.boardName.c_str());
         else snprintf(label, sizeof label, "%s", device::Name(it.device));
         const ImVec2 ts = ImGui::CalcTextSize(label);
         dl->AddText(ImVec2(a.x + it.size.x / 2 - ts.x / 2, b.y + 3 * S()), Hex(selected ? kText : kMuted), label);

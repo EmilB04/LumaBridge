@@ -29,6 +29,7 @@
 #include "azoth_protocol.h"
 #include "logitech_hidpp.h"
 #include "device_lighting.h"
+#include "setup_hardware.h"
 #include "hyperx_ram.h"
 #include "hw_sensors.h"
 #include "lightfx_state.h"
@@ -948,6 +949,41 @@ static void TestDeviceLighting() {
     for (const char* id : device::All()) CHECK(device::Name(id)[0] != 0);
 }
 
+static void TestSetupHardware() {
+    using namespace luma::app;
+    CHECK(SlotIndex("DIMM_A1") == 0 && SlotIndex("DIMM_A2") == 1 && SlotIndex("DIMM_B1") == 2 && SlotIndex("DIMM_B2") == 3);
+    CHECK(SlotIndex("A2") == 1 && SlotIndex("B1") == 2);
+    CHECK(SlotIndex("ChannelA-DIMM0") == 0 && SlotIndex("ChannelB-DIMM1") == 3);
+    CHECK(SlotIndex("P0 CHANNEL A / DIMM 1") == 0 && SlotIndex("P0 CHANNEL B / DIMM 2") == 3);
+    CHECK(SlotIndex("BANK 0") == -1 && SlotIndex("") == -1);
+
+    luma::app::sensors::SmbiosInfo info;
+    info.boardMaker = "ASUSTeK COMPUTER INC.";
+    info.boardName = "ROG STRIX B550-F GAMING (WI-FI)";
+    for (const char* slot : {"DIMM_A1", "DIMM_A2", "DIMM_B2"}) {
+        luma::app::sensors::MemoryModule m;
+        m.slot = slot;
+        m.manufacturer = "Kingston";
+        m.part = "KF3600C17D4/8GX";
+        info.memory.push_back(m);
+    }
+    SetupHardware h = DetectSetup(info);
+    CHECK(h.board == BoardStyle::RogStrix && h.boardName.find("ROG STRIX B550-F") != std::string::npos);
+    CHECK(h.ram == RamStyle::KingstonFury && h.ramName == "Kingston FURY");
+    CHECK(h.sticks == 3 && h.slotsKnown && h.slots[0] && h.slots[1] && !h.slots[2] && h.slots[3]);
+
+    info.boardName = "TUF GAMING X570-PLUS";
+    info.memory[0].part = "HX436C17FB3A/8";
+    info.memory[2].slot = "BANK 3";  // can't tell: fall back to the count
+    h = DetectSetup(info);
+    CHECK(h.board == BoardStyle::Tuf && h.ram == RamStyle::HyperXFury && !h.slotsKnown && h.sticks == 3);
+    info.boardName = "B450M DS3H";
+    CHECK(DetectSetup(info).board == BoardStyle::Generic);
+    CHECK(DetectSetup(luma::app::sensors::SmbiosInfo{}).sticks == 0);
+    const auto g = GuessSlots(2);
+    CHECK(!g[0] && g[1] && !g[2] && g[3]);
+}
+
 static void TestHyperXRam() {
     using namespace luma::app::ram;
     std::array<luma::Rgb, kMaxLeds> colors{};
@@ -1037,6 +1073,7 @@ int main() {
     TestAzoth();
     TestLogitechHidpp();
     TestDeviceLighting();
+    TestSetupHardware();
     TestHyperXRam();
     TestHwSensors();
     TestIpc();
