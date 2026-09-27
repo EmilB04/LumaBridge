@@ -28,6 +28,7 @@
 #include "screen_capture.h"
 #include "system_monitor.h"
 #include "logitech_output.h"
+#include "azoth_output.h"
 #include "gamesense_server.h"
 #include "ipc.h"
 #include "source_tracker.h"
@@ -122,6 +123,10 @@ public:
     // Why LumaBridge isn't lighting Logitech devices right now ("" when it is).
     const std::string& logitechNote() const { return logitechNote_; }
 
+    // ASUS ROG Azoth over USB (wired).
+    const AzothOutput& azoth() const { return azoth_; }
+    void SetAzothEnabled(bool on);
+
     // Dashboard data (CPU, GPU, memory, sensors, component names).
     sensors::SystemMonitor& monitor() { return monitor_; }
 
@@ -169,6 +174,7 @@ private:
     ScreenCapture screen_;
     sensors::SystemMonitor monitor_;
     LogitechOutput logitech_;
+    AzothOutput azoth_;
     std::string logitechNote_;
     void UpdateLogitech();
     bool feedActive_[3] = {};

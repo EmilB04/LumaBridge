@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(LumaBridge LANGUAGES CXX VERSION 0.3.7)
+project(LumaBridge LANGUAGES CXX VERSION 0.3.8)
 
 if(NOT WIN32)
     message(STATUS "Non-Windows host: only the portable core tests will be built.")
@@ -29,7 +29,7 @@ endif()
 enable_testing()
 add_executable(test_core tests/test_core.cpp)
 target_include_directories(test_core PRIVATE
-    src/core src/integrations/razer src/integrations/corsair src/integrations/alienware src/integrations/steelseries src/app src/app/games src/app/sensors src/hardware/aura-usb)
+    src/core src/integrations/razer src/integrations/corsair src/integrations/alienware src/integrations/steelseries src/app src/app/games src/app/sensors src/app/peripherals src/hardware/aura-usb)
 add_test(NAME test_core COMMAND test_core)
 
 if(NOT WIN32)
@@ -145,13 +145,14 @@ if(LUMA_ARCH STREQUAL "x64")
         src/app/screen_capture.cpp
         src/app/sensors/system_monitor.cpp
         src/app/peripherals/logitech_output.cpp
+        src/app/peripherals/azoth_output.cpp
         src/integrations/logitech/real_logiled.cpp
         src/app/res/app.rc)
     target_include_directories(lumabridge_app PRIVATE src/app src/app/games src/app/sensors src/app/peripherals
         src/integrations/logitech)
     target_compile_definitions(lumabridge_app PRIVATE LUMA_VERSION="${PROJECT_VERSION}")
     target_link_libraries(lumabridge_app PRIVATE imgui aura_bridge gamesense luma_common shell32 ole32 advapi32 dbghelp psapi version
-                          winhttp ws2_32 d3d11 dxgi)
+                          winhttp ws2_32 d3d11 dxgi hid setupapi)
     set_target_properties(lumabridge_app PROPERTIES OUTPUT_NAME "LumaBridge")
     if(MSVC)
         target_link_options(lumabridge_app PRIVATE /MANIFEST:NO)  # app.rc embeds our manifest

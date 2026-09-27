@@ -25,6 +25,7 @@
 #include "smbios.h"
 #include "lhm.h"
 #include "friendly_names.h"
+#include "azoth_protocol.h"
 #include "lightfx_state.h"
 
 using namespace luma;
@@ -728,6 +729,20 @@ static void TestFriendlyNames() {
     CHECK(FriendlyGpu("NVIDIA GeForce RTX 3080") == "NVIDIA GeForce RTX 3080");
 }
 
+static void TestAzoth() {
+    using namespace luma::app::azoth;
+    // Byte-for-byte what Armoury Crate sent for red (FF 00 2C) at 100 % brightness.
+    const Report r = StaticColor(luma::Rgb{0xFF, 0x00, 0x2C});
+    const uint8_t expected[] = {0x00, 0x51, 0x2C, 0x00, 0x00, 0xFF, 0x64, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0x2C};
+    CHECK(std::memcmp(r.data(), expected, sizeof expected) == 0);
+    for (size_t i = sizeof expected; i < r.size(); ++i) CHECK(r[i] == 0);
+    CHECK(!IsSave(r));
+    Report save{};
+    save[1] = 0x50;
+    save[2] = 0x55;
+    CHECK(IsSave(save));
+}
+
 static void TestIpc() {
     using namespace luma::ipc;
     Frame f = MakeFrame(FrameKind::Color, 42, 1, 2, 3, "A very long source name that must be truncated");
@@ -766,6 +781,7 @@ int main() {
     TestSmbios();
     TestLhm();
     TestFriendlyNames();
+    TestAzoth();
     TestIpc();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

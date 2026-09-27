@@ -56,6 +56,8 @@ struct Prefs {
     int lhmPort = 8085;  // LibreHardwareMonitor's web server
     // Light Logitech devices (G HUB) along with Aura.
     bool logitechDevices = true;
+    // Light the ROG Azoth over its cable (experimental, opt-in).
+    bool azothKeyboard = false;
     static constexpr size_t kMaxRecent = 8;
 };
 

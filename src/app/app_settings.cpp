@@ -124,6 +124,7 @@ Prefs LoadPrefs(const std::wstring& ini) {
             pos = comma + 1;
         }
     }
+    p.azothKeyboard = Read(ini, L"App", L"AzothKeyboard") == L"1";
     v = Read(ini, L"App", L"LogitechDevices");
     if (!v.empty()) p.logitechDevices = v != L"0";
     v = Read(ini, L"Dashboard", L"LhmPort");
@@ -174,6 +175,7 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"Dashboard", Widen(dash.empty() ? "-" : dash));  // "-": all hidden
     WriteConfigValue(ini, L"Dashboard", L"LhmPort", Num(p.lhmPort));
     WriteConfigValue(ini, L"App", L"LogitechDevices", p.logitechDevices ? L"1" : L"0");
+    WriteConfigValue(ini, L"App", L"AzothKeyboard", p.azothKeyboard ? L"1" : L"0");
 
     WriteConfigValue(ini, L"Color", L"Brightness", Num(cfg.auraCorrection.brightness * 100.0));
     WriteConfigValue(ini, L"Color", L"GainR", Num(cfg.auraCorrection.gainR * 100.0));

@@ -695,6 +695,16 @@ void WDevices(DashCtx& c) {
         ImGui::SameLine();
         Muted("%s", active ? "via G HUB" : "G HUB has them");
     }
+    if (c.ctl.prefs().azothKeyboard) {
+        const auto st = c.ctl.azoth().state();
+        IconItem(Icon::Keyboard, 18 * S(), st == AzothOutput::State::Active ? Hex(kAccent) : Hex(kMuted));
+        ImGui::SameLine();
+        ImGui::TextUnformatted("ASUS ROG Azoth");
+        ImGui::SameLine();
+        Muted("%s", st == AzothOutput::State::Active     ? "wired"
+                    : st == AzothOutput::State::NotFound ? "not connected by cable"
+                                                         : "Armoury Crate's lighting");
+    }
 }
 
 void EnsureIntegrations(Controller& ctl, Integrations& in, UiState& ui) {
@@ -1183,24 +1193,35 @@ void PeripheralsCard(Controller& ctl, const Fonts& f) {
 
     ImGui::Dummy(ImVec2(0, 6 * S()));
 
-    // ASUS ROG keyboards (Azoth): needs its protocol mapped first.
-    IconItem(Icon::Keyboard, 20 * S(), Hex(kMuted));
+    // ASUS ROG Azoth, wired.
+    const auto& az = ctl.azoth();
+    using A_ = AzothOutput::State;
+    const A_ as = az.state();
+    const bool azOn = ctl.prefs().azothKeyboard;
+    IconItem(Icon::Keyboard, 20 * S(), azOn && as == A_::Active ? Hex(kAccent) : Hex(kMuted));
     ImGui::SameLine();
     ImGui::BeginGroup();
     ImGui::PushFont(f.bold);
-    ImGui::TextUnformatted("ASUS ROG keyboard (Azoth)");
+    ImGui::TextUnformatted("ASUS ROG Azoth");
     ImGui::PopFont();
     ImGui::SameLine();
-    Pill("Not yet", kAmber);
-    Muted("ASUS's Aura SDK crashes on the Azoth, so LumaBridge will talk to it over USB like the motherboard. "
-          "First step: the read-only device probe lists its USB interfaces (it sends nothing to the keyboard). "
-          "Send its output to get keyboard lighting in the next version.");
-    if (ImGui::Button("Run the device probe")) {
+    if (!azOn) Pill("Off", kMuted);
+    else if (as == A_::Active) Pill("Following LumaBridge", kGreen);
+    else if (as == A_::NotFound) Pill("Not connected by cable", kAmber);
+    else Pill("Armoury Crate's lighting", kMuted);
+    ImGui::SameLine();
+    Pill("Experimental", kAccent);
+    Muted("The whole keyboard shows LumaBridge's color, over the USB cable (wireless comes later). LumaBridge "
+          "sends the same color command Armoury Crate does, but never its save command, so your saved "
+          "Armoury Crate lighting stays in the keyboard. When LumaBridge lets go, the keyboard keeps the last "
+          "color until it's unplugged or Armoury Crate sets it again.");
+    bool azEnabled = azOn;
+    if (ImGui::Checkbox("Light the ROG Azoth (wired)", &azEnabled)) ctl.SetAzothEnabled(azEnabled);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Run the device probe")) {
         const std::wstring exe = AppDirectory() + L"\\tools\\device-probe.exe";
         ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
-    ImGui::SameLine();
-    Muted("Saves %%LOCALAPPDATA%%\\LumaBridge\\device-probe.txt");
     ImGui::EndGroup();
     EndCard();
 }
