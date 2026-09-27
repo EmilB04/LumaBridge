@@ -311,10 +311,14 @@ void Controller::Apply(const Output& out) {
             LUMA_INFO("no longer controlling the lights - handing back to Armoury Crate");
             mirror_.Stop();
             // After a crash-loop pause LumaBridge never took the lights, so nothing to hand back.
-            if (!auraPaused_) HandBackLighting();
+            if (!auraPaused_) {
+                HandBackLighting();
+                handbackDoneAt_ = GetTickCount64() + kHandbackMs;
+            }
         }
         return;
     }
+    handbackDoneAt_ = 0;  // LumaBridge has the lights again
     if (!mirror_.IsRunning()) {
         Config c = cfg_;
         c.releaseControlOnShutdown = true;
@@ -322,6 +326,11 @@ void Controller::Apply(const Output& out) {
         mirrorHz_ = c.maxUpdateHz;
     }
     mirror_.SetPattern(out.fx, cfg_.argbFans, out.fanTest);
+}
+
+uint64_t Controller::handbackMsLeft() const {
+    const uint64_t now = GetTickCount64();
+    return handbackDoneAt_ > now ? handbackDoneAt_ - now : 0;
 }
 
 void Controller::Tick() {

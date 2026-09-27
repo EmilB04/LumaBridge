@@ -619,6 +619,27 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
     FansCard(ctl, f);
 }
 
+// Shown on every page while Armoury Crate is taking the lights back: restarting the
+// controller takes a few seconds, and nothing visible happens until it's done.
+void HandbackBanner(const Controller& ctl, const Fonts& f) {
+    const uint64_t left = ctl.handbackMsLeft();
+    if (!left) return;
+    BeginCard("handback");
+    const int seconds = static_cast<int>((left + 999) / 1000);
+    ImGui::PushFont(f.bold);
+    ImGui::Text("Handing the lights back to Armoury Crate... %d s", seconds);
+    ImGui::PopFont();
+    Muted("The lighting controller restarts and loads Armoury Crate's effect. The lights keep their "
+          "current color until then.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    const float done = 1.f - static_cast<float>(left) / static_cast<float>(Controller::kHandbackMs);
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, V4(kAmber));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, V4(kCardHover));
+    ImGui::ProgressBar(done, ImVec2(-1, 6 * S()), "");
+    ImGui::PopStyleColor(2);
+    EndCard();
+}
+
 // ---- Games List ------------------------------------------------------------------------
 
 std::string ToUtf8(const std::wstring& w) { return Utf8(w); }
@@ -890,7 +911,6 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
         if (PrimaryButton("Resume lighting control")) ctl.ResumeAura();
     } else if (ImGui::Button("Stop controlling the lights")) {
         ctl.StopLighting();
-        ui.handbackDoneMs = GetTickCount64() + 5000;
     }
     EndCard();
 
@@ -955,7 +975,10 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width) {
     ImGui::TextUnformatted(ctl.prefs().mode == Mode::Auto ? "Auto" : "Manual");
     ImGui::PopFont();
     ImGui::PushFont(f.caption);
-    Muted("%s", out.label.c_str());
+    if (const uint64_t left = ctl.handbackMsLeft())
+        Muted("Handing back to Armoury Crate... %d s", static_cast<int>((left + 999) / 1000));
+    else
+        Muted("%s", out.label.c_str());
     ImGui::PopFont();
 
     ImGui::EndChild();
@@ -1045,16 +1068,16 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
     }
     ImGui::Dummy(ImVec2(0, 8 * S()));
 
+    HandbackBanner(ctl, f);
+
     if (ctl.auraPaused()) {
         BeginCard("paused");
         const bool byUser = ctl.pause() == Controller::Pause::ByUser;
         Pill(byUser ? "Not controlling the lights" : "Lighting control paused", kAmber);
         ImGui::Dummy(ImVec2(0, 2 * S()));
-        const unsigned long long now = GetTickCount64();
-        if (byUser && ui.handbackDoneMs > now) {
-            const int secondsLeft = static_cast<int>((ui.handbackDoneMs - now + 999) / 1000);
-            Muted(("Handing back to Armoury Crate... " + std::to_string(secondsLeft) + "s").c_str());
-        } else if (byUser)
+        if (byUser && ctl.handbackMsLeft() > 0)
+            Muted("Handing back to Armoury Crate - see the countdown above.");
+        else if (byUser)
             Muted("You stopped LumaBridge's lighting and handed it back to Armoury Crate.");
         else
             Muted("LumaBridge closed unexpectedly the last time it controlled your lights, so it is "

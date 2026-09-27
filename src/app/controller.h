@@ -73,6 +73,10 @@ public:
     bool auraPaused() const { return pause() != Pause::None; }
     void ResumeAura();
     void StopLighting();
+    // While Armoury Crate is taking the lights back (the controller restarts, ~5 s): the
+    // time left, else 0. Also the total, for a progress bar.
+    uint64_t handbackMsLeft() const;
+    static constexpr uint64_t kHandbackMs = 5000;
     // Re-lists devices: through the running mirror, or with a read-only probe when
     // LumaBridge isn't controlling the lights (so Armoury Crate keeps them).
     void RescanDevices();
@@ -123,6 +127,7 @@ private:
     int mirrorHz_ = 0;
     bool auraPaused_ = false;
     bool fanTest_ = false;
+    uint64_t handbackDoneAt_ = 0;  // GetTickCount64() when the current hand-back should be done
     bool shutDown_ = false;
     Output output_;
     bool outputApplied_ = false;

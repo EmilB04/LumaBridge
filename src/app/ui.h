@@ -31,9 +31,6 @@ struct UiState {
     bool integrationsLoaded = false;
     bool autostart = false;
     bool autostartLoaded = false;
-    // GetTickCount64() when the hand-back to Armoury Crate finishes activating (restarting
-    // the controller takes a few seconds); 0 when no hand-back is in progress.
-    unsigned long long handbackDoneMs = 0;
 };
 
 // Applies the LumaBridge theme at the given DPI scale (call again when DPI changes).
