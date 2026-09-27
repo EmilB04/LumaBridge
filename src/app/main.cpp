@@ -333,7 +333,12 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_QUERYENDSESSION:
         return TRUE;
     case WM_ENDSESSION:
-        if (wp) PostQuitMessage(0);
+        // Windows ends the process right after this returns, so record the clean exit (and
+        // hand back the lights) now; otherwise the next start would think LumaBridge crashed.
+        if (wp) {
+            g_ctl.Shutdown();
+            PostQuitMessage(0);
+        }
         return 0;
     case WM_DESTROY:
         PostQuitMessage(0);

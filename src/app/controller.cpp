@@ -46,6 +46,8 @@ void Controller::ResumeAura() {
 }
 
 void Controller::Shutdown() {
+    if (shutDown_) return;
+    shutDown_ = true;
     if (dirty_) SaveAll(iniPath_, prefs_, cfg_);
     gameSense_.Stop();
     mirror_.Stop();  // hands Aura back to Armoury Crate

@@ -16,8 +16,8 @@ namespace {
 constexpr uint64_t kReconnectDelayMs = 5000;
 constexpr DWORD kIdleWaitMs = 1000;
 constexpr uint64_t kAppKeepAliveMs = 1000;  // resend the current color so the app knows we're alive
-// Re-send the current frame this often even when nothing changed, so ASUS's lighting service
-// can't quietly overwrite it.
+// Re-send the current frame this often even when nothing changed, so a color overwritten by
+// ASUS's lighting service comes back within a second.
 constexpr uint64_t kHardwareRefreshMs = 1000;
 constexpr UINT kSendTimeoutMs = 200;
 

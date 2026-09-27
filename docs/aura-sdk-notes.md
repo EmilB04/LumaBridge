@@ -12,8 +12,10 @@ ROG STRIX B550-F (USB `0B05:1939`, firmware `AULA3-AR42-0222`):
   channel to direct mode (`EC 35 <ch> 00 00 FF`), then paint direct channels
   (`EC 40 ...`). Direct channel **0** is the ARGB header (fans through a passive hub) and
   **4** is the board's own LEDs.
-- LumaBridge re-sends the current frame every second and re-asserts direct mode every
-  2 s, so ASUS's lighting service can't quietly take the lights back.
+- LumaBridge enters direct mode once per connection and then re-sends the current frame
+  every second, so a color overwritten by ASUS's lighting service comes back quickly.
+  Re-sending the *mode* command periodically blanked the LEDs for an instant (a visible
+  flicker every 2 s on a B550-F), so it isn't repeated.
 - Nothing is ever written to the controller's flash.
 - **Handing back:** the controller has no "give control back" command, and restarting
   ASUS's lighting service does not restore Armoury Crate's effect. The lights keep the last

@@ -32,7 +32,7 @@ private:
     std::vector<UsbChannel> channels_;
     std::vector<bool> selected_;
     std::vector<AuraDeviceInfo> infos_;
-    uint64_t lastDirectModeAt_ = 0;
+    bool directMode_ = false;
 };
 
 }  // namespace luma::aurausb

@@ -40,7 +40,7 @@ public:
     };
 
     bool Init();
-    void Shutdown();
+    void Shutdown();  // idempotent
 
     void OnIpc(const ipc::Frame& f);
     void Tick();  // call every ~50 ms
@@ -83,6 +83,7 @@ private:
 
     int mirrorHz_ = 0;
     bool auraPaused_ = false;
+    bool shutDown_ = false;
     Output output_;
     bool outputApplied_ = false;
     bool dirty_ = false;

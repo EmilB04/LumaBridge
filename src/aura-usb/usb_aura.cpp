@@ -7,9 +7,6 @@
 namespace luma::aurausb {
 namespace {
 
-// ASUS's lighting service can switch channels back to its own effect; re-assert direct mode
-// this often while LumaBridge is in control.
-constexpr uint64_t kDirectModeRefreshMs = 2000;
 
 std::string Narrow(const std::wstring& w) {
     std::string s;
@@ -47,7 +44,7 @@ bool UsbAura::Connect() {
                   cfg.ArgbHeaders(), cfg.MainboardLeds());
         for (const auto& c : channels_)
             LUMA_INFO("Aura USB:   \"%s\" direct channel %d, %d LEDs", Narrow(c.name).c_str(), c.directChannel, c.leds);
-        lastDirectModeAt_ = 0;
+        directMode_ = false;
         return true;
     }
     LUMA_WARN("Aura USB: no Aura motherboard controller found");
@@ -77,13 +74,16 @@ void UsbAura::SetSelected(size_t index, bool selected) {
 bool UsbAura::EnterDirectMode() {
     for (uint8_t ch = 0; ch < kEffectChannels; ++ch)
         if (!dev_.Write(SetModeRequest(ch, kModeDirect))) return false;
-    lastDirectModeAt_ = GetTickCount64();
+    directMode_ = true;
     return true;
 }
 
 bool UsbAura::SetAll(uint32_t auraColor) {
     if (!dev_.IsOpen()) return false;
-    if (GetTickCount64() - lastDirectModeAt_ >= kDirectModeRefreshMs && !EnterDirectMode()) {
+    // Direct mode is entered once per connection: re-sending the mode command blanks the
+    // LEDs for an instant, which showed as a flicker every couple of seconds on a B550-F.
+    // Frames themselves are re-sent regularly by the caller.
+    if (!directMode_ && !EnterDirectMode()) {
         LUMA_WARN("Aura USB: write failed (controller unplugged?)");
         return false;
     }
