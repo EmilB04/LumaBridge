@@ -92,6 +92,29 @@ LONG WINAPI OnCrash(EXCEPTION_POINTERS* ep) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+// First-chance logging of fatal-looking exceptions. Unlike SetUnhandledExceptionFilter this
+// can't be replaced by a DLL we load (the Aura SDK), so a crash inside Aura leaves a trace.
+LONG CALLBACK OnFirstChance(EXCEPTION_POINTERS* ep) {
+    static volatile LONG logged = 0;
+    const DWORD code = ep->ExceptionRecord->ExceptionCode;
+    const bool fatalLooking = code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_STACK_OVERFLOW ||
+                              code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
+                              code == EXCEPTION_PRIV_INSTRUCTION || code == 0xC0000374 /* heap corruption */ ||
+                              code == 0xC0000409 /* stack buffer overrun / fail fast */;
+    if (!fatalLooking || InterlockedIncrement(&logged) > 20) return EXCEPTION_CONTINUE_SEARCH;
+    HMODULE mod = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(ep->ExceptionRecord->ExceptionAddress), &mod);
+    char modPath[MAX_PATH] = "?";
+    if (mod) GetModuleFileNameA(mod, modPath, MAX_PATH);
+    LUMA_WARN("first-chance exception 0x%08lX at %p in %s (+0x%llX), thread %lu", static_cast<unsigned long>(code),
+              ep->ExceptionRecord->ExceptionAddress, modPath,
+              static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress) -
+                                              reinterpret_cast<uintptr_t>(mod)),
+              GetCurrentThreadId());
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 void OnAbort(int) {
     LUMA_ERROR("CRASH: abort() called (thread %lu)", GetCurrentThreadId());
 }
@@ -348,6 +371,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     }
 
     SetUnhandledExceptionFilter(OnCrash);
+    AddVectoredExceptionHandler(1, OnFirstChance);
     std::signal(SIGABRT, OnAbort);
     std::set_terminate([] {
         LUMA_ERROR("CRASH: std::terminate (unhandled C++ exception?), thread %lu", GetCurrentThreadId());

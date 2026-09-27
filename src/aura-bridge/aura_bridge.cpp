@@ -138,6 +138,34 @@ std::string Narrow(const std::wstring& w) {
     return s;
 }
 
+// Logs how aura.sdk.1 is registered: in-process DLL or local server, its path and threading
+// model, in both registry views. Crashes inside the SDK are otherwise invisible.
+void LogRegistration(const CLSID& clsid) {
+    wchar_t guid[64] = {};
+    StringFromGUID2(clsid, guid, 64);
+    LUMA_INFO("Aura: aura.sdk.1 = %s", Narrow(guid).c_str());
+    const struct {
+        REGSAM view;
+        const char* name;
+    } views[] = {{KEY_WOW64_64KEY, "64-bit"}, {KEY_WOW64_32KEY, "32-bit"}};
+    for (const auto& v : views) {
+        for (const wchar_t* sub : {L"InprocServer32", L"LocalServer32"}) {
+            std::wstring path = std::wstring(L"CLSID\\") + guid + L"\\" + sub;
+            HKEY key;
+            if (RegOpenKeyExW(HKEY_CLASSES_ROOT, path.c_str(), 0, KEY_READ | v.view, &key) != ERROR_SUCCESS)
+                continue;
+            wchar_t val[MAX_PATH * 2] = {}, model[64] = {};
+            DWORD size = sizeof(val) - sizeof(wchar_t);
+            RegQueryValueExW(key, nullptr, nullptr, nullptr, reinterpret_cast<BYTE*>(val), &size);
+            size = sizeof(model) - sizeof(wchar_t);
+            RegQueryValueExW(key, L"ThreadingModel", nullptr, nullptr, reinterpret_cast<BYTE*>(model), &size);
+            RegCloseKey(key);
+            LUMA_INFO("Aura:   %s %s = %s%s%s", v.name, Narrow(sub).c_str(), Narrow(val).c_str(),
+                      model[0] ? "  ThreadingModel=" : "", Narrow(model).c_str());
+        }
+    }
+}
+
 struct Device {
     AuraDeviceInfo info;
     Disp device;
@@ -196,6 +224,7 @@ bool AuraBridge::Connect(const DeviceFilter& filter) {
                   static_cast<unsigned long>(hr));
         return false;
     }
+    LogRegistration(clsid);
     LUMA_INFO("Aura: creating SDK object");
     hr = CoCreateInstance(clsid, nullptr, CLSCTX_ALL, IID_IDispatch,
                           reinterpret_cast<void**>(impl_->sdk.out()));
@@ -213,7 +242,7 @@ bool AuraBridge::Connect(const DeviceFilter& filter) {
         return false;
     }
 
-    LUMA_INFO("Aura: enumerating devices");
+    LUMA_INFO("Aura: enumerating devices (Enumerate(0))");
     Disp collection;
     hr = GetDispObject(impl_->sdk.get(), L"Enumerate", {MakeUI4(0)}, &collection);  // 0 = all types
     if (FAILED(hr)) {
@@ -222,6 +251,7 @@ bool AuraBridge::Connect(const DeviceFilter& filter) {
         return false;
     }
 
+    LUMA_INFO("Aura: Enumerate returned, reading Count");
     long count = 0;
     GetLong(collection.get(), L"Count", &count);
     LUMA_INFO("Aura: %ld device(s) enumerated", count);
