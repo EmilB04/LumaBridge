@@ -39,6 +39,27 @@ What `ghub-probe` found (G HUB with a G502 X Plus over LIGHTSPEED):
   Lighting. The G502 X Plus shows up there, but Windows only offers it one color at a time,
   with no effects, so that route is one color too.
 
+### G502 X Plus over HID++ (what G HUB sends)
+
+A USB capture of G HUB changing the mouse's effects (through its LIGHTSPEED receiver
+`046D:C547`) shows standard Logitech HID++ 2.0 long reports to device index 1:
+`11 01 <feature index> <function << 4 | software ID> <parameters>`. On this mouse and
+firmware the RGB effects feature (`0x8071`) is at index `09`. G HUB set every effect with its
+function 1, SetRgbClusterEffect: `<cluster> <effect index> <10 parameters> <01>`.
+
+| Cluster | Effect | Parameters | G HUB |
+|---|---|---|---|
+| `00` | `01` | `R G B 02 00…` | Fixed |
+| `00` | `02` | `R G B <period ms, big-endian> 00 <intensity 0-100> 00 00 00` | Breathing |
+| `00` | `03` | `00 00 00 00 00 <period ms, big-endian> <intensity> 00 00` | Cycle |
+| `FF` | `00` | `00 ×6 <period low byte> 01 <intensity> <period high byte>` | Color wave |
+| `FF` | `02` | `00 ×6 <20–24> 64 00 00` | not identified yet |
+
+Examples of color wave periods: 5000 ms (`88 … 13`), 9400 ms (`B8 … 24`) and 5500 ms
+(`7C … 15`), plus intensity `53` (83 %). After each effect G HUB also sent `10 01 08 2B 00 01 00`
+(feature index 8, function 2). `tools\hidpp-probe.exe` lists a mouse's HID++ features and
+its effects; `--test` plays wave, breathing, cycle and fixed without saving them.
+
 ## ASUS ROG Azoth (wired or wireless, experimental)
 
 Captured from Armoury Crate with USBPcap on a wired Azoth (USB `0B05:1A83`, firmware
