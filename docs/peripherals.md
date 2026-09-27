@@ -72,6 +72,14 @@ names any other zone is refused whole. Mapped with `hidpp-probe --map`, the zone
 strip are `3 4 8 7 6 5 2 1`: the six LEDs along the bottom from the thumb side, then the
 two up the right side. Zone 0 lights nothing.
 
+**A game's lighting can't be read back from the mouse.** `hidpp-probe --listen` logs every
+report the mouse sends (Windows gives each program that has its HID++ collection open a
+copy). During a Battlefield 2042 session, G HUB lit the mouse with per-key range writes
+(`0x8081` function 5, then function 7 to end the frame) and `0x8071` function 1, but the
+mouse only acknowledges them (`01` or `00`) and never repeats the colors. Neither feature
+can report the colors currently shown. So a game's LIGHTSYNC on the mouse can't be copied to
+other devices this way.
+
 **In LumaBridge:** for breathing, color cycle and the rainbow wave (the full, vivid rainbow),
 LumaBridge finds the mouse over HID++ and sets its own effect, with the period taken from
 the effect's speed (1–20 s). It finds the effects in cluster 0 by their IDs; the whole-mouse
