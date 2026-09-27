@@ -1,4 +1,4 @@
-# Keyboards and mice
+# Keyboards, mice and RAM
 
 ## Logitech (G502 X Plus and other Logitech RGB gear)
 
@@ -46,3 +46,43 @@ Not yet:
   would let LumaBridge read and restore the saved color.
 
 `tools\device-probe.exe` lists the HID interfaces of ASUS and Logitech devices (read-only).
+
+## RAM: HyperX / Kingston FURY RGB DDR4 (experimental)
+
+The sticks' lighting controller answers at SMBus address `0x27` (one controller for all
+sticks, 5 LEDs each). The protocol is the one OpenRGB documents
+(`Controllers/HyperXDRAMController`); LumaBridge's own code for it is
+[`src/app/peripherals/hyperx_ram.h`](../src/app/peripherals/hyperx_ram.h):
+
+| Register | Meaning |
+|---|---|
+| `E1 = 01` | Start an update |
+| `E5 = 21` | Direct mode (each LED its own color) |
+| `base + 3*led + 0/1/2` | Red / green / blue of an LED. `base` = `0x11`, `0x41`, `0x71`, `0xA1` for SPD slots 0-3 |
+| `base + 0x10 + 3*led` | Brightness of an LED, 0-100 (LumaBridge sends 100 and dims the color itself) |
+| `E1 = 02`, `E1 = 03` | Apply |
+
+**How it runs.** Only administrators can reach the SMBus, through the signed
+[PawnIO](https://pawnio.eu) driver and its `SmbusPIIX4` module (AMD chipsets). So the app
+(running as you) doesn't touch it; `LumaBridge-RAM.exe` does, as a scheduled task that runs
+as SYSTEM. `scripts/Install-RamTask.ps1` sets it up once (Devices → Memory → Set up the
+helper): it copies the helper and `SmbusPIIX4.bin` into `%ProgramFiles%\LumaBridge` (so
+nobody without administrator rights can swap the file the task runs), registers the task and
+lets your account start it. The app starts the helper when it lights the RAM, renders its
+effect across each stick's 5 LEDs and passes the colors through shared memory
+(`Global\LumaBridgeRam`). The helper exits when the app exits.
+
+**Safety.**
+- Finding the sticks only reads: "receive byte" from `0x27` and from the SPD chips
+  `0x50`-`0x53`, and the memory-type byte (DDR4 = `0x0C`) of each SPD. The firmware's
+  memory list must name Kingston / HyperX.
+- Writes go only to `0x27`, and only to the registers above: every write passes
+  `ram::IsAllowed()` (tested), whatever the app asks. The SPD chips are never written.
+- Each frame holds the system-wide SMBus lock (`Access_SMBUS.HTP.Method`) that Armoury
+  Crate, HWiNFO and others use.
+- After 5 failed frames in a row the helper stops. Log: `%ProgramData%\LumaBridge\ram.log`.
+
+**Not yet:** Intel chipsets (PawnIO's `SmbusI801` module), Kingston FURY DDR5 (a different
+controller) and handing the RAM back to Armoury Crate (the sticks keep the last color until
+Armoury Crate sets them again or the PC restarts). If the sticks flicker, Armoury Crate is
+lighting them too: switch the RAM off in Armoury Crate.

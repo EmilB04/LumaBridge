@@ -74,6 +74,8 @@ private:
 // Version of the hand-back task Install-HandbackTask.ps1 registers (it records it in
 // HKLM\SOFTWARE\LumaBridge\HandbackTaskVersion); an older task needs setting up again.
 constexpr DWORD kHandbackTaskVersion = 6;
+// Same for the RAM helper (Install-RamTask.ps1, HKLM\SOFTWARE\LumaBridge\RamTaskVersion).
+constexpr DWORD kRamTaskVersion = 1;
 
 std::wstring AppDirectory();
 // Folder picker; empty when cancelled.

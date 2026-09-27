@@ -39,8 +39,8 @@ ROG STRIX B550-F (USB `0B05:1939`, firmware `AULA3-AR42-0222`):
   (lighting priority) above its own "Aura Sync". Programs that crashed while holding SDK
   control left Aura Sync in standby and its services hung until a reboot. LumaBridge's
   app no longer uses the SDK.
-- RAM (e.g. HyperX Fury) sits on SMBus, not USB, and would need a kernel driver, so it
-  isn't supported.
+- RAM (e.g. HyperX Fury) sits on SMBus, not USB, and needs a kernel driver: LumaBridge
+  reaches it through PawnIO and an elevated helper (see [peripherals.md](peripherals.md)).
 
 `aura-usb-test.exe` and `Run-HardwareTest.ps1` probe all of this on a new board.
 

@@ -29,6 +29,7 @@
 #include "system_monitor.h"
 #include "logitech_output.h"
 #include "azoth_output.h"
+#include "ram_output.h"
 #include "gamesense_server.h"
 #include "ipc.h"
 #include "source_tracker.h"
@@ -129,6 +130,9 @@ public:
     // ASUS ROG Azoth over USB (wired).
     const AzothOutput& azoth() const { return azoth_; }
     void SetAzothEnabled(bool on);
+    // HyperX / Kingston FURY RGB memory, through the elevated RAM helper.
+    const RamOutput& ram() const { return ram_; }
+    void SetRamEnabled(bool on);
 
     // Dashboard data (CPU, GPU, memory, sensors, component names).
     sensors::SystemMonitor& monitor() { return monitor_; }
@@ -179,6 +183,7 @@ private:
     sensors::SystemMonitor monitor_;
     LogitechOutput logitech_;
     AzothOutput azoth_;
+    RamOutput ram_;
     std::string logitechNote_;
     void UpdateLogitech();
     bool feedActive_[3] = {};

@@ -785,6 +785,18 @@ void WDevices(DashCtx& c) {
         ImGui::SameLine();
         Muted("%s", active ? "via G HUB" : "G HUB has them");
     }
+    if (c.ctl.prefs().ramLighting) {
+        const auto st = c.ctl.ram().state();
+        IconItem(Icon::Memory, 18 * S(), st == RamOutput::State::Active ? Hex(kAccent) : Hex(kMuted));
+        ImGui::SameLine();
+        ImGui::TextUnformatted("RAM");
+        ImGui::SameLine();
+        Muted("%s", st == RamOutput::State::Active     ? "HyperX / Kingston FURY"
+                    : st == RamOutput::State::Problem  ? "can't light it (Devices)"
+                    : st == RamOutput::State::NotSetUp ? "not set up (Devices)"
+                    : st == RamOutput::State::Released ? "Armoury Crate's lighting"
+                                                       : "starting...");
+    }
     if (c.ctl.prefs().azothKeyboard) {
         const auto st = c.ctl.azoth().state();
         IconItem(Icon::Keyboard, 18 * S(), st == AzothOutput::State::Active ? Hex(kAccent) : Hex(kMuted));
@@ -1604,7 +1616,88 @@ void PeripheralsCard(Controller& ctl, const Fonts& f) {
     EndCard();
 }
 
-void DevicesPage(Controller& ctl, const Fonts& f) {
+void MemoryCard(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
+    EnsureIntegrations(ctl, in, ui);
+    const Integration* setup = nullptr;
+    for (const auto& it : in.list())
+        if (it.id == "ram") setup = &it;
+    const bool setUp = setup && setup->state == IntegrationState::Active;
+    const auto& ram = ctl.ram();
+    using R = RamOutput::State;
+    const R st = ram.state();
+    const bool on = ctl.prefs().ramLighting;
+
+    BeginCard("memory");
+    IconItem(Icon::Memory, 18 * S(), Hex(on && st == R::Active ? kAccent : kMuted));
+    ImGui::SameLine(0, 10 * S());
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted("Memory (RAM)");
+    ImGui::PopFont();
+    ImGui::SameLine(0, 12 * S());
+    if (!on) Pill("Off", kMuted);
+    else if (st == R::Active) {
+        char b[48];
+        snprintf(b, sizeof b, "Following LumaBridge (%d stick%s)", ram.sticks(), ram.sticks() == 1 ? "" : "s");
+        Pill(b, kGreen);
+    } else if (st == R::Problem) Pill("Can't light the RAM", kRed);
+    else if (st == R::NotSetUp || !setUp) Pill("Not set up", kAmber);
+    else if (st == R::Released) Pill("Armoury Crate's lighting", kMuted);
+    else Pill("Starting...", kAmber);
+    ImGui::SameLine();
+    Pill("Experimental", kAccent);
+    Muted("HyperX / Kingston FURY RGB DDR4 sticks show LumaBridge's effect across their five LEDs. RAM lighting "
+          "sits on the motherboard's SMBus, which only a helper with administrator rights can reach (through the "
+          "signed PawnIO driver, AMD chipsets). LumaBridge only ever writes the sticks' lighting registers, never "
+          "their configuration chip. If the sticks flicker, Armoury Crate is lighting them too: switch the RAM "
+          "off in Armoury Crate.");
+    if (on && st == R::Problem) {
+        ImGui::PushStyleColor(ImGuiCol_Text, V4(kRed));
+        ImGui::TextWrapped("%s", ram.problem().c_str());
+        ImGui::PopStyleColor();
+    }
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    if (!setUp) {
+        ImGui::TextUnformatted("Set up once:");
+        Muted("1. Install the PawnIO driver.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("pawnio.eu"))
+            ShellExecuteW(nullptr, L"open", L"https://pawnio.eu", nullptr, nullptr, SW_SHOWNORMAL);
+        Muted("2. Download SmbusPIIX4.bin from the PawnIO.Modules releases and put it next to LumaBridge.exe.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Releases"))
+            ShellExecuteW(nullptr, L"open", L"https://github.com/namazso/PawnIO.Modules/releases", nullptr, nullptr,
+                          SW_SHOWNORMAL);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Open LumaBridge's folder"))
+            ShellExecuteW(nullptr, L"open", AppDirectory().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        Muted("3. Set up the helper (asks for administrator approval once).");
+        ImGui::BeginDisabled(in.Busy());
+        if (PrimaryButton(setup && setup->state == IntegrationState::Problem ? "Update the helper" : "Set up the helper"))
+            in.Install("ram");
+        ImGui::EndDisabled();
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+    }
+    bool enabled = on;
+    if (Toggle("Light the RAM", &enabled)) ctl.SetRamEnabled(enabled);
+    if (setUp) {
+        ImGui::SameLine();
+        ImGui::BeginDisabled(in.Busy());
+        if (ImGui::SmallButton("Set up again")) in.Install("ram");
+        ImGui::EndDisabled();
+    }
+    if (in.LastId() == "ram") {
+        const std::string msg = in.LastMessage();
+        if (!msg.empty()) {
+            const bool bad = msg.rfind("Failed", 0) == 0 || msg.rfind("Could not", 0) == 0 || msg.rfind("Cancelled", 0) == 0;
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(in.Busy() ? kAmber : bad ? kRed : kGreen));
+            ImGui::TextWrapped("%s", msg.c_str());
+            ImGui::PopStyleColor();
+        }
+    }
+    EndCard();
+}
+
+void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
     const sensors::SystemSnapshot snap = ctl.monitor().Snapshot();  // board name for the labels
     auto st = ctl.auraStatus();
     const auto& lastDevices = ctl.devices();
@@ -1676,6 +1769,7 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
     EndCard();
 
     PeripheralsCard(ctl, f);
+    MemoryCard(ctl, in, ui, f);
     FansCard(ctl, f);
 }
 
@@ -2155,7 +2249,7 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
 
     for (const auto& it : in.list()) {
         BeginCard(it.id.c_str());
-        IconItem(it.id == "handback" ? Icon::Lighting : Icon::Plug, 18 * S(), Hex(kAccent));
+        IconItem(it.id == "handback" ? Icon::Lighting : it.id == "ram" ? Icon::Memory : Icon::Plug, 18 * S(), Hex(kAccent));
         ImGui::SameLine(0, 10 * S());
         ImGui::PushFont(f.bold);
         ImGui::TextUnformatted(it.name.c_str());
@@ -2195,7 +2289,7 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
                 std::wstring dir = PickFolder(hwnd, L"Choose the game's folder");
                 if (!dir.empty()) in.Remove("corsair", dir);
             }
-        } else if (it.id == "handback" && it.state != IntegrationState::NotInstalled) {
+        } else if ((it.id == "handback" || it.id == "ram") && it.state != IntegrationState::NotInstalled) {
             // Setting it up again replaces the task (needed after updates that change it).
             if (it.state == IntegrationState::Problem ? PrimaryButton("Update") : ImGui::Button("Set up again"))
                 in.Install(it.id);
@@ -2206,7 +2300,8 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
         } else if (it.state == IntegrationState::Conflict) {
             if (ImGui::Button("Replace vendor runtime")) in.Install(it.id, L"", true);
         } else {
-            if (PrimaryButton(it.id == "logitech" || it.id == "handback" ? "Set up" : "Install")) in.Install(it.id);
+            if (PrimaryButton(it.id == "logitech" || it.id == "handback" || it.id == "ram" ? "Set up" : "Install"))
+                in.Install(it.id);
         }
         ImGui::EndDisabled();
         // The result of the last action, right under its button.
@@ -2530,7 +2625,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
         if (ctl.prefs().mode == Mode::Auto) AutoPage(ctl, f);
         else ManualPage(ctl, ui, f);
         break;
-    case Page::Devices: DevicesPage(ctl, f); break;
+    case Page::Devices: DevicesPage(ctl, integrations, ui, f); break;
     case Page::Dashboard: DashboardPage(hwnd, ctl, integrations, ui, f); break;
     case Page::GamesList: GamesListPage(hwnd, ctl, integrations, ui, f); break;
     case Page::Integrations: IntegrationsPage(hwnd, ctl, integrations, ui, f); break;

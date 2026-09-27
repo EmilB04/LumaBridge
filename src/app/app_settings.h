@@ -64,6 +64,8 @@ struct Prefs {
     bool logitechDevices = true;
     // Light the ROG Azoth over its cable (experimental, opt-in).
     bool azothKeyboard = false;
+    // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper (experimental, opt-in).
+    bool ramLighting = false;
     static constexpr size_t kMaxRecent = 8;
 };
 

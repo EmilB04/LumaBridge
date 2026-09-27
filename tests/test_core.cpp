@@ -26,6 +26,7 @@
 #include "lhm.h"
 #include "friendly_names.h"
 #include "azoth_protocol.h"
+#include "hyperx_ram.h"
 #include "lightfx_state.h"
 
 using namespace luma;
@@ -775,6 +776,32 @@ static void TestAzoth() {
     CHECK(IsSave(save));
 }
 
+static void TestHyperXRam() {
+    using namespace luma::app::ram;
+    std::array<luma::Rgb, kMaxLeds> colors{};
+    for (int i = 0; i < kMaxLeds; ++i) colors[static_cast<size_t>(i)] = luma::Rgb{static_cast<uint8_t>(i), 0x80, 0xFF};
+    // Two sticks in SPD slots 1 and 3 (A2 / B2 on most boards).
+    const auto w = Frame(0b1010, colors);
+    CHECK(w.size() == 1 + 2 * (1 + 5 * 4) + 2);
+    CHECK(w.front().reg == 0xE1 && w.front().value == 0x01);
+    CHECK(w[1].reg == 0xE5 && w[1].value == 0x21);
+    CHECK(w[2].reg == 0x41 && w[2].value == 5);        // slot 1, LED 0, red = colors[5].r
+    CHECK(w[3].reg == 0x42 && w[3].value == 0x80);     // green
+    CHECK(w[4].reg == 0x43 && w[4].value == 0xFF);     // blue
+    CHECK(w[5].reg == 0x51 && w[5].value == 0x64);     // brightness 100
+    CHECK(w[22].reg == 0xE5);                          // slot 3 next
+    CHECK(w[23].reg == 0xA1 && w[23].value == 15);
+    CHECK(w[w.size() - 2].reg == 0xE1 && w[w.size() - 2].value == 0x02);
+    CHECK(w.back().reg == 0xE1 && w.back().value == 0x03);
+    for (const auto& x : w) CHECK(IsAllowed(x.reg));
+    // Everything else stays off limits.
+    int allowed = 0;
+    for (int r = 0; r < 256; ++r) allowed += IsAllowed(static_cast<uint8_t>(r));
+    CHECK(allowed == 2 + kSlots * kLedsPerStick * 4);
+    CHECK(!IsAllowed(0x00) && !IsAllowed(0x20) && !IsAllowed(0xE3) && !IsAllowed(0xE4) && !IsAllowed(0xFF));
+    CHECK(Frame(0, colors).size() == 3);  // no sticks: nothing but the update / apply
+}
+
 static void TestIpc() {
     using namespace luma::ipc;
     Frame f = MakeFrame(FrameKind::Color, 42, 1, 2, 3, "A very long source name that must be truncated");
@@ -814,6 +841,7 @@ int main() {
     TestLhm();
     TestFriendlyNames();
     TestAzoth();
+    TestHyperXRam();
     TestIpc();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

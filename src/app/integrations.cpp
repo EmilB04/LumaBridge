@@ -2,6 +2,7 @@
 
 #include "armoury_crate.h"
 #include "config.h"
+#include "ram_output.h"
 
 #include <objbase.h>
 #include <shellapi.h>
@@ -230,6 +231,28 @@ void Integrations::Refresh(bool gsRunning, int gsPort, bool gsOk, bool foundGG, 
         items_.push_back(it);
     }
 
+    {
+        Integration it{"ram", "RAM lighting helper",
+                       "Lets LumaBridge light HyperX / Kingston FURY RGB memory (experimental). Needs the PawnIO "
+                       "driver and its SmbusPIIX4.bin module (AMD chipsets). Switch it on under Devices > Memory.",
+                       IntegrationState::NotInstalled, ""};
+        if (RamTaskInstalled()) {
+            DWORD version = 0, size = sizeof version;
+            RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\LumaBridge", L"RamTaskVersion", RRF_RT_REG_DWORD, nullptr,
+                         &version, &size);
+            if (version >= kRamTaskVersion) {
+                it.state = IntegrationState::Active;
+                it.detail = "Set up";
+            } else {
+                it.state = IntegrationState::Problem;
+                it.detail = "Set up by an older LumaBridge - click Update (administrator, once)";
+            }
+        } else {
+            it.detail = "Needs administrator approval once, PawnIO (pawnio.eu) and SmbusPIIX4.bin next to LumaBridge.exe.";
+        }
+        items_.push_back(it);
+    }
+
     systemDll("lightfx", "Alienware AlienFX", "Older titles with Alienware lighting.", L"LightFX.dll",
               "Alienware Command Center");
 }
@@ -239,6 +262,8 @@ void Integrations::Install(const std::string& id, const std::wstring& gameDir, b
         Run(id, "Logitech LIGHTSYNC set up", L"Install-LogiLedProxy.ps1", L"", false);
     } else if (id == "handback") {
         Run(id, "Silent hand-back set up", L"Install-HandbackTask.ps1", L"", true);
+    } else if (id == "ram") {
+        Run(id, "RAM lighting set up", L"Install-RamTask.ps1", L"", true);
     } else if (id == "gamesense") {
         Run(id, "GameSense folder repaired", L"Install-SdkEmulators.ps1", L"-Sdk GameSense", true);
     } else {
@@ -258,6 +283,10 @@ void Integrations::Remove(const std::string& id, const std::wstring& gameDir) {
     }
     if (id == "handback") {
         Run(id, "Silent hand-back removed", L"Install-HandbackTask.ps1", L"-Uninstall", true);
+        return;
+    }
+    if (id == "ram") {
+        Run(id, "RAM lighting removed", L"Install-RamTask.ps1", L"-Uninstall", true);
         return;
     }
     std::wstring sdk = id == "chroma" ? L"Chroma" : id == "lightfx" ? L"LightFX" : L"Corsair";

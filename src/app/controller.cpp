@@ -48,7 +48,15 @@ bool Controller::Init() {
     monitor_.Start(prefs_.lhmPort);
     if (prefs_.logitechDevices) logitech_.Start(AppDirectory() + L"\\integrations\\LumaBridge_x64.dll");
     if (prefs_.azothKeyboard) azoth_.Start();
+    if (prefs_.ramLighting) ram_.Start();
     return true;
+}
+
+void Controller::SetRamEnabled(bool on) {
+    prefs_.ramLighting = on;
+    if (on) ram_.Start();
+    else ram_.Stop();
+    Changed();
 }
 
 void Controller::SetAzothEnabled(bool on) {
@@ -177,6 +185,7 @@ void Controller::Shutdown(bool handBack) {
     monitor_.Stop();
     logitech_.Stop();
     azoth_.Stop();
+    ram_.Stop();
     const bool wasControlling = mirror_.IsRunning();
     mirror_.Stop();
     // Exiting LumaBridge gives the lights back to Armoury Crate (not during a Windows
@@ -515,6 +524,7 @@ void Controller::Tick() {
     output_ = next;
     UpdateLogitech();
     azoth_.Set(output_.fx, cfg_.auraCorrection.brightness, prefs_.azothKeyboard && !output_.stopped);
+    ram_.Set(output_.fx, cfg_.auraCorrection.brightness, prefs_.ramLighting && !output_.stopped);
 
     if (dirty_ && now - dirtySince_ >= kSaveDebounceMs) {
         SaveAll(iniPath_, prefs_, cfg_);

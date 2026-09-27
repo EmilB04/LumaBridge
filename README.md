@@ -20,6 +20,8 @@ OpenRGB, Artemis or other middleware.
   direction), and the same color wheel, hex input and swatches for both colors.
 - **Calibration:** per-channel gains and gamma so Aura matches your other gear.
 - **Logitech devices** (mice, ...) follow along through G HUB's own LED SDK.
+- **RAM** (HyperX / Kingston FURY RGB DDR4, experimental) follows along through a small
+  elevated helper and the PawnIO driver.
 - **Devices:** switch individual Aura devices on or off, and set up your fans (count, LEDs
   per fan, test pattern).
 - **Games List:** every game on the PC; open one to set up its built-in lighting (CS2,
@@ -117,8 +119,9 @@ docs/                          SDK notes, build guide, roadmap, release notes, s
 ## Known limits
 
 - **Supported Aura hardware:** the motherboard's Aura USB controller (board LEDs and ARGB
-  headers, e.g. fans on a hub), driven directly over USB. RAM lighting isn't reachable
-  over USB. The Azoth keyboard is next on the roadmap.
+  headers, e.g. fans on a hub), driven directly over USB. RAM lighting (HyperX / Kingston
+  FURY RGB DDR4 only, AMD chipsets, experimental) needs the PawnIO driver and a helper set up
+  once with administrator rights ([docs/peripherals.md](docs/peripherals.md)).
 - **Some newer Chroma titles verify Razer's signature** and ignore the emulator.
 - **Corsair iCUE SDK 4** (2022+ titles) and **Windows 11 Dynamic Lighting** aren't
   covered. See [docs/sdk-emulators.md](docs/sdk-emulators.md) for why.

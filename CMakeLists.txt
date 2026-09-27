@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(LumaBridge LANGUAGES CXX VERSION 0.4.0)
+project(LumaBridge LANGUAGES CXX VERSION 0.5.0)
 
 if(NOT WIN32)
     message(STATUS "Non-Windows host: only the portable core tests will be built.")
@@ -145,7 +145,7 @@ if(LUMA_ARCH STREQUAL "x64")
         src/app/screen_capture.cpp
         src/app/sensors/system_monitor.cpp
         src/app/peripherals/logitech_output.cpp
-        src/app/peripherals/azoth_output.cpp
+        src/app/peripherals/azoth_output.cpp src/app/peripherals/ram_output.cpp
         src/integrations/logitech/real_logiled.cpp
         src/app/res/app.rc)
     target_include_directories(lumabridge_app PRIVATE src/app src/app/games src/app/sensors src/app/peripherals
@@ -176,6 +176,13 @@ target_link_libraries(aura-usb-test PRIVATE aura_usb)
 # PawnIOLib.dll is loaded dynamically, nothing to link).
 add_executable(ram-probe tools/ram-probe/main.cpp)
 
+# The elevated helper that writes RAM lighting over the SMBus for the app (runs as a
+# scheduled task; see src/ram-helper/main.cpp and scripts/Install-RamTask.ps1).
+add_executable(ram_helper src/ram-helper/main.cpp)
+target_include_directories(ram_helper PRIVATE src/app/peripherals src/app/sensors src/core)
+target_link_libraries(ram_helper PRIVATE advapi32)
+set_target_properties(ram_helper PROPERTIES OUTPUT_NAME "LumaBridge-RAM")
+
 # Read-only survey of keyboard / mouse HID interfaces (LampArray, vendor pages).
 add_executable(device-probe tools/device-probe/main.cpp)
 target_link_libraries(device-probe PRIVATE hid setupapi)
@@ -190,6 +197,7 @@ if(MINGW)
     target_link_options(logiled-harness PRIVATE -municode)
     target_link_options(aura-usb-test PRIVATE -municode)
     target_link_options(ram-probe PRIVATE -municode)
+    target_link_options(ram_helper PRIVATE -municode)
     target_link_options(ghub-probe PRIVATE -municode)
     target_link_options(device-probe PRIVATE -municode)
 endif()
@@ -200,8 +208,9 @@ endif()
 #   tools\                                     hardware tests
 #   scripts\                                   install helpers the app runs
 install(TARGETS lumabridge_proxy chroma_emu corsair_emu lightfx_emu RUNTIME DESTINATION integrations)
+install(TARGETS ram_helper RUNTIME DESTINATION .)
 install(TARGETS aura-test aura-usb-test ram-probe ghub-probe device-probe logiled-harness RUNTIME DESTINATION tools)
 install(FILES scripts/Run-HardwareTest.ps1 DESTINATION tools)
-install(FILES scripts/Install-LogiLedProxy.ps1 scripts/Install-SdkEmulators.ps1 scripts/Install-HandbackTask.ps1 scripts/Write-GameFile.ps1
+install(FILES scripts/Install-LogiLedProxy.ps1 scripts/Install-SdkEmulators.ps1 scripts/Install-HandbackTask.ps1 scripts/Install-RamTask.ps1 scripts/Write-GameFile.ps1
         DESTINATION scripts)
 install(FILES config/LumaBridge.ini.example DESTINATION .)
