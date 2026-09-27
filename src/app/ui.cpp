@@ -2015,69 +2015,68 @@ void FansCard(Controller& ctl, const Fonts& f) {
     EndCard();
 }
 
-void PeripheralsCard(Controller& ctl, const Fonts& f) {
-    BeginCard("peripherals");
-    CardTitle(f, "Keyboard & mouse", Icon::Keyboard);
+// ---- Devices: status and settings of each -------------------------------------------
 
-    // Logitech (G502 X Plus, ...) through G HUB.
+struct DeviceStatus {
+    std::string text;
+    unsigned color = kMuted;
+};
+
+DeviceStatus LogitechStatus(Controller& ctl) {
     const auto& lg = ctl.logitech();
     using S_ = LogitechOutput::State;
-    const S_ st = lg.state();
-    const bool on = ctl.prefs().logitechDevices;
-    IconItem(Icon::Mouse, 20 * S(), on && st == S_::Active ? Hex(kAccent) : Hex(kMuted));
-    ImGui::SameLine();
-    ImGui::BeginGroup();
-    ImGui::PushFont(f.bold);
-    ImGui::TextUnformatted("Logitech devices");
-    ImGui::PopFont();
-    ImGui::SameLine();
-    if (!on) Pill("Off", kMuted);
-    else if (st == S_::Active) Pill(lg.mouseEffect() ? "Following LumaBridge, every LED" : "Following LumaBridge", kGreen);
-    else if (st == S_::NoGHub) Pill("G HUB not found", kRed);
-    else if (st == S_::Waiting) Pill("Waiting for G HUB", kAmber);
-    else Pill("G HUB has them", kMuted);
+    if (!ctl.prefs().logitechDevices) return {"Off", kMuted};
+    switch (lg.state()) {
+    case S_::Active: return {lg.mouseEffect() ? "Following LumaBridge, every LED" : "Following LumaBridge", kGreen};
+    case S_::NoGHub: return {"G HUB not found", kRed};
+    case S_::Waiting: return {"Waiting for G HUB", kAmber};
+    default: return {"G HUB has them", kMuted};
+    }
+}
+
+DeviceStatus AzothStatus(Controller& ctl) {
+    const auto& az = ctl.azoth();
+    using A_ = AzothOutput::State;
+    if (!ctl.prefs().azothKeyboard) return {"Off", kMuted};
+    switch (az.state()) {
+    case A_::Active: return {az.wireless() ? "Following LumaBridge (wireless)" : "Following LumaBridge (wired)", kGreen};
+    case A_::NotFound: return {"Not connected", kAmber};
+    default: return {"Armoury Crate's lighting", kMuted};
+    }
+}
+
+void LogitechCard(Controller& ctl, const Fonts& f) {
+    const auto& lg = ctl.logitech();
+    BeginCard("logitech");
+    CardTitle(f, "Settings", Icon::Gear);
     Muted("Your Logitech mouse and other Logitech RGB gear show LumaBridge's color, through Logitech's own "
           "LED SDK in G HUB (nothing goes into a game). They show one color: the first LED of the effect. "
           "A G502 X Plus shows the whole effect instead, LED by LED along its light strip: breathing, "
           "color cycle and the classic rainbow wave run on the mouse itself.");
-    if (on && st == S_::Released && !ctl.logitechNote().empty()) Muted("Right now: %s.", ctl.logitechNote().c_str());
-    bool enabled = on;
+    if (ctl.prefs().logitechDevices && lg.state() == LogitechOutput::State::Released && !ctl.logitechNote().empty())
+        Muted("Right now: %s.", ctl.logitechNote().c_str());
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    bool enabled = ctl.prefs().logitechDevices;
     if (Toggle("Light Logitech devices", &enabled)) ctl.SetLogitechEnabled(enabled);
     if (ImGui::IsItemHovered() && !lg.dllPath().empty()) ImGui::SetTooltip("%s", Utf8(lg.dllPath()).c_str());
-    ImGui::EndGroup();
+    EndCard();
+}
 
-    ImGui::Dummy(ImVec2(0, 6 * S()));
-
-    // ASUS ROG Azoth, by cable or its Omni receiver.
-    const auto& az = ctl.azoth();
-    using A_ = AzothOutput::State;
-    const A_ as = az.state();
-    const bool azOn = ctl.prefs().azothKeyboard;
-    IconItem(Icon::Keyboard, 20 * S(), azOn && as == A_::Active ? Hex(kAccent) : Hex(kMuted));
-    ImGui::SameLine();
-    ImGui::BeginGroup();
-    ImGui::PushFont(f.bold);
-    ImGui::TextUnformatted("ASUS ROG Azoth");
-    ImGui::PopFont();
-    ImGui::SameLine();
-    if (!azOn) Pill("Off", kMuted);
-    else if (as == A_::Active) Pill(az.wireless() ? "Following LumaBridge (wireless)" : "Following LumaBridge (wired)", kGreen);
-    else if (as == A_::NotFound) Pill("Not connected", kAmber);
-    else Pill("Armoury Crate's lighting", kMuted);
-    ImGui::SameLine();
-    Pill("Experimental", kAccent);
+void AzothCard(Controller& ctl, const Fonts& f) {
+    BeginCard("azoth");
+    CardTitle(f, "Settings", Icon::Gear);
     Muted("The whole keyboard shows LumaBridge's color, by cable or wirelessly through its ROG Omni receiver. LumaBridge "
           "sends the same color command Armoury Crate does, but never its save command, so your saved "
           "Armoury Crate lighting stays in the keyboard. When LumaBridge lets go, the keyboard keeps the last "
           "color until it restarts or Armoury Crate sets it again.");
-    bool azEnabled = azOn;
-    if (Toggle("Light the ROG Azoth", &azEnabled)) ctl.SetAzothEnabled(azEnabled);
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    bool enabled = ctl.prefs().azothKeyboard;
+    if (Toggle("Light the ROG Azoth", &enabled)) ctl.SetAzothEnabled(enabled);
     ImGui::SameLine();
     if (ImGui::SmallButton("Run the device probe")) {
         const std::wstring exe = AppDirectory() + L"\\tools\\device-probe.exe";
         ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
-    ImGui::EndGroup();
     EndCard();
 }
 
@@ -2152,36 +2151,35 @@ void HardwareCard(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f
     EndCard();
 }
 
+DeviceStatus RamStatus(Controller& ctl, bool setUp) {
+    const auto& hw = ctl.hardware();
+    using R = HardwareHelper::RamState;
+    if (!ctl.prefs().ramLighting) return {"Off", kMuted};
+    if (!setUp) return {"Needs hardware access", kAmber};
+    switch (hw.ramState()) {
+    case R::Active: {
+        char b[48];
+        snprintf(b, sizeof b, "Following LumaBridge (%d stick%s)", hw.sticks(), hw.sticks() == 1 ? "" : "s");
+        return {b, kGreen};
+    }
+    case R::Problem: return {"Can't light the RAM", kRed};
+    case R::Released: return {"Armoury Crate's lighting", kMuted};
+    default: return {"Starting...", kAmber};
+    }
+}
+
 void MemoryCard(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
     const Integration* setup = HelperSetup(ctl, in, ui);
     const bool setUp = setup && setup->state == IntegrationState::Active;
     const auto& hw = ctl.hardware();
-    using R = HardwareHelper::RamState;
-    const R st = hw.ramState();
     const bool on = ctl.prefs().ramLighting;
 
     BeginCard("memory");
-    IconItem(Icon::Memory, 18 * S(), Hex(on && st == R::Active ? kAccent : kMuted));
-    ImGui::SameLine(0, 10 * S());
-    ImGui::PushFont(f.bold);
-    ImGui::TextUnformatted("Memory (RAM)");
-    ImGui::PopFont();
-    ImGui::SameLine(0, 12 * S());
-    if (!on) Pill("Off", kMuted);
-    else if (!setUp) Pill("Needs hardware access", kAmber);
-    else if (st == R::Active) {
-        char b[48];
-        snprintf(b, sizeof b, "Following LumaBridge (%d stick%s)", hw.sticks(), hw.sticks() == 1 ? "" : "s");
-        Pill(b, kGreen);
-    } else if (st == R::Problem) Pill("Can't light the RAM", kRed);
-    else if (st == R::Released) Pill("Armoury Crate's lighting", kMuted);
-    else Pill("Starting...", kAmber);
-    ImGui::SameLine();
-    Pill("Experimental", kAccent);
+    CardTitle(f, "Settings", Icon::Gear);
     Muted("HyperX / Kingston FURY RGB DDR4 sticks show LumaBridge's effect across their five LEDs (AMD chipsets). "
           "LumaBridge only ever writes the sticks' lighting registers, never their configuration chip. If the sticks "
           "flicker, Armoury Crate is lighting them too: switch the RAM off in Armoury Crate.");
-    if (on && setUp && st == R::Problem) {
+    if (on && setUp && hw.ramState() == HardwareHelper::RamState::Problem) {
         ImGui::PushStyleColor(ImGuiCol_Text, V4(kRed));
         ImGui::TextWrapped("%s", hw.ramProblem().c_str());
         ImGui::PopStyleColor();
@@ -2207,23 +2205,174 @@ void MemoryCard(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
     EndCard();
 }
 
+// Aura devices are switched on and off by name (Config::auraDisabledDevices).
+bool AuraDeviceOn(Controller& ctl, const std::wstring& name) {
+    const auto& off = ctl.config().auraDisabledDevices;
+    return std::none_of(off.begin(), off.end(), [&](const std::wstring& n) { return _wcsicmp(n.c_str(), name.c_str()) == 0; });
+}
+
+void SetAuraDeviceOn(Controller& ctl, const std::wstring& name, bool on) {
+    auto& off = ctl.config().auraDisabledDevices;
+    off.erase(std::remove_if(off.begin(), off.end(), [&](const std::wstring& n) { return _wcsicmp(n.c_str(), name.c_str()) == 0; }),
+              off.end());
+    if (!on) off.push_back(name);
+    ctl.Changed();
+}
+
+// Which lighting an Aura device shows: the ARGB header the fans', the rest the board's.
+const char* AuraLightingId(const AuraDeviceInfo& d) { return d.type == 0x00011000 ? device::kFans : device::kBoard; }
+
+DeviceStatus AuraStatus(Controller& ctl, const AuraDeviceInfo& d) {
+    if (!AuraDeviceOn(ctl, d.name)) return {"Switched off", kMuted};
+    return ctl.auraStatus().connected ? DeviceStatus{"Following LumaBridge", kGreen}
+                                      : DeviceStatus{"Armoury Crate's lighting", kMuted};
+}
+
+// The top of a device's page: a way back, its name and how it's doing.
+bool DeviceHeader(UiState& ui, const Fonts& f, Icon icon, const std::string& name, const DeviceStatus& st,
+                  bool experimental, const std::string& detail) {
+    if (ImGui::Button("<  All devices")) {
+        ui.deviceDetail.clear();
+        return false;
+    }
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    BeginCard("device-head");
+    IconItem(icon, 26 * S(), Hex(st.color == kGreen ? kAccent : kMuted));
+    ImGui::SameLine(0, 12 * S());
+    ImGui::BeginGroup();
+    ImGui::PushFont(f.title);
+    ImGui::TextUnformatted(name.c_str());
+    ImGui::PopFont();
+    Pill(st.text.c_str(), st.color);
+    if (experimental) {
+        ImGui::SameLine();
+        Pill("Experimental", kAccent);
+    }
+    if (!detail.empty()) Muted("%s", detail.c_str());
+    ImGui::EndGroup();
+    EndCard();
+    return true;
+}
+
+// The device's lighting, and the way to change it on the Lighting page.
+void DeviceLightingCard(Controller& ctl, UiState& ui, const Fonts& f, const char* id) {
+    const Prefs& p = ctl.prefs();
+    auto it = p.deviceLighting.find(id);
+    const bool own = it != p.deviceLighting.end() && it->second.own;
+    BeginCard("device-lighting");
+    CardTitle(f, "Lighting", Icon::Lighting);
+    if (own) {
+        const Look l = it->second.look;
+        const ImVec2 a = ImGui::GetCursorScreenPos();
+        const float w = std::min(260 * S(), ImGui::GetContentRegionAvail().x);
+        EffectStrip(ToParams(l), a, ImVec2(a.x + w, a.y + 16 * S()), 8 * S());
+        ImGui::Dummy(ImVec2(w, 16 * S()));
+        Muted("Its own lighting: %s.", kEffects[static_cast<int>(l.effect)].name);
+    } else {
+        Muted("It shows the main lighting, like the other devices.");
+    }
+    Muted("Brightness: %.0f%% of the overall %.0f%%.", DeviceBrightness(p, id) * 100.0,
+          ctl.config().auraCorrection.brightness * 100.0);
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    if (PrimaryButton("Change its lighting")) {
+        ui.page = Page::Lighting;
+        ui.lightTarget = id;
+    }
+    if (p.mode == Mode::Auto)
+        Muted("Its own lighting and colors are set in Manual mode; games light every device alike.");
+    EndCard();
+}
+
+// A device's own page.
+void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f,
+                      const sensors::SystemSnapshot& snap) {
+    const std::string& id = ui.deviceDetail;
+    if (id.rfind("aura:", 0) == 0) {
+        const auto& devs = ctl.devices();
+        const AuraDeviceInfo* d = nullptr;
+        for (const auto& x : devs)
+            if ("aura:" + Utf8(x.name) == id) d = &x;
+        if (!d) {
+            if (ImGui::Button("<  All devices")) ui.deviceDetail.clear();
+            Muted("This device isn't there any more. Rescan devices on the list.");
+            return;
+        }
+        Icon icon;
+        const std::string label = DeviceLabel(*d, snap, ctl.config().argbFans, &icon);
+        char type[64];
+        WideCharToMultiByte(CP_UTF8, 0, AuraDeviceTypeName(d->type), -1, type, sizeof type, nullptr, nullptr);
+        const std::string detail = "Aura " + std::string(type) + ", " + std::to_string(d->lightCount) + " LEDs (" +
+                                   Utf8(d->name) + ")";
+        if (!DeviceHeader(ui, f, icon, label, AuraStatus(ctl, *d), false, detail)) return;
+
+        BeginCard("aura-device");
+        CardTitle(f, "Settings", Icon::Gear);
+        bool on = AuraDeviceOn(ctl, d->name);
+        if (Toggle("Light this device", &on)) SetAuraDeviceOn(ctl, d->name, on);
+        Muted("Switched off, it stays dark while LumaBridge controls the lights.");
+        EndCard();
+        if (d->type == 0x00011000) FansCard(ctl, f);
+        DeviceLightingCard(ctl, ui, f, AuraLightingId(*d));
+        return;
+    }
+    if (id == device::kRam) {
+        const Integration* setup = HelperSetup(ctl, in, ui);
+        const bool setUp = setup && setup->state == IntegrationState::Active;
+        const SetupHardware hw = DetectSetup(snap.smbios);
+        std::string detail = hw.ramName.empty() ? "HyperX / Kingston FURY RGB DDR4" : hw.ramName;
+        if (hw.sticks) detail += ", " + std::to_string(hw.sticks) + " stick" + (hw.sticks == 1 ? "" : "s") + " found";
+        if (!DeviceHeader(ui, f, Icon::Memory, "Memory (RAM)", RamStatus(ctl, setUp), true, detail)) return;
+        MemoryCard(ctl, in, ui, f);
+        HardwareCard(ctl, in, ui, f);
+        DeviceLightingCard(ctl, ui, f, device::kRam);
+        return;
+    }
+    if (id == device::kMouse) {
+        if (!DeviceHeader(ui, f, Icon::Mouse, "Logitech devices", LogitechStatus(ctl), false,
+                          "Through G HUB; the G502 X Plus directly, LED by LED"))
+            return;
+        LogitechCard(ctl, f);
+        DeviceLightingCard(ctl, ui, f, device::kMouse);
+        return;
+    }
+    if (id == device::kKeyboard) {
+        if (!DeviceHeader(ui, f, Icon::Keyboard, "ASUS ROG Azoth", AzothStatus(ctl), true,
+                          "By cable, or wirelessly through its ROG Omni receiver"))
+            return;
+        AzothCard(ctl, f);
+        DeviceLightingCard(ctl, ui, f, device::kKeyboard);
+        return;
+    }
+    ui.deviceDetail.clear();
+}
+
 void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
     const sensors::SystemSnapshot snap = ctl.monitor().Snapshot();  // board name for the labels
+    // The fan test pattern belongs to the fans' page.
+    const bool fanPage = [&] {
+        for (const auto& d : ctl.devices())
+            if (d.type == 0x00011000 && ui.deviceDetail == "aura:" + Utf8(d.name)) return true;
+        return false;
+    }();
+    if (!fanPage && ctl.fanTest()) ctl.SetFanTest(false);
+    if (!ui.deviceDetail.empty()) {
+        DeviceDetailPage(ctl, in, ui, f, snap);
+        return;
+    }
     auto st = ctl.auraStatus();
-    const auto& lastDevices = ctl.devices();
+    const auto& aura = ctl.devices();
 
     BeginCard("status");
     CardTitle(f, "Aura connection", Icon::Plug);
     if (st.connected) {
         Pill("Connected", kGreen);
         ImGui::SameLine();
-        Muted("%d device(s) under LumaBridge control. Switched-off devices stay dark while LumaBridge "
-              "controls the lights.", static_cast<int>(st.devices.size()));
+        Muted("%d device(s) under LumaBridge control.", static_cast<int>(st.devices.size()));
     } else if (!st.running) {
         Pill("Not controlling the lights", kMuted);
         ImGui::SameLine();
         Muted("%d device(s) found. LumaBridge takes over when a game or your manual color needs the "
-              "lights.", static_cast<int>(lastDevices.size()));
+              "lights.", static_cast<int>(aura.size()));
     } else {
         Pill("Aura controller not found", kRed);
         ImGui::SameLine();
@@ -2233,55 +2382,84 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
     if (ImGui::Button("Rescan devices")) ctl.RescanDevices();
     EndCard();
 
+    // Every device, like the games list: click one for its settings.
+    struct Row {
+        std::string id, name, kind;
+        Icon icon;
+        DeviceStatus status;
+        int leds = -1;
+    };
+    std::vector<Row> rows;
+    for (const auto& d : aura) {
+        Row r;
+        r.id = "aura:" + Utf8(d.name);
+        r.name = DeviceLabel(d, snap, ctl.config().argbFans, &r.icon);
+        char type[64];
+        WideCharToMultiByte(CP_UTF8, 0, AuraDeviceTypeName(d.type), -1, type, sizeof type, nullptr, nullptr);
+        r.kind = std::string("Aura ") + type;
+        r.status = AuraStatus(ctl, d);
+        r.leds = d.lightCount;
+        rows.push_back(r);
+    }
+    {
+        const Integration* setup = HelperSetup(ctl, in, ui);
+        const SetupHardware hw = DetectSetup(snap.smbios);
+        rows.push_back({device::kRam, "Memory (RAM)", hw.ramName.empty() ? "Memory" : hw.ramName, Icon::Memory,
+                        RamStatus(ctl, setup && setup->state == IntegrationState::Active),
+                        ctl.prefs().ramLighting && ctl.hardware().sticks() ? ctl.hardware().sticks() * 5 : -1});
+    }
+    rows.push_back({device::kMouse, "Logitech devices", "Mouse, through G HUB", Icon::Mouse, LogitechStatus(ctl)});
+    rows.push_back({device::kKeyboard, "ASUS ROG Azoth", "Keyboard", Icon::Keyboard, AzothStatus(ctl)});
+
     BeginCard("devices");
     CardTitle(f, "Devices", Icon::Leds);
-    if (lastDevices.empty()) {
-        Muted("No Aura devices found. Click Rescan devices; if it stays empty, the log (Settings) says why.");
-    } else if (ImGui::BeginTable("devtable", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX)) {
-        ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 44 * S());
-        ImGui::TableSetupColumn("Device", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 150 * S());
+    Muted("Click a device for its settings and lighting.%s",
+          aura.empty() ? " No Aura devices found: click Rescan devices; if it stays empty, the log (Settings) says why." : "");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    if (ImGui::BeginTable("devices", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Device", ImGuiTableColumnFlags_WidthStretch, 2.6f);
+        ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthStretch, 1.4f);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 1.8f);
         ImGui::TableSetupColumn("LEDs", ImGuiTableColumnFlags_WidthFixed, 50 * S());
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 24 * S());
         ImGui::TableHeadersRow();
-        auto& disabled = ctl.config().auraDisabledDevices;
-        for (size_t i = 0; i < lastDevices.size(); ++i) {
-            const auto& d = lastDevices[i];
-            ImGui::TableNextRow();
-            ImGui::PushID(static_cast<int>(i));
+        int n = 0;
+        for (const Row& r : rows) {
+            ImGui::PushID(n++);
+            ImGui::TableNextRow(0, 34 * S());
             ImGui::TableNextColumn();
-            auto it = std::find_if(disabled.begin(), disabled.end(),
-                                   [&](const std::wstring& n) { return _wcsicmp(n.c_str(), d.name.c_str()) == 0; });
-            bool on = it == disabled.end();
-            if (Toggle("##on", &on)) {
-                if (on) disabled.erase(it);
-                else disabled.push_back(d.name);
-                ctl.Changed();
-            }
-            ImGui::TableNextColumn();
-            char name[256];
-            WideCharToMultiByte(CP_UTF8, 0, d.name.c_str(), -1, name, sizeof name, nullptr, nullptr);
-            Icon icon;
-            const std::string label = DeviceLabel(d, snap, ctl.config().argbFans, &icon);
-            IconItem(icon, 16 * S(), on ? Hex(kAccent) : Hex(kMuted));
+            // The whole row opens the device's page.
+            ImGui::PushStyleColor(ImGuiCol_Header, V4(kAccent, 0.18f));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, V4(kAccent, 0.14f));
+            const bool open = ImGui::Selectable("##row", false,
+                                                ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
+                                                ImVec2(0, 26 * S()));
+            ImGui::PopStyleColor(2);
+            ImGui::SameLine(0, 0);
+            ImGui::AlignTextToFramePadding();  // the icon and name on the row's text line
+            IconItem(r.icon, 16 * S(), r.status.color == kGreen ? Hex(kAccent) : Hex(kMuted));
             ImGui::SameLine();
-            ImGui::TextUnformatted(label.c_str());
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", name);
+            ImGui::TextUnformatted(r.name.c_str());
             ImGui::TableNextColumn();
-            char type[64];
-            WideCharToMultiByte(CP_UTF8, 0, AuraDeviceTypeName(d.type), -1, type, sizeof type, nullptr, nullptr);
-            Muted("%s", type);
+            ImGui::AlignTextToFramePadding();
+            Muted("%s", r.kind.c_str());
             ImGui::TableNextColumn();
-            Muted("%d", d.lightCount);
+            ImGui::AlignTextToFramePadding();
+            Pill(r.status.text.c_str(), r.status.color);
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            if (r.leds >= 0) Muted("%d", r.leds);
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            Muted(">");
             ImGui::PopID();
+            if (open) ui.deviceDetail = r.id;
         }
         ImGui::EndTable();
     }
     EndCard();
 
     HardwareCard(ctl, in, ui, f);
-    PeripheralsCard(ctl, f);
-    MemoryCard(ctl, in, ui, f);
-    FansCard(ctl, f);
 }
 
 // Shown on every page while Armoury Crate is taking the lights back: restarting the
@@ -3125,7 +3303,8 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
     // Re-check integration status whenever the Integrations page is opened.
     if (ui.page == Page::Integrations && ui.lastPage != Page::Integrations) ui.integrationsLoaded = false;
     if (ui.page == Page::GamesList && ui.lastPage != Page::GamesList) ui.gameDetail.clear();  // open on the list
-    if (ui.page != Page::Devices && ctl.fanTest()) ctl.SetFanTest(false);  // the test is a Devices-page thing
+    if (ui.page == Page::Devices && ui.lastPage != Page::Devices) ui.deviceDetail.clear();
+    if (ui.page != Page::Devices && ctl.fanTest()) ctl.SetFanTest(false);  // the test is on the fans' page
     ui.lastPage = ui.page;
 
     switch (ui.page) {

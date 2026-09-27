@@ -35,6 +35,9 @@ struct UiState {
     // Games List: the game whose page is open ("" = the list), and its built-in profile key.
     std::string gameDetail, gameDetailProfile;
     char gameFilter[64] = "";
+    // Devices: the device whose page is open ("" = the list): "aura:<Aura name>" or a
+    // device::k* id (memory, mouse, keyboard).
+    std::string deviceDetail;
     // Built-in game feed setup state (Integrations page), re-checked every couple of seconds.
     unsigned long long feedCheckAt = 0;
     bool cs2Installed = false, rlIniFound = false, rlEnabled = false;
