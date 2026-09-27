@@ -2,7 +2,7 @@
 
 ## Windows (release builds)
 
-Requirements: Visual Studio 2022 with *Desktop development with C++* (includes CMake and
+Requirements: Visual Studio 2022 or newer with *Desktop development with C++* (includes CMake and
 git). No SDK downloads are needed (see [third_party/README.md](../third_party/README.md)).
 The first configure downloads Dear ImGui v1.91.9 (MIT) from GitHub through CMake
 FetchContent. Offline, clone it yourself and pass

@@ -14,7 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch }}
+        # Default generator = newest Visual Studio on the runner.
+        run: cmake -S . -B build -A ${{ matrix.arch }}
       - name: Build
         run: cmake --build build --config Release
       - name: Core tests
