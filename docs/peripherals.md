@@ -16,8 +16,11 @@ The mouse gets one color today. To find out whether G HUB lets an app color the 
 Plus's zones separately, exit LumaBridge and run `tools\logiled-harness.exe --zones`
 (add a number for the seconds per step; the default is 2). It loads G HUB's DLL and calls
 `LogiLedSetLightingForTargetZone` for mouse zones 0-7, after a whole-mouse control step.
-First run on a G502 X Plus (G HUB SDK 75.71.76): zones 0 and 1 accepted, 2-7 refused, and
-nothing changed on the mouse.
+Result on a G502 X Plus (G HUB SDK 75.71.76): G HUB accepts zones 0 and 1 and refuses 2-7,
+but the strip only ever shows one color. Whole-mouse colors (`LogiLedSetLighting`) work; zone
+colors don't split the strip. So through G HUB this mouse is one color, which is what
+LumaBridge sends. Coloring its LEDs separately would mean talking to the mouse directly
+(HID++), around G HUB.
 
 ## ASUS ROG Azoth (wired or wireless, experimental)
 
