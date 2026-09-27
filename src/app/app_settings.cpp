@@ -99,6 +99,20 @@ Prefs LoadPrefs(const std::wstring& ini) {
         if (bar == std::string::npos) break;
         pos = bar + 1;
     }
+    p.screenForUnsupported = Read(ini, L"App", L"ScreenColorsForGames") == L"1";
+    const std::string modes = Narrow(Read(ini, L"App", L"GameModes"));
+    for (size_t pos = 0; pos < modes.size();) {
+        size_t bar = modes.find('|', pos);
+        const std::string item = modes.substr(pos, bar - pos);
+        const size_t eq = item.find('=');
+        if (eq != std::string::npos) {
+            const std::string v = item.substr(eq + 1);
+            if (v == "screen") p.gameModes[item.substr(0, eq)] = GameMode::Screen;
+            if (v == "idle") p.gameModes[item.substr(0, eq)] = GameMode::Idle;
+        }
+        if (bar == std::string::npos) break;
+        pos = bar + 1;
+    }
     const std::wstring manual = Read(ini, L"App", L"ManualGames");
     for (size_t pos = 0; pos < manual.size();) {
         size_t bar = manual.find(L'|', pos);
@@ -133,6 +147,13 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     std::wstring manual;
     for (size_t i = 0; i < p.manualGames.size(); ++i) manual += (i ? L"|" : L"") + p.manualGames[i];
     WriteConfigValue(ini, L"App", L"ManualGames", manual);
+    WriteConfigValue(ini, L"App", L"ScreenColorsForGames", p.screenForUnsupported ? L"1" : L"0");
+    std::string modes;
+    for (const auto& [key, mode] : p.gameModes) {
+        if (mode == GameMode::Default) continue;
+        modes += (modes.empty() ? "" : "|") + key + (mode == GameMode::Screen ? "=screen" : "=idle");
+    }
+    WriteConfigValue(ini, L"App", L"GameModes", Widen(modes));
 
     WriteConfigValue(ini, L"Color", L"Brightness", Num(cfg.auraCorrection.brightness * 100.0));
     WriteConfigValue(ini, L"Color", L"GainR", Num(cfg.auraCorrection.gainR * 100.0));

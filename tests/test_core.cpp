@@ -17,6 +17,11 @@
 #include "json.h"
 #include "source_tracker.h"
 #include "game_catalog.h"
+#include "game_profiles.h"
+#include "cs2_lighting.h"
+#include "rocket_league_lighting.h"
+#include "war_thunder_lighting.h"
+#include "screen_colors.h"
 #include "lightfx_state.h"
 
 using namespace luma;
@@ -455,6 +460,14 @@ static void TestSources() {
     CHECK(t.Active()->game == "CSGO");
     t.Prune(2000 + SourceTracker::kTimeoutMs + 1, [](const Source&) { return false; });
     CHECK(!t.Active());
+
+    luma::fx::Params p;
+    p.kind = luma::fx::Kind::Gradient;
+    p.color1 = Rgb{1, 2, 3};
+    t.OnEffect(0, "Counter-Strike 2", "Counter-Strike 2", p, 10000);
+    CHECK(t.Active()->hasEffect && t.Active()->effect.kind == luma::fx::Kind::Gradient);
+    t.OnEffect(0, "Counter-Strike 2", "Counter-Strike 2", p, 11000);  // same effect: no change
+    CHECK(t.Active()->lastChange == 10000 && t.Active()->lastSeen == 11000);
 }
 
 static void TestGameCatalog() {
@@ -500,6 +513,130 @@ static void TestGameCatalog() {
     CHECK(SupportsLighting(Support::SdkLoaded) && !SupportsLighting(Support::Unknown));
 }
 
+static luma::Json J(const char* text) {
+    luma::Json j;
+    CHECK(luma::Json::Parse(text, &j));
+    return j;
+}
+
+static void TestGameProfiles() {
+    using namespace luma::app::games;
+    CHECK(FindProfile("CS2.exe", "")->feed == Feed::Cs2Gsi);
+    CHECK(FindProfile("RocketLeague.exe", "Rocket League")->kind == ProfileKind::BuiltIn);
+    CHECK(FindProfile("aces.exe", "War Thunder")->feed == Feed::WarThunderApi);
+    CHECK(FindProfile("x.exe", "BOMBANANA!")->kind == ProfileKind::NoSupport);
+    CHECK(FindProfile("x.exe", "RV There Yet?")->kind == ProfileKind::NoSupport);
+    CHECK(FindProfile("DSX.exe", "DSX")->kind == ProfileKind::NotAGame);
+    CHECK(FindProfile("bf1.exe", "")->kind == ProfileKind::VendorSdk);
+    CHECK(FindProfile("notepad.exe", "Some Game") == nullptr);
+    CHECK(std::strcmp(ProfileByKey("warthunder")->title, "War Thunder") == 0);
+}
+
+static void TestCs2() {
+    using namespace luma::app::games;
+    using luma::fx::Kind;
+    Cs2Lighting cs;
+    CHECK(!cs.Active(0));
+    CHECK(!cs.OnState(J(R"({"auth":{"token":"x"}})"), 1000, "lumabridge"));  // wrong token
+    const char* base = R"({"auth":{"token":"lumabridge"},"provider":{"steamid":"1"},"map":{"phase":"live"},
+        "round":{"phase":"live"},"player":{"steamid":"1","team":"T","activity":"playing",
+        "state":{"health":100,"flashed":0,"burning":0,"round_kills":0,"round_killhs":0}}})";
+    CHECK(cs.OnState(J(base), 1000, "lumabridge"));
+    CHECK(cs.Active(1000));
+    CHECK((cs.Current(1000).kind == Kind::Static && cs.Current(1000).color1 == Cs2Lighting::kT));
+    CHECK(cs.OnState(J(R"({"provider":{"steamid":"1"},"map":{},"round":{"phase":"live"},"player":{"steamid":"1",
+        "team":"T","activity":"playing","state":{"health":20,"round_kills":1,"round_killhs":0}}})"), 2000));
+    CHECK((cs.Current(2000).color1 == luma::Rgb{40, 255, 80}));   // kill flash
+    CHECK(cs.Current(3000).kind == Kind::Breathing);             // then low health
+    CHECK(cs.OnState(J(R"({"provider":{"steamid":"1"},"map":{},"round":{"phase":"live","bomb":"planted"},
+        "player":{"steamid":"1","team":"T","activity":"playing","state":{"health":100,"round_kills":1}}})"), 4000));
+    const double early = cs.Current(4000).speed, late = cs.Current(4000 + 39000).speed;
+    CHECK(cs.Current(4000).kind == Kind::Strobe && late > early);  // the fuse speeds up
+    CHECK(cs.OnState(J(R"({"provider":{"steamid":"1"},"map":{},"round":{"phase":"over","bomb":"exploded","win_team":"T"},
+        "player":{"steamid":"1","team":"T","activity":"playing","state":{"health":100}}})"), 50000));
+    CHECK(cs.Current(50000).kind == Kind::Strobe);         // explosion
+    CHECK(cs.Current(52500).kind == Kind::RainbowWave);    // round won
+    CHECK(cs.OnState(J(R"({"provider":{"steamid":"1"},"player":{"activity":"menu"}})"), 60000));
+    CHECK(!cs.Active(60000));
+    CHECK(!cs.Active(60000 + Cs2Lighting::kStaleMs + 1));
+}
+
+static void TestRocketLeague() {
+    using namespace luma::app::games;
+    using luma::fx::Kind;
+    std::string stream = R"({"Event":"UpdateState","Data":"{\"Game\":{\"bOvertime\":false,\"Teams\":[{\"TeamNum\":0,\"ColorPrimary\":\"1873FF\"},{\"TeamNum\":1,\"ColorPrimary\":\"FF6E00\"}]}}"}{"Event":"Goal)";
+    std::vector<std::string> msgs;
+    TakeJsonObjects(&stream, &msgs);
+    CHECK(msgs.size() == 1 && stream == R"({"Event":"Goal)");  // half a message waits for the rest
+    stream += R"(Scored","Data":{"Scorer":{"Name":"x","TeamNum":1}}} )";
+    TakeJsonObjects(&stream, &msgs);
+    CHECK(msgs.size() == 2 && stream.empty());
+    std::string braces = R"({"Event":"X","Data":{"Name":"a}{b"}})";
+    std::vector<std::string> one;
+    TakeJsonObjects(&braces, &one);
+    CHECK(one.size() == 1);  // braces inside strings don't split
+
+    const std::string ini = "[TAGame.MatchStatsExporter_TA]\r\nPort=49123\r\nPacketSendRate=0\r\n";
+    CHECK(StatsIniValue(ini, "PacketSendRate", -1) == 0 && StatsIniValue(ini, "Port", 0) == 49123);
+    const std::string on = WithPacketSendRate(ini, 30);
+    CHECK(StatsIniValue(on, "PacketSendRate", -1) == 30 && StatsIniValue(on, "Port", 0) == 49123);
+    CHECK(on.size() == ini.size() + 1);  // only the value changed
+    const std::string added = WithPacketSendRate("[TAGame.MatchStatsExporter_TA]\nPort=1\n", 30);
+    CHECK(StatsIniValue(added, "PacketSendRate", -1) == 30 && StatsIniValue(added, "Port", 0) == 1);
+    CHECK(StatsIniValue(WithPacketSendRate("", 30), "PacketSendRate", -1) == 30);
+
+    RocketLeagueLighting rl;
+    CHECK(rl.OnMessage(J(msgs[0].c_str()), 1000));
+    CHECK(rl.Active(1000));
+    CHECK((rl.Current(1000).kind == Kind::Gradient && rl.Current(1000).color2 == luma::Rgb{255, 110, 0}));
+    CHECK(rl.OnMessage(J(msgs[1].c_str()), 2000));
+    CHECK((rl.Current(2000).kind == Kind::Strobe && rl.Current(2000).color1 == luma::Rgb{255, 110, 0}));
+    CHECK(rl.Current(6000).kind == Kind::Comet);
+    CHECK(rl.Current(9000).kind == Kind::Gradient);
+    CHECK(rl.OnMessage(J(R"({"Event":"MatchEnded","Data":{"WinnerTeamNum":0}})"), 10000));
+    CHECK((rl.Current(10000).kind == Kind::Breathing && rl.Current(10000).color1 == luma::Rgb{24, 115, 255}));
+    CHECK(rl.OnMessage(J(R"({"Event":"MatchDestroyed","Data":{}})"), 11000));
+    CHECK(!rl.Active(11000));
+}
+
+static void TestWarThunder() {
+    using namespace luma::app::games;
+    using luma::fx::Kind;
+    WarThunderLighting wt;
+    wt.OnIndicators(J(R"({"valid":false})"), 1000);
+    CHECK(!wt.Active(1000));
+    wt.OnIndicators(J(R"({"valid":true,"army":"tank","crew_total":4,"crew_current":4})"), 2000);
+    CHECK(wt.Active(2000));
+    CHECK((wt.Current(2000).color1 == luma::Rgb{0, 255, 0}));
+    wt.OnIndicators(J(R"({"valid":true,"army":"tank","crew_total":4,"crew_current":1})"), 3000);
+    CHECK(wt.Current(3000).kind == Kind::Strobe);      // crew lost
+    CHECK(wt.Current(4000).kind == Kind::Breathing);   // then low crew
+    CHECK(wt.Current(4000).color1.r == 255);
+    wt.OnIndicators(J(R"({"valid":true,"army":"air"})"), 5000);
+    wt.OnState(J(R"({"valid":true,"throttle 1, %":110,"Mfuel, kg":500,"Mfuel0, kg":1000})"), 5000);
+    CHECK(wt.Current(5000).kind == Kind::Twinkle);     // war emergency power
+    wt.OnState(J(R"({"valid":true,"throttle 1, %":80,"Mfuel, kg":50,"Mfuel0, kg":1000})"), 5100);
+    CHECK(wt.Current(5100).kind == Kind::Breathing);   // low fuel
+    CHECK(!wt.Active(5000 + WarThunderLighting::kStaleMs + 1));
+}
+
+static void TestScreenColors() {
+    using namespace luma::app::games;
+    // Left half pure-ish red, right half blue; plus some black.
+    std::vector<uint8_t> px;
+    for (int y = 0; y < 2; ++y)
+        for (int x = 0; x < 4; ++x) {
+            if (x < 2) px.insert(px.end(), {10, 10, 200, 255});
+            else px.insert(px.end(), {220, 20, 10, 255});
+        }
+    ScreenColors c = SummarizeScreen(px, 4, 2);
+    CHECK(c.left.r > 150 && c.left.b < 60);
+    CHECK(c.right.b > 150 && c.right.r < 60);
+    std::vector<uint8_t> black(4 * 4 * 4, 0);
+    c = SummarizeScreen(black, 4, 4);
+    CHECK(c.left.IsBlack() && c.right.IsBlack());
+}
+
 static void TestIpc() {
     using namespace luma::ipc;
     Frame f = MakeFrame(FrameKind::Color, 42, 1, 2, 3, "A very long source name that must be truncated");
@@ -530,6 +667,11 @@ int main() {
     TestLightFx();
     TestSources();
     TestGameCatalog();
+    TestGameProfiles();
+    TestCs2();
+    TestRocketLeague();
+    TestWarThunder();
+    TestScreenColors();
     TestIpc();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

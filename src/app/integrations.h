@@ -41,6 +41,11 @@ public:
     void Install(const std::string& id, const std::wstring& gameDir = L"", bool force = false);
     void Remove(const std::string& id, const std::wstring& gameDir = L"");
 
+    // Writes (or removes) a game config file with administrator rights, through
+    // scripts\Write-GameFile.ps1 (only for built-in game feed files).
+    void WriteGameFileElevated(const std::string& id, const std::string& what, const std::wstring& path,
+                               const std::string& content, bool remove = false);
+
     // Parent window for the administrator prompt (so it opens in front of the app).
     void SetOwner(HWND owner) { owner_ = owner; }
     bool Busy() const { return busy_; }

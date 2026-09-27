@@ -22,7 +22,10 @@
 #include "config.h"
 #include "game_catalog.h"
 #include "game_detector.h"
+#include "game_feeds.h"
 #include "game_library.h"
+#include "game_profiles.h"
+#include "screen_capture.h"
 #include "gamesense_server.h"
 #include "ipc.h"
 #include "source_tracker.h"
@@ -73,10 +76,10 @@ public:
     bool auraPaused() const { return pause() != Pause::None; }
     void ResumeAura();
     void StopLighting();
-    // While Armoury Crate is taking the lights back (the controller restarts, ~5 s): the
+    // While Armoury Crate is taking the lights back (the controller restarts, ~10 s): the
     // time left, else 0. Also the total, for a progress bar.
     uint64_t handbackMsLeft() const;
-    static constexpr uint64_t kHandbackMs = 5000;
+    static constexpr uint64_t kHandbackMs = 10000;
     // Re-lists devices: through the running mirror, or with a read-only probe when
     // LumaBridge isn't controlling the lights (so Armoury Crate keeps them).
     void RescanDevices();
@@ -89,6 +92,8 @@ public:
         games::Support support = games::Support::None;
         std::string sdk;   // the SDK it uses, when known
         Rgb color{};       // its current color while Active
+        const games::GameProfile* profile = nullptr;  // what LumaBridge knows about it
+        GameMode mode = GameMode::Default;             // the user's choice for it
     };
     const std::vector<GameStatus>& games() const { return games_; }
     // Sources that don't belong to any detected game (e.g. a game outside the known libraries).
@@ -101,6 +106,14 @@ public:
     void AddManualGame(const std::wstring& exePath);
     void RemoveManualGame(const std::wstring& exePath);
 
+    // Built-in feeds and their setup (Integrations page).
+    const GameFeeds& feeds() const { return feeds_; }
+    // Install folder of a known game (by profile key, e.g. "cs2"), from the Games List scan.
+    std::wstring GameDir(const char* profileKey) const;
+    void RefreshFeedSettings();  // re-read Rocket League's Stats API port after setup changes
+    // Screen colors is running for a game right now.
+    bool screenColorsActive() const { return screen_.Running(); }
+
     const Output& output() const { return output_; }
     const std::vector<Source>& sources() const { return tracker_.All(); }
     AuraMirror::Status auraStatus() const { return mirror_.GetStatus(); }
@@ -111,6 +124,9 @@ public:
 private:
     Output Decide() const;
     void UpdateGames(uint64_t now);
+    void UpdateFeeds(uint64_t now);
+    // The running game whose lighting falls back to the screen's colors, if any.
+    const GameStatus* ScreenColorsGame() const;
     bool SourceBelongsTo(const Source& s, const RunningGame& g) const;
     void Apply(const Output& out);
     std::string ProcessName(uint32_t pid);
@@ -138,6 +154,9 @@ private:
     GameDetector detector_;
     std::vector<GameStatus> games_;
     std::vector<InstalledGame> library_;
+    GameFeeds feeds_;
+    ScreenCapture screen_;
+    bool feedActive_[3] = {};
     std::future<std::vector<InstalledGame>> libraryJob_;
     bool libraryRescanPending_ = false;  // the list changed while a scan was running
 };

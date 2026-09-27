@@ -28,6 +28,11 @@ struct UiState {
     char hex[16] = "";
     bool hexEditing = false;
     char gameFilter[64] = "";
+    // Built-in game feed setup state (Integrations page), re-checked every couple of seconds.
+    unsigned long long feedCheckAt = 0;
+    bool cs2Installed = false, rlIniFound = false, rlEnabled = false;
+    std::wstring cs2Dir, rlDir;
+    std::string feedMessage, feedMessageId;  // result of the last direct (non-elevated) write
     bool integrationsLoaded = false;
     bool autostart = false;
     bool autostartLoaded = false;

@@ -8,7 +8,9 @@ OpenRGB, Artemis or other middleware.
 
 - **Auto mode:** games drive your lights. LumaBridge answers the game's lighting SDK as
   if that brand's software were installed, and follows the game that's currently active.
-  Every running game is listed, with whether it supports dynamic lighting.
+  Every running game is listed, with whether it supports dynamic lighting. Counter-Strike 2,
+  Rocket League and War Thunder light up through their official data feeds, and games
+  without lighting can mirror the screen's colors ([docs/games.md](docs/games.md)).
 - **Manual mode:** color wheel, hex input, presets, brightness, and effects: static,
   breathing, strobe, color cycle, and per-LED rainbow wave, gradient, comet and twinkle
   that run around each ARGB fan.

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(LumaBridge LANGUAGES CXX VERSION 0.3.4)
+project(LumaBridge LANGUAGES CXX VERSION 0.3.5)
 
 if(NOT WIN32)
     message(STATUS "Non-Windows host: only the portable core tests will be built.")
@@ -29,7 +29,7 @@ endif()
 enable_testing()
 add_executable(test_core tests/test_core.cpp)
 target_include_directories(test_core PRIVATE
-    src/core src/integrations/razer src/integrations/corsair src/integrations/alienware src/integrations/steelseries src/app src/hardware/aura-usb)
+    src/core src/integrations/razer src/integrations/corsair src/integrations/alienware src/integrations/steelseries src/app src/app/games src/hardware/aura-usb)
 add_test(NAME test_core COMMAND test_core)
 
 if(NOT WIN32)
@@ -141,9 +141,13 @@ if(LUMA_ARCH STREQUAL "x64")
         src/app/armoury_crate.cpp
         src/app/game_detector.cpp
         src/app/game_library.cpp
+        src/app/game_feeds.cpp
+        src/app/screen_capture.cpp
         src/app/res/app.rc)
-    target_include_directories(lumabridge_app PRIVATE src/app)
-    target_link_libraries(lumabridge_app PRIVATE imgui aura_bridge gamesense luma_common shell32 ole32 advapi32 dbghelp psapi version)
+    target_include_directories(lumabridge_app PRIVATE src/app src/app/games)
+    target_compile_definitions(lumabridge_app PRIVATE LUMA_VERSION="${PROJECT_VERSION}")
+    target_link_libraries(lumabridge_app PRIVATE imgui aura_bridge gamesense luma_common shell32 ole32 advapi32 dbghelp psapi version
+                          winhttp ws2_32 d3d11 dxgi)
     set_target_properties(lumabridge_app PROPERTIES OUTPUT_NAME "LumaBridge")
     if(MSVC)
         target_link_options(lumabridge_app PRIVATE /MANIFEST:NO)  # app.rc embeds our manifest
@@ -188,6 +192,6 @@ endif()
 install(TARGETS lumabridge_proxy chroma_emu corsair_emu lightfx_emu RUNTIME DESTINATION integrations)
 install(TARGETS aura-test aura-usb-test ram-probe ghub-probe logiled-harness RUNTIME DESTINATION tools)
 install(FILES scripts/Run-HardwareTest.ps1 DESTINATION tools)
-install(FILES scripts/Install-LogiLedProxy.ps1 scripts/Install-SdkEmulators.ps1 scripts/Install-HandbackTask.ps1
+install(FILES scripts/Install-LogiLedProxy.ps1 scripts/Install-SdkEmulators.ps1 scripts/Install-HandbackTask.ps1 scripts/Write-GameFile.ps1
         DESTINATION scripts)
 install(FILES config/LumaBridge.ini.example DESTINATION .)

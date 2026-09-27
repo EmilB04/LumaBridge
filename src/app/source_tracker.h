@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "color.h"
+#include "effects.h"
 
 namespace luma::app {
 
@@ -21,6 +22,9 @@ struct Source {
     double flashHz = 0;
     uint64_t lastSeen = 0;    // any frame, including keep-alives
     uint64_t lastChange = 0;  // last time the color actually changed
+    // Built-in game feeds (CS2, Rocket League, ...) send a whole effect instead of a color.
+    bool hasEffect = false;
+    fx::Params effect;
 };
 
 class SourceTracker {
@@ -32,12 +36,34 @@ public:
                  double flashHz, uint64_t now) {
         Source* s = Find(pid, sdk);
         if (!s) {
-            sources_.push_back(Source{pid, sdk, game, color, flashHz, now, now});
+            sources_.push_back(Make(pid, sdk, game, color, flashHz, now));
             return;
         }
         if (s->color != color || s->flashHz != flashHz) s->lastChange = now;
         s->color = color;
         s->flashHz = flashHz;
+        s->game = game;
+        s->lastSeen = now;
+    }
+
+    // Like OnFrame, for sources that send an effect. `color` (the swatch) is effect.color1.
+    void OnEffect(uint32_t pid, const std::string& sdk, const std::string& game, const fx::Params& effect,
+                  uint64_t now) {
+        Source* s = Find(pid, sdk);
+        if (!s) {
+            Source n = Make(pid, sdk, game, effect.color1, 0, now);
+            n.hasEffect = true;
+            n.effect = effect;
+            sources_.push_back(n);
+            return;
+        }
+        const fx::Params& e = s->effect;
+        if (!s->hasEffect || e.kind != effect.kind || e.color1 != effect.color1 || e.color2 != effect.color2 ||
+            e.speed != effect.speed)
+            s->lastChange = now;
+        s->hasEffect = true;
+        s->effect = effect;
+        s->color = effect.color1;
         s->game = game;
         s->lastSeen = now;
     }
@@ -70,6 +96,18 @@ public:
     const std::vector<Source>& All() const { return sources_; }
 
 private:
+    static Source Make(uint32_t pid, const std::string& sdk, const std::string& game, Rgb color, double flashHz,
+                       uint64_t now) {
+        Source s;
+        s.pid = pid;
+        s.sdk = sdk;
+        s.game = game;
+        s.color = color;
+        s.flashHz = flashHz;
+        s.lastSeen = s.lastChange = now;
+        return s;
+    }
+
     Source* Find(uint32_t pid, const std::string& sdk) {
         for (Source& s : sources_)
             if (s.pid == pid && s.sdk == sdk) return &s;

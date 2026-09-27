@@ -43,7 +43,24 @@ bool Controller::Init() {
     RescanDevices();
     detector_.SetExtraGames(prefs_.manualGames);
     RescanLibrary();
+    feeds_.Start();
     return true;
+}
+
+std::wstring Controller::GameDir(const char* profileKey) const {
+    const games::GameProfile* want = games::ProfileByKey(profileKey);
+    if (!want) return L"";
+    for (const auto& g : library_) {
+        for (const auto& e : g.exeNames)
+            if (games::FindProfile(e, "") == want) return g.dir;
+        if (games::FindProfile("", Utf8(g.name)) == want) return g.dir;
+    }
+    return L"";
+}
+
+void Controller::RefreshFeedSettings() {
+    const std::wstring rl = GameDir("rocketleague");
+    if (!rl.empty()) feeds_.SetRocketLeaguePort(RocketLeagueStatsPort(rl));
 }
 
 void Controller::RescanLibrary() {
@@ -114,6 +131,8 @@ void Controller::Shutdown(bool handBack) {
     shutDown_ = true;
     if (dirty_) SaveAll(iniPath_, prefs_, cfg_);
     gameSense_.Stop();
+    feeds_.Stop();
+    screen_.Stop();
     const bool wasControlling = mirror_.IsRunning();
     mirror_.Stop();
     // Exiting LumaBridge gives the lights back to Armoury Crate (not during a Windows
@@ -212,10 +231,23 @@ Controller::Output Controller::Decide() const {
             for (const GameStatus& gs : games_)
                 if (SourceBelongsTo(*s, gs.game)) name = gs.game.name;
             Output g = lit((name + " - " + s->sdk).c_str());
-            g.fx.kind = s->flashHz > 0 ? fx::Kind::Strobe : fx::Kind::Static;
-            g.fx.color1 = s->color;
-            g.fx.speed = s->flashHz;
+            if (s->hasEffect) {
+                g.fx = s->effect;
+            } else {
+                g.fx.kind = s->flashHz > 0 ? fx::Kind::Strobe : fx::Kind::Static;
+                g.fx.color1 = s->color;
+                g.fx.speed = s->flashHz;
+            }
             return g;
+        }
+        games::ScreenColors sc;
+        if (const GameStatus* g = ScreenColorsGame(); g && screen_.Latest(&sc)) {
+            Output o = lit((g->game.name + " - screen colors").c_str());
+            o.fx.kind = fx::Kind::Gradient;  // left of the screen <-> right, around each fan
+            o.fx.color1 = sc.left;
+            o.fx.color2 = sc.right;
+            o.fx.speed = 0;
+            return o;
         }
         // A game without (or not yet sending) dynamic lighting is running: say so.
         std::string idle = "No game running";
@@ -262,7 +294,9 @@ bool Controller::SourceBelongsTo(const Source& s, const RunningGame& g) const {
     const std::string n = games::Normalize(s.game);
     if (n.empty()) return false;
     std::string stem = g.exe.substr(0, g.exe.find_last_of('.'));
-    return n == games::Normalize(g.name) || n == games::Normalize(stem) || n == games::Normalize(g.folder);
+    if (n == games::Normalize(g.name) || n == games::Normalize(stem) || n == games::Normalize(g.folder)) return true;
+    const games::GameProfile* p = games::FindProfile(g.exe, g.name);  // built-in feeds use the profile title
+    return p && n == games::Normalize(p->title);
 }
 
 std::vector<Source> Controller::unmatchedSources() const {
@@ -282,6 +316,10 @@ void Controller::UpdateGames(uint64_t now) {
         GameStatus st;
         st.game = g;
         st.sdk = g.sdk;
+        st.profile = games::FindProfile(g.exe, g.name);
+        if (st.profile && st.profile->kind == games::ProfileKind::NotAGame) continue;  // e.g. DSX
+        auto mode = prefs_.gameModes.find(games::Normalize(g.name));
+        if (mode != prefs_.gameModes.end()) st.mode = mode->second;
         const Source* sending = nullptr;
         for (const Source& s : tracker_.All())
             if (SourceBelongsTo(s, g) && (!sending || s.lastChange > sending->lastChange)) sending = &s;
@@ -328,6 +366,44 @@ void Controller::Apply(const Output& out) {
     mirror_.SetPattern(out.fx, cfg_.argbFans, out.fanTest);
 }
 
+void Controller::UpdateFeeds(uint64_t now) {
+    bool rl = false, wt = false;
+    for (const GameStatus& g : games_)
+        if (g.profile) {
+            rl |= g.profile->feed == games::Feed::RocketLeagueStats;
+            wt |= g.profile->feed == games::Feed::WarThunderApi;
+        }
+    feeds_.SetRunning(rl, wt);
+    struct {
+        GameFeeds::Feed feed;
+        const char* sdk;
+        const char* game;
+    } feeds[] = {
+        {feeds_.Cs2(now), "Game State Integration", "Counter-Strike 2"},
+        {feeds_.RocketLeague(now), "Stats API", "Rocket League"},
+        {feeds_.WarThunder(now), "local status page", "War Thunder"},
+    };
+    for (int i = 0; i < 3; ++i) {
+        if (feeds[i].feed.active) {
+            tracker_.OnEffect(0, feeds[i].sdk, feeds[i].game, feeds[i].feed.effect, now);
+        } else if (feedActive_[i]) {
+            tracker_.OnRelease(0, feeds[i].sdk);  // out of the match: back to the idle choice
+        }
+        feedActive_[i] = feeds[i].feed.active;
+    }
+}
+
+const Controller::GameStatus* Controller::ScreenColorsGame() const {
+    if (tracker_.Active()) return nullptr;  // a game is lighting things itself
+    for (const GameStatus& g : games_) {
+        if (g.mode == GameMode::Screen) return &g;
+        if (g.mode == GameMode::Idle) continue;
+        const bool builtIn = g.profile && g.profile->kind == games::ProfileKind::BuiltIn;
+        if (prefs_.screenForUnsupported && !builtIn && !games::SupportsLighting(g.support)) return &g;
+    }
+    return nullptr;
+}
+
 uint64_t Controller::handbackMsLeft() const {
     const uint64_t now = GetTickCount64();
     return handbackDoneAt_ > now ? handbackDoneAt_ - now : 0;
@@ -350,10 +426,17 @@ void Controller::Tick() {
                              snap.ambient->flashHz, now);  // keep-alive while the game is active
         }
     }
+    UpdateFeeds(now);
     tracker_.Prune(now, [](const Source&) { return false; });
     UpdateGames(now);
+    // Screen colors runs only while a running game falls back to it.
+    const bool wantScreen = ScreenColorsGame() != nullptr && !auraPaused_ && !prefs_.lightingStopped &&
+                            prefs_.mode == Mode::Auto;
+    if (wantScreen && !screen_.Running()) screen_.Start();
+    if (!wantScreen && screen_.Running()) screen_.Stop();
     if (libraryJob_.valid() && libraryJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         library_ = libraryJob_.get();
+        RefreshFeedSettings();
         if (libraryRescanPending_) {
             libraryRescanPending_ = false;
             RescanLibrary();

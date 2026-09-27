@@ -14,6 +14,8 @@
 #include <vector>
 
 #include "controller.h"
+#include "game_feeds.h"
+#include "game_profiles.h"
 #include "effects.h"
 #include "imgui.h"
 #include "integrations.h"
@@ -42,6 +44,11 @@ constexpr unsigned kAccentHover = 0x9384FF;
 constexpr unsigned kGreen = 0x3DDC97;
 constexpr unsigned kAmber = 0xF5B84B;
 constexpr unsigned kRed = 0xFF6B6B;
+
+#ifndef LUMA_VERSION
+#define LUMA_VERSION "dev"
+#endif
+constexpr const char* kVersionText = "v" LUMA_VERSION;
 
 float g_scale = 1.f;  // DPI scale, set by ApplyTheme
 float S() { return g_scale; }
@@ -335,16 +342,19 @@ void AutoPage(Controller& ctl, const Fonts& f) {
         ImGui::EndGroup();
         ImGui::PopID();
     };
+    const bool screenOn = ctl.screenColorsActive();
     for (const auto& g : running) {
         using games::Support;
+        using games::ProfileKind;
         std::string detail = g.game.store;
         const char* pill = "No dynamic lighting";
         unsigned pillColor = kMuted;
+        const bool builtIn = g.profile && g.profile->kind == ProfileKind::BuiltIn;
         switch (g.support) {
         case Support::Active:
             pill = "Dynamic lighting";
             pillColor = kGreen;
-            detail += "  -  " + g.sdk + "  -  " + ToHex(g.color);
+            detail += "  -  " + g.sdk;
             break;
         case Support::Known:
         case Support::SdkLoaded:
@@ -353,13 +363,24 @@ void AutoPage(Controller& ctl, const Fonts& f) {
             detail += "  -  " + (g.sdk.empty() ? std::string("has used lighting before") : g.sdk) +
                       "  -  waiting for its colors (usually once you're in a match)";
             break;
-        case Support::Unknown:
-            detail += "  -  no lighting so far. LumaBridge doesn't look inside games with anti-cheat, so it "
-                      "switches over as soon as the game sends colors";
-            break;
         default:
-            detail += "  -  doesn't use a lighting SDK LumaBridge understands";
+            if (builtIn) {
+                pill = "Supports dynamic lighting";
+                pillColor = kAmber;
+                detail += "  -  " + std::string(g.profile->how) + "  -  waiting for a match (set up on Integrations)";
+            } else if (g.profile) {
+                detail += "  -  " + std::string(g.profile->how) + ". " + g.profile->note;
+            } else if (g.support == Support::Unknown) {
+                detail += "  -  no lighting so far. LumaBridge doesn't look inside games with anti-cheat, so it "
+                          "switches over as soon as the game sends colors";
+            } else {
+                detail += "  -  doesn't use a lighting SDK LumaBridge understands";
+            }
             break;
+        }
+        if (screenOn && g.support != Support::Active && g.mode != GameMode::Idle && !builtIn) {
+            pill = "Screen colors";
+            pillColor = kAccent;
         }
         gameRow(g.game.name, g.color, g.support == Support::Active, detail, pill, pillColor);
     }
@@ -388,6 +409,11 @@ void AutoPage(Controller& ctl, const Fonts& f) {
         "\"Armoury Crate hand-back\" on the Integrations page once to make this silent.",
     };
     Muted("%s", kIdleHelp[idle]);
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    if (ImGui::Checkbox("Games without dynamic lighting show the screen's colors", &ctl.prefs().screenForUnsupported))
+        ctl.Changed();
+    Muted("LumaBridge watches the screen image (never the game) and runs its colors around the fans. "
+          "Choose per game on the Games List page.");
     EndCard();
 
     PreviewCard(ctl, f);
@@ -707,11 +733,12 @@ void GamesListPage(HWND hwnd, Controller& ctl, UiState& ui, const Fonts& f) {
         ImGui::Dummy(ImVec2(0, 2 * S()));
     }
     if (!rows.empty() &&
-        ImGui::BeginTable("games", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Game", ImGuiTableColumnFlags_WidthStretch, 3.f);
-        ImGui::TableSetupColumn("Store", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-        ImGui::TableSetupColumn("Dynamic lighting", ImGuiTableColumnFlags_WidthStretch, 2.2f);
-        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 80 * S());
+        ImGui::BeginTable("games", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Game", ImGuiTableColumnFlags_WidthStretch, 2.6f);
+        ImGui::TableSetupColumn("Store", ImGuiTableColumnFlags_WidthStretch, 1.1f);
+        ImGui::TableSetupColumn("Dynamic lighting", ImGuiTableColumnFlags_WidthStretch, 2.f);
+        ImGui::TableSetupColumn("Without game lighting", ImGuiTableColumnFlags_WidthStretch, 1.7f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 70 * S());
         ImGui::TableHeadersRow();
         int id = 0;
         std::wstring removeExe;
@@ -734,22 +761,59 @@ void GamesListPage(HWND hwnd, Controller& ctl, UiState& ui, const Fonts& f) {
             ImGui::TableNextColumn();
             bool hasSeen = false;
             for (const auto& exe : g.exeNames) hasSeen |= std::find(seen.begin(), seen.end(), exe) != seen.end();
+            const games::GameProfile* profile = row.running ? row.running->profile : nullptr;
+            for (size_t i = 0; !profile && i < g.exeNames.size(); ++i) profile = games::FindProfile(g.exeNames[i], "");
+            if (!profile) profile = games::FindProfile("", name);
+            using games::ProfileKind;
+            auto profileTip = [&] {
+                if (profile && ImGui::IsItemHovered()) ImGui::SetTooltip("%s.\n%s", profile->how, profile->note);
+            };
             if (row.running && row.running->support == games::Support::Active) {
                 Pill("Lighting now", kGreen);
+            } else if (profile && profile->kind == ProfileKind::NotAGame) {
+                Muted("Not a game");
+                profileTip();
+            } else if (profile && profile->kind == ProfileKind::BuiltIn) {
+                Pill("Built in", kGreen);
+                profileTip();
             } else if (hasSeen || (row.running && games::SupportsLighting(row.running->support))) {
                 Pill("Supported", kGreen);
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("LumaBridge has seen this game send lighting.");
+            } else if (profile && profile->kind == ProfileKind::VendorSdk) {
+                Pill(profile->how, kAmber);
+                profileTip();
             } else if (!g.sdk.empty()) {
                 const std::string label = "Likely - " + g.sdk;
                 Pill(label.c_str(), kAmber);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The game's folder has %s files. It shows as Supported once it sends lighting.",
                                       g.sdk.c_str());
+            } else if (profile && profile->kind == ProfileKind::NoSupport) {
+                Muted("No lighting support");
+                profileTip();
             } else {
                 Muted("Not detected");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("No lighting SDK files in its folder and no lighting seen yet. Some games build "
                                       "the SDK in, so play it once with LumaBridge running to be sure.");
+            }
+            ImGui::TableNextColumn();
+            if (!profile || profile->kind != ProfileKind::NotAGame) {
+                const std::string key = games::Normalize(name);
+                auto& modes = ctl.prefs().gameModes;
+                auto it = modes.find(key);
+                int mode = it == modes.end() ? 0 : static_cast<int>(it->second);
+                const char* labels[] = {"Default", "Screen colors", "My idle choice"};
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::Combo("##mode", &mode, labels, 3)) {
+                    if (mode == 0) modes.erase(key);
+                    else modes[key] = static_cast<GameMode>(mode);
+                    ctl.Changed();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("What the lights show while this game runs but isn't sending lighting.\n"
+                                      "Default follows \"Games without dynamic lighting show the screen's colors\" "
+                                      "(Lighting page).");
             }
             ImGui::TableNextColumn();
             if (g.manual && ImGui::SmallButton("Remove")) removeExe = g.exePath;
@@ -759,6 +823,121 @@ void GamesListPage(HWND hwnd, Controller& ctl, UiState& ui, const Fonts& f) {
         if (!removeExe.empty()) ctl.RemoveManualGame(removeExe);
     }
     EndCard();
+}
+
+// ---- Built-in game feeds (Integrations page) ----------------------------------------
+
+// Writes a feed's config file; if the game's folder needs administrator rights, asks for
+// them through Write-GameFile.ps1.
+void WriteFeedFile(Integrations& in, UiState& ui, const std::string& id, const std::string& what,
+                   const std::wstring& path, const std::string& text, bool remove) {
+    const bool ok = remove ? (DeleteFileW(path.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND)
+                           : WriteTextFile(path, text);
+    const DWORD err = GetLastError();
+    ui.feedMessageId = id;
+    if (ok) {
+        ui.feedMessage = "Done: " + what;
+    } else if (err == ERROR_ACCESS_DENIED) {
+        ui.feedMessageId.clear();  // the elevated run reports under the card itself
+        in.WriteGameFileElevated(id, what, path, text, remove);
+    } else {
+        ui.feedMessage = "Failed: couldn't write " + Utf8(path) + " (error " + std::to_string(err) + ")";
+    }
+    ui.feedCheckAt = 0;
+}
+
+void FeedCards(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
+    const uint64_t now = GetTickCount64();
+    if (now >= ui.feedCheckAt) {
+        ui.feedCheckAt = now + 2000;
+        ui.cs2Dir = ctl.GameDir("cs2");
+        ui.rlDir = ctl.GameDir("rocketleague");
+        ui.cs2Installed = Cs2ConfigInstalled(ui.cs2Dir);
+        ui.rlIniFound = !RocketLeagueStatsText(ui.rlDir, true).empty();
+        ui.rlEnabled = RocketLeagueStatsEnabled(ui.rlDir);
+        ctl.RefreshFeedSettings();
+    }
+    const auto& feeds = ctl.feeds();
+    auto header = [&](const char* id, const char* key, const char* pill, unsigned pillColor) {
+        BeginCard(id);
+        const games::GameProfile* p = games::ProfileByKey(key);
+        ImGui::PushFont(f.bold);
+        ImGui::TextUnformatted(p->title);
+        ImGui::PopFont();
+        ImGui::SameLine();
+        Pill(pill, pillColor);
+        Muted("%s. %s", p->how, p->note);
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+    };
+    auto footer = [&](const char* id) {
+        const std::string msg = ui.feedMessageId == id ? ui.feedMessage
+                                : in.LastId() == id    ? in.LastMessage()
+                                                       : std::string();
+        if (!msg.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(in.Busy() ? kAmber : msg.rfind("Done", 0) == 0 ? kGreen : kRed));
+            ImGui::TextWrapped("%s", msg.c_str());
+            ImGui::PopStyleColor();
+        }
+        EndCard();
+    };
+
+    // Counter-Strike 2
+    {
+        const bool on = ui.cs2Installed;
+        header("feed-cs2", "cs2", !feeds.Cs2Listening() ? "Port busy" : on ? "Active" : "Off",
+               !feeds.Cs2Listening() ? kRed : on ? kGreen : kMuted);
+        if (ui.cs2Dir.empty()) {
+            Muted("Counter-Strike 2 wasn't found in your game libraries (Games List > Rescan).");
+        } else if (on) {
+            Muted("%s", feeds.Cs2Seen() ? "CS2 is sending its game state." : "Set up. Restart CS2 once so it picks it up.");
+            ImGui::BeginDisabled(in.Busy());
+            if (ImGui::Button("Remove##cs2"))
+                WriteFeedFile(in, ui, "cs2", "Counter-Strike 2 feed removed", Cs2ConfigPath(ui.cs2Dir), "", true);
+            ImGui::EndDisabled();
+        } else {
+            ImGui::BeginDisabled(in.Busy());
+            if (PrimaryButton("Set up##cs2"))
+                WriteFeedFile(in, ui, "cs2", "Counter-Strike 2 feed set up - restart CS2",
+                              Cs2ConfigPath(ui.cs2Dir), Cs2ConfigText(), false);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            Muted("Adds gamestate_integration_lumabridge.cfg to CS2's cfg folder (Valve's official way).");
+        }
+        footer("cs2");
+    }
+
+    // Rocket League
+    {
+        const bool on = ui.rlEnabled;
+        header("feed-rl", "rocketleague", on ? "Active" : "Off", on ? kGreen : kMuted);
+        if (ui.rlDir.empty()) {
+            Muted("Rocket League wasn't found in your game libraries (Games List > Rescan).");
+        } else if (!ui.rlIniFound) {
+            Muted("This Rocket League install has no Stats API settings file (TAGame\\Config\\DefaultStatsAPI.ini). "
+                  "Update the game; the Stats API came in a 2025 update.");
+        } else {
+            if (on)
+                Muted("%s", feeds.RocketLeagueConnected() ? "Connected to the game."
+                                                          : "Switched on. Restart Rocket League if it's running.");
+            ImGui::BeginDisabled(in.Busy());
+            if (on ? ImGui::Button("Switch off##rl") : PrimaryButton("Switch on##rl"))
+                WriteFeedFile(in, ui, "rocketleague",
+                              on ? "Rocket League Stats API switched off" : "Rocket League Stats API switched on - restart the game",
+                              RocketLeagueStatsIni(ui.rlDir), RocketLeagueStatsText(ui.rlDir, !on), false);
+            ImGui::EndDisabled();
+            if (!on) {
+                ImGui::SameLine();
+                Muted("Sets PacketSendRate in the game's DefaultStatsAPI.ini (a backup is kept).");
+            }
+        }
+        footer("rocketleague");
+    }
+
+    // War Thunder
+    header("feed-wt", "warthunder", "Built in", kGreen);
+    Muted("%s", feeds.WarThunderSeen() ? "Seen War Thunder's status page this session."
+                                       : "Works as soon as you're in a battle.");
+    footer("warthunder");
 }
 
 void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
@@ -842,6 +1021,15 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
         }
         EndCard();
     }
+
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted("Built-in game feeds");
+    ImGui::PopFont();
+    Muted("Official data these games publish on your PC. Nothing is added to the game itself, so "
+          "anti-cheat isn't involved.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    FeedCards(ctl, in, ui, f);
 }
 
 void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
@@ -914,6 +1102,15 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
     }
     EndCard();
 
+    BeginCard("about");
+    CardTitle(f, "About");
+    ImGui::Text("LumaBridge %s", kVersionText);
+    Muted("Game lighting for ASUS Aura, without Armoury Crate in the way.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    if (ImGui::Button("Releases on GitHub"))
+        ShellExecuteW(nullptr, L"open", L"https://github.com/EmilB04/LumaBridge/releases", nullptr, nullptr, SW_SHOWNORMAL);
+    EndCard();
+
     BeginCard("trouble");
     CardTitle(f, "Troubleshooting");
     if (ImGui::Button("Open log folder")) {
@@ -967,13 +1164,22 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width) {
     const auto& out = ctl.output();
     const float orbR = 22 * S();
     const float bottom = ImGui::GetWindowHeight() - 20 * S();
-    ImGui::SetCursorPosY(bottom - orbR * 2 - 58 * S());
+    ImGui::SetCursorPosY(bottom - orbR * 2 - 76 * S());  // leaves room for the version line
     ImVec2 p = ImGui::GetCursorScreenPos();
     Orb(ImVec2(p.x + orbR + 4 * S(), p.y + orbR + 4 * S()), orbR, PreviewColor(out));
     ImGui::Dummy(ImVec2(0, orbR * 2 + 14 * S()));
     ImGui::PushFont(f.bold);
     ImGui::TextUnformatted(ctl.prefs().mode == Mode::Auto ? "Auto" : "Manual");
     ImGui::PopFont();
+    // Version in the bottom-left corner.
+    {
+        ImGui::PushFont(f.caption);
+        const ImVec2 size = ImGui::CalcTextSize(kVersionText);
+        const ImVec2 at(ImGui::GetWindowPos().x + ImGui::GetStyle().WindowPadding.x,
+                        ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - size.y - 8 * S());
+        ImGui::GetWindowDrawList()->AddText(at, Hex(kMuted, 160), kVersionText);
+        ImGui::PopFont();
+    }
     ImGui::PushFont(f.caption);
     if (const uint64_t left = ctl.handbackMsLeft())
         Muted("Handing back to Armoury Crate... %d s", static_cast<int>((left + 999) / 1000));

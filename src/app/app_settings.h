@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,9 @@ using ManualEffect = fx::Kind;
 // (stop + start Armoury Crate so it re-applies its effect).
 enum class IdleBehavior { ManualColor, Rainbow, Off, ArmouryCrate };
 
+// Per-game choice on the Games List page.
+enum class GameMode { Default, Screen, Idle };
+
 struct Prefs {
     Mode mode = Mode::Auto;
     Rgb manualColor{0, 140, 255};
@@ -37,6 +41,10 @@ struct Prefs {
     std::vector<std::string> lightingGames;
     // Games the user added on the Games List page (full exe paths).
     std::vector<std::wstring> manualGames;
+    // Games without dynamic lighting show the screen's colors (else the idle choice).
+    bool screenForUnsupported = false;
+    // Per game (key: games::Normalize(name)): what it shows when it has no lighting of its own.
+    std::map<std::string, GameMode> gameModes;
     static constexpr size_t kMaxRecent = 8;
 };
 

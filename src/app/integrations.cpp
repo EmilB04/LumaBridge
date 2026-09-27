@@ -303,7 +303,31 @@ std::wstring Quote(const std::wstring& s) {  // PowerShell single-quoted string
     return out + L"'";
 }
 
+std::wstring Base64Bytes(const std::string& bytes) {
+    static const char kChars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::wstring out;
+    for (size_t i = 0; i < bytes.size(); i += 3) {
+        const unsigned b0 = static_cast<unsigned char>(bytes[i]);
+        const unsigned b1 = i + 1 < bytes.size() ? static_cast<unsigned char>(bytes[i + 1]) : 0;
+        const unsigned b2 = i + 2 < bytes.size() ? static_cast<unsigned char>(bytes[i + 2]) : 0;
+        const unsigned v = b0 << 16 | b1 << 8 | b2;
+        out += kChars[(v >> 18) & 63];
+        out += kChars[(v >> 12) & 63];
+        out += i + 1 < bytes.size() ? kChars[(v >> 6) & 63] : '=';
+        out += i + 2 < bytes.size() ? kChars[v & 63] : '=';
+    }
+    return out;
+}
+
 }  // namespace
+
+void Integrations::WriteGameFileElevated(const std::string& id, const std::string& what, const std::wstring& path,
+                                         const std::string& content, bool remove) {
+    std::wstring args = L"-Path " + Quote(path);
+    if (remove) args += L" -Remove";
+    else args += L" -ContentBase64 " + Quote(Base64Bytes(content));
+    Run(id, what, L"Write-GameFile.ps1", args, true);
+}
 
 void Integrations::Run(const std::string& id, const std::string& what, const std::wstring& script,
                        const std::wstring& args, bool elevated) {
