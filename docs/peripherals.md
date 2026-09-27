@@ -135,6 +135,19 @@ LumaBridge sends only the static-color command, at most about 10 times a second,
 brightness applied to the color. Because it never saves, the lighting Armoury Crate stored
 in the keyboard is untouched and comes back when the keyboard restarts.
 
+### Per-key colors
+
+Not in Armoury Crate's captures, but the command ASUS ROG keyboards take works on the wired
+Azoth: `C0 81 <n> 00`, then `n` (up to 15) × `<LED number> <R> <G> <B>`. Tested with
+`tools\azoth-probe.exe`, which also maps LED numbers to keys by lighting one at a time and
+recording the key you press. On an ISO / Nordic Azoth the LED number is **column × 8 + row**:
+row 0 is the F-row and row 5 the bottom row, columns left to right. 82 keys; the tall Enter
+is 107. The table is [`azoth_layout.h`](../src/app/peripherals/azoth_layout.h).
+
+By cable LumaBridge draws every effect across the keys, sending only the keys that changed,
+up to about 25 times a second. Through the Omni receiver it still sends one color, until the
+per-key command is tested wirelessly.
+
 ### Wireless (ROG Omni receiver `0B05:1ACE`)
 
 Captured over 2.4 GHz: Armoury Crate sends the **same commands** to the receiver's vendor
@@ -150,7 +163,6 @@ or switched off, the receiver accepts the command and nothing changes; the keybo
 up the color within the next 5-second refresh once it wakes.
 
 Not yet:
-- **Per-key colors:** needs a capture of per-key lighting from Armoury Crate.
 - **Handing back without a restart:** needs the replies to the `12 xx` queries, which
   would let LumaBridge read and restore the saved color.
 

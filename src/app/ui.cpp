@@ -24,6 +24,7 @@
 #include "imgui_internal.h"
 #include "integrations.h"
 #include "setup_hardware.h"
+#include "azoth_layout.h"
 
 namespace luma::app {
 namespace {
@@ -1723,18 +1724,9 @@ void DrawMouse(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& le
         Glow(dl, ImVec2(b.x - w * 0.14f, cy + ry * 0.35f - i * h * 0.12f), 2.6f * S(), leds[static_cast<size_t>(6 + i)]);
 }
 
-// The ROG Azoth: 75 % ANSI, the F-row with the control knob and OLED screen top right, the
-// right-hand column (Del, PgUp, PgDn, End) and the arrow cluster. One color under every key.
-void DrawKeyboard(ImDrawList* dl, ImVec2 a, ImVec2 size, Rgb c) {
-    // Key widths in units per row; negative: a gap of that width. 16 units across.
-    static const std::vector<std::vector<float>> kRows = {
-        {1, -0.25f, 1, 1, 1, 1, -0.25f, 1, 1, 1, 1, -0.25f, 1, 1, 1, 1},  // Esc, F1-F12
-        {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1},                   // ` 1 ... = Backspace, Del
-        {1.5f, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.5f, 1},             // Tab ... \, PgUp
-        {1.75f, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2.25f, 1},              // Caps ... Enter, PgDn
-        {2.25f, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.75f, 1, 1},              // Shift ... Shift, Up, End
-        {1.25f, 1.25f, 1.25f, 6.25f, 1, 1, 1, 1, 1, 1},                  // Ctrl Win Alt Space Alt Fn Ctrl, arrows
-    };
+// The ROG Azoth as it's lit: every key from its table (azoth_layout.h: ISO / Nordic, the
+// tall Enter), `colors` in that table's order, the control knob and OLED screen top right.
+void DrawKeyboard(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& colors) {
     const ImVec2 b(a.x + size.x, a.y + size.y);
     dl->AddRectFilled(a, b, Hex(0x2A2F38), 9 * S());  // the case
     dl->AddRectFilled(ImVec2(a.x + 2 * S(), a.y + 2 * S()), ImVec2(b.x - 2 * S(), b.y - 2 * S()), Hex(0x171B22), 8 * S());
@@ -1742,22 +1734,17 @@ void DrawKeyboard(ImDrawList* dl, ImVec2 a, ImVec2 size, Rgb c) {
     const float u = (size.x - 2 * pad) / 16.f;
     const float rowGap = u * 0.25f;  // the F-row stands apart
     const float gap = std::max(1.5f, u * 0.09f);
-    for (size_t r = 0; r < kRows.size(); ++r) {
-        float x = a.x + pad;
-        const float y = a.y + pad + r * u + (r > 0 ? rowGap : 0);
-        for (float w : kRows[r]) {
-            if (w < 0) {
-                x += -w * u;
-                continue;
-            }
-            const ImVec2 ka(x + gap / 2, y + gap / 2), kb(x + w * u - gap / 2, y + u - gap / 2);
-            dl->AddRectFilled(ImVec2(ka.x - 1.5f * S(), ka.y - 1.5f * S()), ImVec2(kb.x + 1.5f * S(), kb.y + 1.5f * S()),
-                              Col(c, 110), 3 * S());  // light around the key
-            dl->AddRectFilled(ka, kb, Hex(0x20252F), 2.5f * S());                                  // the keycap
-            dl->AddRectFilled(ImVec2(ka.x + u * 0.12f, ka.y + u * 0.08f), ImVec2(kb.x - u * 0.12f, kb.y - u * 0.2f),
-                              Hex(0x282E3A), 2 * S());  // its top
-            x += w * u;
-        }
+    const auto& keys = azoth::IsoKeys();
+    for (size_t i = 0; i < keys.size(); ++i) {
+        const azoth::Key& k = keys[i];
+        const Rgb c = i < colors.size() ? colors[i] : Rgb{50, 54, 64};
+        const float x = a.x + pad + k.x * u, y = a.y + pad + k.y * u + (k.y >= 1 ? rowGap : 0);
+        const ImVec2 ka(x + gap / 2, y + gap / 2), kb(x + k.w * u - gap / 2, y + k.h * u - gap / 2);
+        dl->AddRectFilled(ImVec2(ka.x - 1.5f * S(), ka.y - 1.5f * S()), ImVec2(kb.x + 1.5f * S(), kb.y + 1.5f * S()),
+                          Col(c, 150), 3 * S());  // light around the key
+        dl->AddRectFilled(ka, kb, Hex(0x20252F), 2.5f * S());  // the keycap
+        dl->AddRectFilled(ImVec2(ka.x + u * 0.12f, ka.y + u * 0.08f), ImVec2(kb.x - u * 0.12f, kb.y - u * 0.2f),
+                          Col(Scale(c, 0.22), 255), 2 * S());  // its top, lit a little
     }
     // Top right: the control knob, then the OLED screen.
     const float y0 = a.y + pad;
@@ -1766,7 +1753,9 @@ void DrawKeyboard(ImDrawList* dl, ImVec2 a, ImVec2 size, Rgb c) {
     dl->AddCircle(knob, u * 0.34f, Hex(0x505868), 20, 1 * S());
     const ImVec2 oa(a.x + pad + 14.65f * u, y0 + u * 0.08f), ob(a.x + pad + 16 * u - gap / 2, y0 + u * 0.92f);
     dl->AddRectFilled(oa, ob, Hex(0x05070A), 2 * S());
-    dl->AddRectFilled(ImVec2(oa.x + u * 0.15f, oa.y + u * 0.3f), ImVec2(oa.x + u * 0.75f, oa.y + u * 0.42f), Col(c, 160));
+    if (!colors.empty())
+        dl->AddRectFilled(ImVec2(oa.x + u * 0.15f, oa.y + u * 0.3f), ImVec2(oa.x + u * 0.75f, oa.y + u * 0.42f),
+                          Col(colors.front(), 160));
 }
 
 // The canvas. `selectable`: clicking a device selects it for editing (Manual mode).
@@ -1865,7 +1854,15 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
         else if (it.device == device::kBoard)
             DrawBoard(dl, a, it.size, boardLeds, hw, slots, ramOn, LiveParams(ctl, device::kRam), t, LiveLevel(ctl, device::kRam));
         else if (it.device == device::kMouse) DrawMouse(dl, a, it.size, mouseLeds);
-        else if (it.device == device::kKeyboard) DrawKeyboard(dl, a, it.size, LiveAt(LiveParams(ctl, device::kKeyboard), t, 0, 1, LiveLevel(ctl, device::kKeyboard)));
+        else if (it.device == device::kKeyboard) {
+            // Key by key by cable; one color over the Omni receiver (as the keyboard shows it).
+            const fx::Params* kp = LiveParams(ctl, device::kKeyboard);
+            const double level = LiveLevel(ctl, device::kKeyboard);
+            std::vector<Rgb> keys;
+            if (kp && !ctl.azoth().wireless()) keys = azoth::RenderKeys(*kp, t, level);
+            else keys.assign(azoth::IsoKeys().size(), LiveAt(kp, t, 0, 1, level));
+            DrawKeyboard(dl, a, it.size, keys);
+        }
 
         auto own = [&](const char* id) {
             auto d = prefs.deviceLighting.find(id);
@@ -1963,7 +1960,7 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
             ctl.Changed();
         }
         if (ui.lightTarget == device::kKeyboard)
-            Muted("The Azoth shows one color at a time: the effect's first LED.");
+            Muted("By cable the Azoth shows the effect key by key; through its Omni receiver, one color.");
         else if (ui.lightTarget == device::kMouse)
             Muted("A G502 X Plus shows the effect LED by LED; other Logitech mice show one color.");
         else if (!d.own)
@@ -2039,7 +2036,7 @@ DeviceStatus AzothStatus(Controller& ctl) {
     using A_ = AzothOutput::State;
     if (!ctl.prefs().azothKeyboard) return {"Off", kMuted};
     switch (az.state()) {
-    case A_::Active: return {az.wireless() ? "Following LumaBridge (wireless)" : "Following LumaBridge (wired)", kGreen};
+    case A_::Active: return {az.wireless() ? "Following LumaBridge (wireless, one color)" : "Following LumaBridge, every key", kGreen};
     case A_::NotFound: return {"Not connected", kAmber};
     default: return {"Armoury Crate's lighting", kMuted};
     }
@@ -2065,10 +2062,10 @@ void LogitechCard(Controller& ctl, const Fonts& f) {
 void AzothCard(Controller& ctl, const Fonts& f) {
     BeginCard("azoth");
     CardTitle(f, "Settings", Icon::Gear);
-    Muted("The whole keyboard shows LumaBridge's color, by cable or wirelessly through its ROG Omni receiver. LumaBridge "
-          "sends the same color command Armoury Crate does, but never its save command, so your saved "
-          "Armoury Crate lighting stays in the keyboard. When LumaBridge lets go, the keyboard keeps the last "
-          "color until it restarts or Armoury Crate sets it again.");
+    Muted("By cable every key shows LumaBridge's effect on its own, so waves and gradients run across the keyboard. "
+          "Through its ROG Omni receiver the whole keyboard shows one color. LumaBridge never sends Armoury Crate's "
+          "save command, so your saved Armoury Crate lighting stays in the keyboard. When LumaBridge lets go, the "
+          "keyboard keeps the last colors until it restarts or Armoury Crate sets it again.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
     bool enabled = ctl.prefs().azothKeyboard;
     if (Toggle("Light the ROG Azoth", &enabled)) ctl.SetAzothEnabled(enabled);

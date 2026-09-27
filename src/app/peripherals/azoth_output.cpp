@@ -9,13 +9,14 @@ extern "C" {
 #include <string>
 #include <vector>
 
+#include "azoth_layout.h"
 #include "azoth_protocol.h"
 #include "log.h"
 
 namespace luma::app {
 namespace {
 
-constexpr DWORD kFrameMs = 100;          // ~10 color updates per second at most
+constexpr DWORD kFrameMs = 40;           // ~25 updates per second at most (only changed keys are sent)
 constexpr uint64_t kRefreshMs = 5000;    // re-send the same color now and then
 
 // Opens the Azoth's lighting interface for writing: the keyboard's own (0B05:1A83) or the
@@ -84,6 +85,7 @@ void AzothOutput::Run() {
     azoth::Link link = azoth::Link::Wired;
     uint64_t nextFind = 0, lastSent = 0;
     Rgb last{1, 2, 3};
+    std::vector<Rgb> lastKeys;  // per key, as last sent (wired)
     bool loggedMissing = false;
     while (!stop_) {
         Sleep(kFrameMs);
@@ -125,7 +127,47 @@ void AzothOutput::Run() {
             loggedMissing = false;
             lastSent = 0;
         }
-        const Rgb c = Scale(fx::Render(effect, static_cast<double>(now - since) / 1000.0, 0, 1), brightness);
+        const double t = static_cast<double>(now - since) / 1000.0;
+        auto lost = [&] {
+            LUMA_WARN("ROG Azoth: write failed (error %lu) - unplugged?", GetLastError());
+            CloseHandle(dev);
+            dev = INVALID_HANDLE_VALUE;
+            nextFind = now + 3000;
+            state_ = State::NotFound;
+            lastKeys.clear();
+        };
+        if (link == azoth::Link::Wired) {
+            // Every key its own color (tested by cable; wireless shows one color for now).
+            const std::vector<Rgb> keys = azoth::RenderKeys(effect, t, brightness);
+            if (keys == lastKeys && now - lastSent < kRefreshMs) {
+                state_ = State::Active;
+                continue;
+            }
+            std::vector<azoth::KeyColor> kc;
+            const auto& layout = azoth::IsoKeys();
+            for (size_t i = 0; i < layout.size(); ++i)
+                if (lastKeys.empty() || keys[i] != lastKeys[i] || now - lastSent >= kRefreshMs)
+                    kc.push_back({static_cast<uint8_t>(layout[i].led), keys[i]});
+            bool ok = true;
+            for (const azoth::Report& r : azoth::KeyColors(kc, link)) {
+                DWORD written = 0;
+                if (azoth::IsSave(r) || !WriteFile(dev, r.data(), static_cast<DWORD>(azoth::ReportSize(link)), &written, nullptr)) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (!ok) {
+                lost();
+                continue;
+            }
+            lastKeys = keys;
+            lastSent = now;
+            perKey_ = true;
+            state_ = State::Active;
+            continue;
+        }
+        perKey_ = false;
+        const Rgb c = Scale(fx::Render(effect, t, 0, 1), brightness);
         if (c == last && lastSent && now - lastSent < kRefreshMs) {
             state_ = State::Active;
             continue;
@@ -134,11 +176,7 @@ void AzothOutput::Run() {
         if (azoth::IsSave(r)) continue;  // never write the keyboard's flash
         DWORD written = 0;
         if (!WriteFile(dev, r.data(), static_cast<DWORD>(azoth::ReportSize(link)), &written, nullptr)) {
-            LUMA_WARN("ROG Azoth: write failed (error %lu) - unplugged?", GetLastError());
-            CloseHandle(dev);
-            dev = INVALID_HANDLE_VALUE;
-            nextFind = now + 3000;
-            state_ = State::NotFound;
+            lost();
             continue;
         }
         last = c;

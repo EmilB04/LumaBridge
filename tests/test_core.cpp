@@ -27,6 +27,7 @@
 #include "lhm.h"
 #include "friendly_names.h"
 #include "azoth_protocol.h"
+#include "azoth_layout.h"
 #include "logitech_hidpp.h"
 #include "device_lighting.h"
 #include "setup_hardware.h"
@@ -984,6 +985,50 @@ static void TestSetupHardware() {
     CHECK(!g[0] && g[1] && !g[2] && g[3]);
 }
 
+static void TestAzothKeys() {
+    using namespace luma::app::azoth;
+    // 82 keys, each LED once, each where the map put it (column * 8 + row).
+    const auto& keys = IsoKeys();
+    CHECK(keys.size() == 82);
+    bool seen[128] = {};
+    for (const Key& k : keys) {
+        CHECK(k.led >= 0 && k.led < 128 && !seen[k.led]);
+        seen[k.led] = true;
+        CHECK(k.x >= 0 && k.x + k.w <= 16.001f && k.y >= 0 && k.y + k.h <= 6);
+        if (k.led != 107) CHECK(static_cast<int>(k.y) == k.led % 8);  // the row
+    }
+    auto at = [&](int led) {
+        for (const Key& k : keys)
+            if (k.led == led) return k;
+        return Key{-1, 0, 0, 0, 0};
+    };
+    CHECK(at(0).x == 0 && at(53).w == 6.25f && at(107).h == 2);
+    CHECK(at(121).x == 15 && at(125).x == 15);  // the right-hand column
+    CHECK(EffectColumn(at(0)) == 1 && EffectColumn(at(125)) == kColumns - 1);
+    // Rows end at 16 units.
+    for (int row = 1; row <= 5; ++row) {
+        float right = 0;
+        for (const Key& k : keys)
+            if (static_cast<int>(k.y) == row || (k.led == 107 && row == 2)) right = std::max(right, k.x + k.w);
+        CHECK(right == 16);
+    }
+
+    // The per-key command: 15 keys a report.
+    std::vector<KeyColor> kc;
+    for (int i = 0; i < 17; ++i) kc.push_back({static_cast<uint8_t>(i), luma::Rgb{static_cast<uint8_t>(i), 2, 3}});
+    const auto r = KeyColors(kc);
+    CHECK(r.size() == 2);
+    const uint8_t head[] = {0x00, 0xC0, 0x81, 15, 0x00, 0, 0, 2, 3, 1, 1, 2, 3};
+    CHECK(std::memcmp(r[0].data(), head, sizeof head) == 0);
+    CHECK(r[1][3] == 2 && r[1][5] == 15 && r[1][9] == 16 && r[1][13] == 0);
+    CHECK(KeyColors(kc, Link::Wireless)[0][0] == 0x02 && !IsSave(r[0]));
+    luma::fx::Params p;
+    p.kind = luma::fx::Kind::Static;
+    p.color1 = luma::Rgb{200, 100, 50};
+    const auto colors = RenderKeys(p, 0, 0.5);
+    CHECK(colors.size() == keys.size() && colors[0] == (luma::Rgb{100, 50, 25}));
+}
+
 static void TestHyperXRam() {
     using namespace luma::app::ram;
     std::array<luma::Rgb, kMaxLeds> colors{};
@@ -1071,6 +1116,7 @@ int main() {
     TestLhm();
     TestFriendlyNames();
     TestAzoth();
+    TestAzothKeys();
     TestLogitechHidpp();
     TestDeviceLighting();
     TestSetupHardware();

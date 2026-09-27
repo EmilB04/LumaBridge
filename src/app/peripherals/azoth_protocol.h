@@ -16,6 +16,7 @@
 // lighting Armoury Crate saved stays in the keyboard. Pure packet building, tested.
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -140,6 +141,34 @@ inline Effect Quicksand(const Rgb (&c)[6], uint8_t speed, uint8_t brightness) {
 // Reactive, starry night, current and rain drop: one color, or random colors.
 inline Effect Simple(Mode m, Rgb c, bool random, uint8_t speed, uint8_t brightness) {
     return Effect{m, speed, brightness, random ? kRandomColors : kOneColor, {0xFF, 0xFF, c.r, c.g, c.b}};
+}
+
+// Per-key colors (not in Armoury Crate's captures; the command ASUS ROG keyboards take,
+// tested on a wired Azoth): C0 81 <n> 00, then n (up to 15) x <LED number> <R> <G> <B>. The
+// LED numbers are in azoth_layout.h.
+struct KeyColor {
+    uint8_t led;
+    Rgb color;
+};
+inline std::vector<Report> KeyColors(const std::vector<KeyColor>& keys, Link link = Link::Wired) {
+    std::vector<Report> out;
+    for (size_t first = 0; first < keys.size(); first += 15) {
+        const size_t n = std::min<size_t>(15, keys.size() - first);
+        Report r{};
+        r[0] = link == Link::Wired ? 0x00 : 0x02;
+        r[1] = 0xC0;
+        r[2] = 0x81;
+        r[3] = static_cast<uint8_t>(n);
+        for (size_t k = 0; k < n; ++k) {
+            const KeyColor& kc = keys[first + k];
+            r[5 + k * 4] = kc.led;
+            r[6 + k * 4] = kc.color.r;
+            r[7 + k * 4] = kc.color.g;
+            r[8 + k * 4] = kc.color.b;
+        }
+        out.push_back(r);
+    }
+    return out;
 }
 
 // True for commands LumaBridge must never send (writing the keyboard's flash).
