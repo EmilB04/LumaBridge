@@ -13,6 +13,11 @@
 //                          the result with a running light and a color per light. The
 //                          details go to hidpp-probe.txt, the map also to mouse-map.txt (both in
 //                          %LOCALAPPDATA%\LumaBridge)
+//   hidpp-probe --listen [seconds]
+//                          sends nothing to the mouse's lights: only listens to what comes back
+//                          from it (default 180 s), to see whether G HUB's lighting commands
+//                          (e.g. a game's LIGHTSYNC) can be read from the mouse's answers. Every
+//                          report is logged with its time; a run of identical ones as one line.
 //
 // What G HUB sent (USB capture through the receiver 046D:C547, device index 1): long HID++
 // reports "11 01 <feature> <function|swid> ...". SetRgbClusterEffect (0x8071 function 1):
@@ -248,6 +253,110 @@ std::vector<int> Numbers(const std::string& s) {
     return out;
 }
 
+// --listen: every report from every HID++ collection, for `seconds`. Only the feature lookup
+// (Root.GetFeature) is sent, to name the lighting features in the log.
+int Listen(const std::vector<Device>& devices, int seconds) {
+    struct Feat {
+        HANDLE h;
+        uint8_t dev, index;
+        uint16_t id;
+    };
+    std::vector<Feat> feats;
+    for (const Device& d : devices)
+        for (uint8_t dev : {uint8_t{0xFF}, uint8_t{1}, uint8_t{2}, uint8_t{3}, uint8_t{4}, uint8_t{5}, uint8_t{6}})
+            for (uint16_t id : {uint16_t{0x8070}, uint16_t{0x8071}, uint16_t{0x8080}, uint16_t{0x8081}, uint16_t{0x1300}}) {
+                auto f = Request(d.h, dev, 0x00, 0, {static_cast<uint8_t>(id >> 8), static_cast<uint8_t>(id)}, true);
+                if (f.empty() || !f[0]) continue;
+                feats.push_back({d.h, dev, f[0], id});
+                Log("046D:%04X device %u: %04X %s is feature index %02X", d.pid, dev, id, FeatureName(id), f[0]);
+            }
+    auto name = [&](HANDLE h, uint8_t dev, uint8_t index) -> std::string {
+        for (const Feat& f : feats)
+            if (f.h == h && f.dev == dev && f.index == index) {
+                char b[64];
+                snprintf(b, sizeof b, "%04X %s", f.id, FeatureName(f.id));
+                return b;
+            }
+        return "";
+    };
+    Say("");
+    Say("Listening for %d s. Start the game now (or change the lighting in G HUB).", seconds);
+    Say("Everything goes to hidpp-probe.txt in %%LOCALAPPDATA%%\\LumaBridge.");
+    Log("");
+
+    struct Pending {
+        const Device* d;
+        OVERLAPPED ov{};
+        uint8_t buf[20] = {};
+    };
+    std::vector<Pending> reads(devices.size());
+    std::vector<HANDLE> events;
+    auto arm = [](Pending& p) {
+        ResetEvent(p.ov.hEvent);
+        memset(p.buf, 0, sizeof p.buf);
+        if (!ReadFile(p.d->h, p.buf, 20, nullptr, &p.ov) && GetLastError() != ERROR_IO_PENDING) return false;
+        return true;
+    };
+    for (size_t i = 0; i < devices.size(); ++i) {
+        reads[i].d = &devices[i];
+        reads[i].ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        events.push_back(reads[i].ov.hEvent);
+        arm(reads[i]);
+    }
+    const ULONGLONG start = GetTickCount64(), until = start + seconds * 1000ULL;
+    std::string last;
+    int repeats = 0, total = 0, lighting = 0, others = 0;
+    ULONGLONG nextTick = start + 10000;
+    auto flush = [&] {
+        if (repeats) Log("           (the same %d more time%s)", repeats, repeats == 1 ? "" : "s");
+        repeats = 0;
+    };
+    while (GetTickCount64() < until) {
+        const ULONGLONG now = GetTickCount64();
+        if (now >= nextTick) {
+            printf("  %llu s: %d reports (%d lighting, %d from other software)\n", (now - start) / 1000, total, lighting,
+                   others);
+            nextTick += 10000;
+        }
+        const DWORD w = WaitForMultipleObjects(static_cast<DWORD>(events.size()), events.data(), FALSE, 500);
+        if (w >= WAIT_OBJECT_0 + events.size()) continue;
+        Pending& p = reads[w - WAIT_OBJECT_0];
+        DWORD n = 0;
+        const bool ok = GetOverlappedResult(p.d->h, &p.ov, &n, FALSE) && n >= 7;
+        uint8_t r[20];
+        memcpy(r, p.buf, sizeof r);
+        arm(p);
+        if (!ok) continue;
+        ++total;
+        const bool err = r[2] == 0xFF;
+        const uint8_t index = err ? r[3] : r[2], fnSw = err ? r[4] : r[3];
+        const std::string feat = name(p.d->h, r[1], index);
+        if (!feat.empty()) ++lighting;
+        if ((fnSw & 0x0F) && (fnSw & 0x0F) != kSwId) ++others;
+        char line[256];
+        snprintf(line, sizeof line, "%04X dev %02X  %s  %s fn %u sw %X%s%s", p.d->pid, r[1], Hex(r, n).c_str(),
+                 err ? "ERROR for" : "", fnSw >> 4, fnSw & 0x0F, feat.empty() ? "" : "  <- ", feat.c_str());
+        if (line == last) {
+            ++repeats;
+            continue;
+        }
+        flush();
+        last = line;
+        g_quiet = true;  // the reports go only to the file; the console shows the counts
+        Log("%8.3f  %s", (GetTickCount64() - start) / 1000.0, line);
+        g_quiet = false;
+    }
+    flush();
+    for (Pending& p : reads) {
+        CancelIo(p.d->h);
+        CloseHandle(p.ov.hEvent);
+    }
+    Log("");
+    Log("Done: %d reports, %d from the lighting features, %d answers to other software (G HUB).", total, lighting,
+        others);
+    return 0;
+}
+
 void Pause(const char* what, DWORD ms) {
     Log("  %s", what);
     Sleep(ms);
@@ -259,6 +368,7 @@ int wmain(int argc, wchar_t** argv) {
     const bool test = argc > 1 && _wcsicmp(argv[1], L"--test") == 0;
     const bool perkey = argc > 1 && _wcsicmp(argv[1], L"--perkey") == 0;
     const bool map = argc > 1 && _wcsicmp(argv[1], L"--map") == 0;
+    const bool listen = argc > 1 && _wcsicmp(argv[1], L"--listen") == 0;
     wchar_t appData[MAX_PATH];
     std::wstring outPath = L"hidpp-probe.txt";
     if (GetEnvironmentVariableW(L"LOCALAPPDATA", appData, MAX_PATH)) {
@@ -274,13 +384,14 @@ int wmain(int argc, wchar_t** argv) {
         Say("  ----------------------------------------");
         Say("  Close LumaBridge first. Looking for the mouse...");
     }
-    Log("LumaBridge HID++ probe%s", test ? " (--test: shows effects)" : perkey ? " (--perkey: colors LEDs)" : map ? " (--map: maps the LEDs)" : " (read-only)");
+    Log("LumaBridge HID++ probe%s", test ? " (--test: shows effects)" : perkey ? " (--perkey: colors LEDs)" : map ? " (--map: maps the LEDs)" : listen ? " (--listen)" : " (read-only)");
 
     const auto devices = OpenAll();
     if (devices.empty()) {
         Say("No Logitech HID++ interface found.");
         return 1;
     }
+    if (listen) return Listen(devices, argc > 2 && _wtoi(argv[2]) > 0 ? _wtoi(argv[2]) : 180);
     int found = 0;
     for (const Device& d : devices) {
         Log("");
