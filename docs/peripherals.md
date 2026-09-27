@@ -19,8 +19,43 @@ report ID 0, and the commands go on interrupt OUT endpoint 2.
 | Command (data bytes) | Meaning |
 |---|---|
 | `51 2C 00 00 FF <bright> 00 FF FF <R> <G> <B>` | Static color. Brightness `0x00`–`0x64`. Seen for white `FF FF FF`, red `FF 00 2C` and blue `00 03 FF`, at brightness `0x32` and `0x64`. |
+| `51 2C <mode> <n> <speed> <bright> <flag> <data…>` | Any effect (below). `<n>` counts the packets still to come, down to `00`. |
+| `51 2C <mode> <n-1> <data…>` | The effect's continuation packets. |
 | `50 55` | Save to the keyboard's flash (Armoury Crate sends it after every change). **LumaBridge never sends it.** |
 | `12 xx`, `22 xx`, `7D 20 02` | Armoury Crate's periodic status queries. |
+
+### Armoury Crate's effects
+
+These were captured by selecting every Armoury Crate effect in turn. An effect's data starts at
+byte 7 of the first packet, which holds 11 bytes. It continues at byte 4 of each continuation
+packet, which holds 16 bytes. `<flag>` was `00` for one color, `01` for random colors and `10`
+for breathing between two colors. `<speed>` was `FF` for static and `07`–`64` for the others;
+the capture doesn't show which way is faster.
+
+| Mode | Effect | Data | Packets |
+|---|---|---|---|
+| `00` | Static | `FF FF <RGB>` | 1 |
+| `01` | Breathing | `FF FF <RGB>`, or `FF FF <RGB> <RGB2>` with flag `10` | 1 |
+| `02` | Color cycle | `FF FF` | 1 |
+| `03` | Reactive | `FF FF <RGB>` (flag `01`: random) | 1 |
+| `04` | Wave | `00 02 07` + 7 gradient stops | 3 |
+| `05` | Ripple | `FF 02 07` + the same 7 stops (flag `01`) | 3 |
+| `06` | Starry night | `FF FF <RGB>` (flag `01`) | 1 |
+| `07` | Quicksand | `02 FF` + 6 colors (flag `01`) | 2 |
+| `08` | Current | `FF FF <RGB>` (flag `01` or `00`) | 1 |
+| `09` | Rain drop | `FF FF <RGB>` (flag `01`) | 1 |
+
+A gradient stop is `<position 0–100> <R> <G> <B>`. Armoury Crate's rainbow is
+`0E F5 00 FF`, `1D 00 06 FF`, `2B 00 FA FF`, `39 01 FF 00`, `48 FF F6 00`, `56 FF 78 07`,
+`64 FF 00 0D`: purple, blue, cyan, green, yellow, orange, red. The quicksand colors are
+the same hues without positions.
+
+What the `00 02` / `FF 02` before the stop count means (direction or width, perhaps) isn't
+known yet. The `12 01` query answers `12 01 00 00 00 5C 03 00 01 14 5C E9 10`, which looks
+like firmware information, and `12 03` answers zeros.
+
+[`azoth_protocol.h`](../src/app/peripherals/azoth_protocol.h) builds all of these, and the
+tests check them against the capture. The app doesn't use the effect modes yet.
 
 LumaBridge sends only the static-color command, at most about 10 times a second, with its own
 brightness applied to the color. Because it never saves, the lighting Armoury Crate stored

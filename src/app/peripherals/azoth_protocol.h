@@ -1,7 +1,12 @@
 // ASUS ROG Azoth lighting, as captured from Armoury Crate:
 //
-//   51 2C 00 00 FF <bright> 00 FF FF <R> <G> <B>    static color (brightness 0x00-0x64)
-//   50 55                                           save to the keyboard's flash
+//   51 2C <mode> <n> <speed> <bright> <flag> <data...>   an effect (brightness 0x00-0x64)
+//   51 2C <mode> <n-1> <data...>                          ... its continuation packets
+//   50 55                                                  save to the keyboard's flash
+//
+// <n> counts the packets still to come, down to 0. The effect's data runs on from byte 7
+// of the first packet (11 bytes) into byte 4 of each continuation (16 bytes each). The
+// modes are the ones Armoury Crate offers, in its order (docs/peripherals.md).
 //
 // Wired (USB 0B05:1A83): the vendor interface (MI_01, usage page 0xFF00), 64-byte output
 // reports with report ID 0. Wireless (ROG Omni receiver 0B05:1ACE): the same commands on
@@ -13,6 +18,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 #include "color.h"
 
@@ -32,14 +38,108 @@ using Report = std::array<uint8_t, kReportSize>;
 constexpr size_t ReportSize(Link l) { return l == Link::Wired ? 65 : 64; }
 constexpr uint16_t Product(Link l) { return l == Link::Wired ? kProductWired : kProductReceiver; }
 
+enum class Mode : uint8_t {
+    Static = 0x00,
+    Breathing = 0x01,
+    ColorCycle = 0x02,
+    Reactive = 0x03,
+    Wave = 0x04,
+    Ripple = 0x05,
+    StarryNight = 0x06,
+    Quicksand = 0x07,
+    Current = 0x08,
+    RainDrop = 0x09,
+};
+
+constexpr uint8_t kFullBrightness = 0x64;
+constexpr uint8_t kStaticSpeed = 0xFF;  // what Armoury Crate sends for the effects that don't move
+// <flag> values seen: 00 one color, 01 random colors, 10 breathing between two colors.
+constexpr uint8_t kOneColor = 0x00, kRandomColors = 0x01, kTwoColors = 0x10;
+constexpr size_t kFirstData = 11, kMoreData = 16;
+
+struct Effect {
+    Mode mode = Mode::Static;
+    uint8_t speed = kStaticSpeed;  // Armoury Crate sent 0x07-0x64 (which way is faster: not known yet)
+    uint8_t brightness = kFullBrightness;
+    uint8_t flag = kOneColor;
+    std::vector<uint8_t> data;
+};
+
+// The packets for an effect, in the order to send them.
+inline std::vector<Report> Packets(const Effect& e, Link link = Link::Wired) {
+    const size_t rest = e.data.size() > kFirstData ? e.data.size() - kFirstData : 0;
+    const size_t count = 1 + (rest + kMoreData - 1) / kMoreData;
+    std::vector<Report> out(count);
+    size_t at = 0;
+    for (size_t p = 0; p < count; ++p) {
+        Report& r = out[p];
+        r[0] = link == Link::Wired ? 0x00 : 0x02;  // report ID
+        r[1] = 0x51;
+        r[2] = 0x2C;
+        r[3] = static_cast<uint8_t>(e.mode);
+        r[4] = static_cast<uint8_t>(count - 1 - p);
+        size_t pos = 5, room = kMoreData;
+        if (p == 0) {
+            r[5] = e.speed;
+            r[6] = e.brightness;
+            r[7] = e.flag;
+            pos = 8;
+            room = kFirstData;
+        }
+        for (size_t i = 0; i < room && at < e.data.size(); ++i) r[pos + i] = e.data[at++];
+    }
+    return out;
+}
+
 // Static color at full keyboard brightness (LumaBridge's own brightness is applied to the
 // color itself, so dimming is smooth and the same as on the fans).
 inline Report StaticColor(Rgb c, Link link = Link::Wired) {
-    Report r{};
-    r[0] = link == Link::Wired ? 0x00 : 0x02;  // report ID
-    const uint8_t cmd[] = {0x51, 0x2C, 0x00, 0x00, 0xFF, 0x64, 0x00, 0xFF, 0xFF, c.r, c.g, c.b};
-    for (size_t i = 0; i < sizeof cmd; ++i) r[1 + i] = cmd[i];
-    return r;
+    return Packets(Effect{Mode::Static, kStaticSpeed, kFullBrightness, kOneColor, {0xFF, 0xFF, c.r, c.g, c.b}}, link)[0];
+}
+
+// Breathing: one color, or fading between two.
+inline Effect Breathing(Rgb a, uint8_t speed, uint8_t brightness) {
+    return Effect{Mode::Breathing, speed, brightness, kOneColor, {0xFF, 0xFF, a.r, a.g, a.b}};
+}
+inline Effect Breathing(Rgb a, Rgb b, uint8_t speed, uint8_t brightness) {
+    return Effect{Mode::Breathing, speed, brightness, kTwoColors, {0xFF, 0xFF, a.r, a.g, a.b, b.r, b.g, b.b}};
+}
+
+inline Effect ColorCycle(uint8_t speed, uint8_t brightness) {
+    return Effect{Mode::ColorCycle, speed, brightness, kOneColor, {0xFF, 0xFF}};
+}
+
+// Armoury Crate's rainbow: 7 stops of <position 0-100> <R> <G> <B>, purple to red.
+inline std::vector<uint8_t> RainbowStops() {
+    return {0x0E, 0xF5, 0x00, 0xFF, 0x1D, 0x00, 0x06, 0xFF, 0x2B, 0x00, 0xFA, 0xFF, 0x39, 0x01,
+            0xFF, 0x00, 0x48, 0xFF, 0xF6, 0x00, 0x56, 0xFF, 0x78, 0x07, 0x64, 0xFF, 0x00, 0x0D};
+}
+
+// Wave and ripple over a gradient (Armoury Crate's rainbow). Byte 7 was 00 for wave and FF
+// for ripple, byte 8 02 for both (direction / width: not known yet); then the stop count.
+inline Effect RainbowWave(uint8_t speed, uint8_t brightness) {
+    Effect e{Mode::Wave, speed, brightness, kOneColor, {0x00, 0x02, 0x07}};
+    const auto stops = RainbowStops();
+    e.data.insert(e.data.end(), stops.begin(), stops.end());
+    return e;
+}
+inline Effect RainbowRipple(uint8_t speed, uint8_t brightness) {
+    Effect e{Mode::Ripple, speed, brightness, kRandomColors, {0xFF, 0x02, 0x07}};
+    const auto stops = RainbowStops();
+    e.data.insert(e.data.end(), stops.begin(), stops.end());
+    return e;
+}
+
+// Quicksand: six colors (Armoury Crate's are yellow, green, cyan, blue, purple, red).
+inline Effect Quicksand(const Rgb (&c)[6], uint8_t speed, uint8_t brightness) {
+    Effect e{Mode::Quicksand, speed, brightness, kRandomColors, {0x02, 0xFF}};
+    for (const Rgb& x : c) e.data.insert(e.data.end(), {x.r, x.g, x.b});
+    return e;
+}
+
+// Reactive, starry night, current and rain drop: one color, or random colors.
+inline Effect Simple(Mode m, Rgb c, bool random, uint8_t speed, uint8_t brightness) {
+    return Effect{m, speed, brightness, random ? kRandomColors : kOneColor, {0xFF, 0xFF, c.r, c.g, c.b}};
 }
 
 // True for commands LumaBridge must never send (writing the keyboard's flash).
