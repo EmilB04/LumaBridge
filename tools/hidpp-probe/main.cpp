@@ -4,11 +4,13 @@
 //   hidpp-probe            read-only: lists the mouse's HID++ features and, for the RGB
 //                          effects feature (0x8071), its clusters and their effects
 //   hidpp-probe --test     also shows a few effects on the mouse (color wave, breathing,
-//                          cycle, fixed), never saved to the mouse
+//                          cycle, fixed), byte for byte as G HUB sends them
 //
 // What G HUB sent (USB capture through the receiver 046D:C547, device index 1): long HID++
 // reports "11 01 <feature> <function|swid> ...". SetRgbClusterEffect (0x8071 function 1):
-//   <cluster> <effect index> <10 effect parameters> <persist>
+//   <cluster> <effect index> <10 effect parameters> <01>
+// The last byte: G HUB always sends 01. With 00 the mouse answers but doesn't change (tested
+// on a G502 X Plus). G HUB reports zone effects as not stored on this mouse.
 //   cluster 00 effect 01  R G B 02 ...               fixed
 //   cluster 00 effect 02  R G B <period ms BE> 00 <intensity>   breathing
 //   cluster 00 effect 03  00 00 00 00 00 <period ms BE> <intensity>   cycle
@@ -209,7 +211,7 @@ int wmain(int argc, wchar_t** argv) {
         outPath = dir + L"\\hidpp-probe.txt";
     }
     g_out = _wfopen(outPath.c_str(), L"w");
-    Log("LumaBridge HID++ probe%s", test ? " (--test: shows effects, never saved)" : " (read-only)");
+    Log("LumaBridge HID++ probe%s", test ? " (--test: shows effects)" : " (read-only)");
 
     const auto devices = OpenAll();
     if (devices.empty()) {
@@ -271,21 +273,21 @@ int wmain(int argc, wchar_t** argv) {
             }
 
             if (!test) continue;
-            // The effects as G HUB sent them, with persist = 0 (not saved to the mouse).
+            // The effects byte for byte as G HUB sends them (last byte 01).
             Log("  Test (watch the mouse):");
             auto set = [&](std::initializer_list<uint8_t> p) {
                 auto r = Request(d.h, dev, rgb, 1, p);
                 Log("    %s", r.empty() ? "refused" : "accepted");
             };
-            set({0xFF, 0x00, 0, 0, 0, 0, 0, 0, 0x88, 0x01, 0x64, 0x13, 0x00});
+            set({0xFF, 0x00, 0, 0, 0, 0, 0, 0, 0x88, 0x01, 0x64, 0x13, 0x01});
             Pause("color wave, 5 s period?", 6000);
-            set({0xFF, 0x00, 0, 0, 0, 0, 0, 0, 0xD0, 0x01, 0x64, 0x07, 0x00});
+            set({0xFF, 0x00, 0, 0, 0, 0, 0, 0, 0xD0, 0x01, 0x64, 0x07, 0x01});
             Pause("color wave, faster (2 s period)?", 6000);
-            set({0x00, 0x02, 0xFF, 0x00, 0x00, 0x07, 0xD0, 0x00, 0x64, 0, 0, 0, 0x00});
+            set({0x00, 0x02, 0xFF, 0x00, 0x00, 0x07, 0xD0, 0x00, 0x64, 0, 0, 0, 0x01});
             Pause("breathing red, 2 s?", 6000);
-            set({0x00, 0x03, 0, 0, 0, 0, 0, 0x13, 0x88, 0x64, 0, 0, 0x00});
+            set({0x00, 0x03, 0, 0, 0, 0, 0, 0x13, 0x88, 0x64, 0, 0, 0x01});
             Pause("color cycle, 5 s?", 6000);
-            set({0x00, 0x01, 0x00, 0xFF, 0x00, 0x02, 0, 0, 0, 0, 0, 0, 0x00});
+            set({0x00, 0x01, 0x00, 0xFF, 0x00, 0x02, 0, 0, 0, 0, 0, 0, 0x01});
             Pause("fixed green?", 4000);
             Log("  Test done. Pick your effect in G HUB again to get it back.");
         }

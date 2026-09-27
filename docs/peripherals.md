@@ -56,9 +56,13 @@ function 1, SetRgbClusterEffect: `<cluster> <effect index> <10 parameters> <01>`
 | `FF` | `02` | `00 ×6 <20–24> 64 00 00` | Pulsarpunkt (Logitech signature effect) |
 
 Examples of color wave periods: 5000 ms (`88 … 13`), 9400 ms (`B8 … 24`) and 5500 ms
-(`7C … 15`), plus intensity `53` (83 %). After each effect G HUB also sent `10 01 08 2B 00 01 00`
-(feature index 8, function 2). `tools\hidpp-probe.exe` lists a mouse's HID++ features and
-its effects; `--test` plays wave, breathing, cycle and fixed without saving them.
+(`7C … 15`), plus intensity `53` (83 %). After each effect G HUB also sent `10 01 08 2B 00 01 00`, but
+index 8 is feature `0x2121`, the scroll wheel, so that's unrelated to lighting. The mouse
+has one cluster (0) with four effects: off, fixed (ID `0001`), breathing (`000A`) and cycle
+(`0003`); cluster `FF` addresses the effects that span the whole mouse. Sent with the last
+byte `00` instead of `01`, the commands are answered but the mouse doesn't change.
+`tools\hidpp-probe.exe` lists a mouse's HID++ features and effects; `--test` plays wave,
+breathing, cycle and fixed with G HUB's exact bytes.
 
 ## ASUS ROG Azoth (wired or wireless, experimental)
 
