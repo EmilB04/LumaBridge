@@ -53,7 +53,7 @@ function 1, SetRgbClusterEffect: `<cluster> <effect index> <10 parameters> <01>`
 | `00` | `02` | `R G B <period ms, big-endian> 00 <intensity 0-100> 00 00 00` | Breathing |
 | `00` | `03` | `00 00 00 00 00 <period ms, big-endian> <intensity> 00 00` | Cycle |
 | `FF` | `00` | `00 ×6 <period low byte> 01 <intensity> <period high byte>` | Color wave |
-| `FF` | `02` | `00 ×6 <20–24> 64 00 00` | not identified yet |
+| `FF` | `02` | `00 ×6 <20–24> 64 00 00` | Pulsarpunkt (Logitech signature effect) |
 
 Examples of color wave periods: 5000 ms (`88 … 13`), 9400 ms (`B8 … 24`) and 5500 ms
 (`7C … 15`), plus intensity `53` (83 %). After each effect G HUB also sent `10 01 08 2B 00 01 00`
