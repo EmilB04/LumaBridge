@@ -41,9 +41,6 @@ private:
     games::ScreenColors latest_{};
     bool have_ = false;
     std::string problem_;
-    std::vector<uint8_t> frame_;
-    int frameW_ = 0, frameH_ = 0;
-    uint64_t frameSeq_ = 0;
 };
 
 }  // namespace luma::app

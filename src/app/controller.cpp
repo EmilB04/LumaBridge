@@ -308,16 +308,6 @@ Controller::Output Controller::Decide() const {
         }
         games::ScreenColors sc;
         if (const GameStatus* g = ScreenColorsGame(); g && screen_.Latest(&sc)) {
-            if (g->profile && g->profile->blocked) {
-                // Its events read from the screen: hits, low health, death.
-                const auto st = hud_.state();
-                Output o = lit((g->game.name + (st == games::HudLighting::State::Normal
-                                                   ? std::string(" - screen colors (watching for hits)")
-                                                   : std::string(" - ") + games::HudLighting::Name(st)))
-                                   .c_str());
-                o.fx = hud_.Output(sc, GetTickCount64());
-                return o;
-            }
             Output o = lit((g->game.name + " - screen colors").c_str());
             o.fx.kind = fx::Kind::Gradient;  // left of the screen <-> right, around each fan
             o.fx.color1 = sc.left;
@@ -337,8 +327,11 @@ Controller::Output Controller::Decide() const {
         std::string idle = "No game running";
         if (!games_.empty()) {
             const GameStatus& gs = games_.front();
-            idle = gs.game.name + (games::SupportsLighting(gs.support) ? " - waiting for its lighting"
-                                                                       : " - no dynamic lighting");
+            if (gs.profile && gs.profile->blocked)
+                idle = gs.game.name + " - lights Logitech gear through G HUB";
+            else
+                idle = gs.game.name + (games::SupportsLighting(gs.support) ? " - waiting for its lighting"
+                                                                           : " - no dynamic lighting");
         }
         auto withIdle = [&](const char* what) { return idle + " - " + what; };
         switch (prefs_.idle) {
@@ -485,8 +478,9 @@ const Controller::GameStatus* Controller::ScreenColorsGame() const {
     for (const GameStatus& g : games_) {
         if (g.mode == GameMode::Screen) return &g;
         if (g.mode == GameMode::Idle || g.mode == GameMode::Color) continue;
-        // Its own lighting can't reach LumaBridge (anti-cheat): the screen's colors, not a wait.
-        if (g.profile && g.profile->blocked) return &g;
+        // Its own lighting goes to Logitech gear through G HUB (anti-cheat keeps LumaBridge
+        // out): the idle choice, not the screen, unless picked on the game's page.
+        if (g.profile && g.profile->blocked) continue;
         const bool builtIn = g.profile && g.profile->kind == games::ProfileKind::BuiltIn;
         if (prefs_.screenForUnsupported && !builtIn && !games::SupportsLighting(g.support)) return &g;
     }
@@ -522,26 +516,7 @@ void Controller::Tick() {
     const bool wantScreen = ScreenColorsGame() != nullptr && !auraPaused_ && !prefs_.lightingStopped &&
                             prefs_.mode == Mode::Auto;
     if (wantScreen && !screen_.Running()) screen_.Start();
-    if (!wantScreen && screen_.Running()) {
-        screen_.Stop();
-        hud_ = games::HudLighting{};
-    }
-    // Read the HUD of each new frame (only matters for the games that use it).
-    if (wantScreen) {
-        int w = 0, h = 0;
-        uint64_t seq = 0;
-        if (screen_.LatestFrame(&hudPixels_, &w, &h, &seq) && seq != hudFrame_) {
-            hudFrame_ = seq;
-            const games::HudSignals s = games::ReadHud(hudPixels_, w, h);
-            if (++hudLogged_ % 100 == 0)  // every ~8 s: the readings, for tuning the thresholds
-                LUMA_INFO("screen readings: edge red %.2f, middle red %.2f, saturation %.2f, brightness %.2f (%s)",
-                          s.edgeRed, s.centerRed, s.saturation, s.brightness, games::HudLighting::Name(hud_.state()));
-            if (hud_.Update(s, now))
-                LUMA_INFO("game events from the screen: %s (edge red %.2f, middle red %.2f, saturation %.2f, "
-                          "brightness %.2f)",
-                          games::HudLighting::Name(hud_.state()), s.edgeRed, s.centerRed, s.saturation, s.brightness);
-        }
-    }
+    if (!wantScreen && screen_.Running()) screen_.Stop();
     if (libraryJob_.valid() && libraryJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         library_ = libraryJob_.get();
         RefreshFeedSettings();

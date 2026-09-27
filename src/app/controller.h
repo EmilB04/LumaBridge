@@ -25,7 +25,6 @@
 #include "game_feeds.h"
 #include "game_library.h"
 #include "game_profiles.h"
-#include "hud_lighting.h"
 #include "screen_capture.h"
 #include "system_monitor.h"
 #include "logitech_output.h"
@@ -196,11 +195,6 @@ private:
     std::vector<InstalledGame> library_;
     GameFeeds feeds_;
     ScreenCapture screen_;
-    // Game events read from the screen (hud_lighting.h), for games whose own lighting can't
-    // reach LumaBridge.
-    games::HudLighting hud_;
-    uint64_t hudFrame_ = 0, hudLogged_ = 0;
-    std::vector<uint8_t> hudPixels_;
     sensors::SystemMonitor monitor_;
     LogitechOutput logitech_;
     AzothOutput azoth_;

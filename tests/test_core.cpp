@@ -23,7 +23,6 @@
 #include "rocket_league_lighting.h"
 #include "war_thunder_lighting.h"
 #include "screen_colors.h"
-#include "hud_lighting.h"
 #include "smbios.h"
 #include "lhm.h"
 #include "friendly_names.h"
@@ -566,6 +565,8 @@ static void TestGameProfiles() {
     CHECK(FindProfile("bf2042.exe", "")->blocked && FindProfile("bf1.exe", "")->blocked);
     CHECK(FindProfile("bf6.exe", "")->kind == ProfileKind::VendorSdk && FindProfile("bf6.exe", "")->blocked);
     CHECK(!FindProfile("overwatch.exe", "")->blocked && !FindProfile("cs2.exe", "")->blocked);
+    // Blocked games light Logitech gear through G HUB: LumaBridge hands the gear to them.
+    CHECK(std::strstr(FindProfile("bf2042.exe", "")->how, "Logitech") != nullptr);
     CHECK(FindProfile("notepad.exe", "Some Game") == nullptr);
     CHECK(std::strcmp(ProfileByKey("warthunder")->title, "War Thunder") == 0);
 }
@@ -656,54 +657,6 @@ static void TestWarThunder() {
     wt.OnState(J(R"({"valid":true,"throttle 1, %":80,"Mfuel, kg":50,"Mfuel0, kg":1000})"), 5100);
     CHECK(wt.Current(5100).kind == Kind::Breathing);   // low fuel
     CHECK(!wt.Active(5000 + WarThunderLighting::kStaleMs + 1));
-}
-
-static void TestHudLighting() {
-    using namespace luma::app::games;
-    // A 20 x 10 image: a scene, optionally with red edges, optionally grey.
-    auto frame = [](bool redEdges, bool grey) {
-        std::vector<uint8_t> px(20 * 10 * 4);
-        for (int y = 0; y < 10; ++y)
-            for (int x = 0; x < 20; ++x) {
-                uint8_t* p = &px[(y * 20 + x) * 4];
-                const bool edge = x < 3 || x >= 17 || y < 2 || y >= 8;
-                uint8_t r = 40, g = 90, b = 150;  // a bluish scene
-                if (grey) r = g = b = 80;
-                if (redEdges && edge) r = 220, g = 20, b = 20;
-                p[0] = b, p[1] = g, p[2] = r, p[3] = 255;
-            }
-        return px;
-    };
-    const HudSignals calm = ReadHud(frame(false, false), 20, 10);
-    const HudSignals hurt = ReadHud(frame(true, false), 20, 10);
-    const HudSignals dead = ReadHud(frame(false, true), 20, 10);
-    CHECK(calm.edgeRed < 0.01 && hurt.edgeRed > 0.3 && hurt.centerRed < 0.01);
-    CHECK(dead.saturation < 0.01 && calm.saturation > 0.5);
-
-    HudLighting h;
-    const ScreenColors screen{luma::Rgb{10, 20, 200}, luma::Rgb{20, 40, 180}};
-    CHECK(!h.Update(calm, 1000) && h.state() == HudLighting::State::Normal);
-    CHECK(h.Output(screen, 1000).kind == luma::fx::Kind::Gradient && h.Output(screen, 1000).color1 == screen.left);
-    // A hit: red at once, fading back to the screen's colors.
-    CHECK(h.Update(hurt, 2000) && h.state() == HudLighting::State::Hit);
-    CHECK(h.Output(screen, 2000).color1 == (luma::Rgb{255, 0, 0}));
-    h.Update(calm, 2100);
-    CHECK(h.state() == HudLighting::State::Hit);  // still flashing
-    h.Update(calm, 2500);
-    CHECK(h.state() == HudLighting::State::Normal);
-    // Red edges that stay: low health, red breathing.
-    for (uint64_t t = 3000; t <= 4600; t += 100) h.Update(hurt, t);
-    CHECK(h.state() == HudLighting::State::LowHealth && h.Output(screen, 4600).kind == luma::fx::Kind::Breathing);
-    // Grey for a while: dead.
-    h.Update(dead, 5000);
-    CHECK(h.state() != HudLighting::State::Dead);
-    h.Update(dead, 5900);
-    CHECK(h.state() == HudLighting::State::Dead && h.Output(screen, 5900).kind == luma::fx::Kind::Static);
-    // A black screen (loading) isn't death.
-    HudLighting k;
-    k.Update(ReadHud(std::vector<uint8_t>(20 * 10 * 4, 0), 20, 10), 0);
-    k.Update(ReadHud(std::vector<uint8_t>(20 * 10 * 4, 0), 20, 10), 2000);
-    CHECK(k.state() == HudLighting::State::Normal);
 }
 
 static void TestScreenColors() {
@@ -1164,7 +1117,6 @@ int main() {
     TestRocketLeague();
     TestWarThunder();
     TestScreenColors();
-    TestHudLighting();
     TestSmbios();
     TestLhm();
     TestFriendlyNames();

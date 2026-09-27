@@ -64,9 +64,9 @@ struct Prefs {
     // Light Logitech devices (G HUB) along with Aura.
     bool logitechDevices = true;
     // Keep Logitech devices with LumaBridge even while a game lights them itself (through
-    // LIGHTSYNC or G HUB); else LumaBridge hands them back to the game. On by default: some
-    // games light some gear black (Battlefield 2042 a G502 X Plus).
-    bool logitechForce = true;
+    // LIGHTSYNC or G HUB); off: LumaBridge hands them to the game (e.g. Battlefield's own
+    // lighting on the mouse).
+    bool logitechForce = false;
     // Light the ROG Azoth over its cable (experimental, opt-in).
     bool azothKeyboard = false;
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper (experimental, opt-in).
