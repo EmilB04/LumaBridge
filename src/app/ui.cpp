@@ -1630,28 +1630,21 @@ void DrawStick(ImDrawList* dl, ImVec2 sa, ImVec2 sb, RamStyle style, const fx::P
     }
 }
 
-// The ROG eye, in a `size` box at `c`: its strokes lit by the board's LEDs.
-void DrawRogEye(ImDrawList* dl, ImVec2 c, ImVec2 size, const std::vector<Rgb>& leds) {
-    // Strokes as fractions of the box (x, y from its top left).
-    static const std::vector<std::vector<ImVec2>> kStrokes = {
-        {{0.02f, 0.10f}, {0.40f, 0.34f}},                                        // the claws
-        {{0.14f, 0.00f}, {0.52f, 0.22f}},
-        {{0.00f, 0.62f}, {0.26f, 0.34f}, {0.62f, 0.26f}, {1.00f, 0.44f}},        // the eye, top
-        {{0.14f, 0.70f}, {0.46f, 0.86f}, {0.78f, 0.74f}, {1.00f, 0.44f}},        // bottom
-        {{0.36f, 0.50f}, {0.56f, 0.64f}, {0.70f, 0.52f}},                        // the pupil
-    };
-    const ImVec2 o(c.x - size.x / 2, c.y - size.y / 2);
-    for (size_t i = 0; i < kStrokes.size(); ++i) {
-        const Rgb col = leds.empty() ? Rgb{50, 54, 64} : leds[i * leds.size() / kStrokes.size()];
-        std::vector<ImVec2> pts;
-        for (const ImVec2& q : kStrokes[i]) pts.push_back(ImVec2(o.x + q.x * size.x, o.y + q.y * size.y));
-        dl->AddPolyline(pts.data(), static_cast<int>(pts.size()), Col(col, 50), 0, 7 * S());  // glow
-        dl->AddPolyline(pts.data(), static_cast<int>(pts.size()), Col(col), 0, 2.5f * S());
+// The lit logo on the I/O cover, drawn simply as a ring: one arc per LED of the board.
+void DrawLogoRing(ImDrawList* dl, ImVec2 c, float r, const std::vector<Rgb>& leds) {
+    const int n = std::max(1, static_cast<int>(leds.size()));
+    for (int i = 0; i < n; ++i) {
+        const Rgb col = leds.empty() ? Rgb{50, 54, 64} : leds[static_cast<size_t>(i)];
+        const float a0 = -1.5707963f + 6.2831853f * i / n, a1 = -1.5707963f + 6.2831853f * (i + 1) / n;
+        dl->PathArcTo(c, r, a0, a1, 16);
+        dl->PathStroke(Col(col, 45), 0, r * 0.55f);  // glow
+        dl->PathArcTo(c, r, a0, a1, 16);
+        dl->PathStroke(Col(col), 0, r * 0.22f);
     }
 }
 
-// The motherboard as the scan found it: the I/O cover top left (with the ROG eye or TUF badge
-// lit by its LEDs on those boards, else its LEDs along the edge), the CPU socket, and the
+// The motherboard as the scan found it: the I/O cover top left (with its lit logo, drawn as a
+// ring, or the TUF badge on those boards, else its LEDs along the edge), the CPU socket, and the
 // memory standing in its slots right of the CPU.
 void DrawBoard(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& leds, const SetupHardware& hw,
                const std::array<bool, 4>& slots, bool ramLit, const fx::Params* ram, double t, double ramLevel) {
@@ -1673,7 +1666,7 @@ void DrawBoard(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& le
     switch (hw.board) {
     case BoardStyle::Rog:
     case BoardStyle::RogStrix:
-        DrawRogEye(dl, at(0.19f, 0.30f), ImVec2(size.x * 0.28f, size.y * 0.32f), leds);
+        DrawLogoRing(dl, at(0.19f, 0.32f), size.y * 0.14f, leds);
         if (hw.board == BoardStyle::RogStrix)  // the red stripe under it (printed, not lit)
             dl->AddLine(at(0.10f, 0.56f), at(0.30f, 0.66f), Hex(0xD01E2A), 2.5f * S());
         break;

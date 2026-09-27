@@ -13,7 +13,7 @@ namespace luma::app {
 
 enum class BoardStyle {
     Generic,
-    Rog,       // ASUS ROG (Crosshair, Maximus, Hero, ...): the ROG eye lit on the I/O cover
+    Rog,       // ASUS ROG (Crosshair, Maximus, Hero, ...): a lit logo on the I/O cover
     RogStrix,  // ASUS ROG Strix: the same, with the red "ROG STRIX" stripe under it
     Tuf,       // ASUS TUF Gaming: the TUF badge on the I/O cover
 };
