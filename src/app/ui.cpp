@@ -1656,24 +1656,50 @@ void DrawMouse(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& le
         Glow(dl, ImVec2(b.x - w * 0.14f, cy + ry * 0.35f - i * h * 0.12f), 2.6f * S(), leds[static_cast<size_t>(6 + i)]);
 }
 
-// The ROG Azoth (75 %): one color under every key.
+// The ROG Azoth: 75 % ANSI, the F-row with the control knob and OLED screen top right, the
+// right-hand column (Del, PgUp, PgDn, End) and the arrow cluster. One color under every key.
 void DrawKeyboard(ImDrawList* dl, ImVec2 a, ImVec2 size, Rgb c) {
+    // Key widths in units per row; negative: a gap of that width. 16 units across.
+    static const std::vector<std::vector<float>> kRows = {
+        {1, -0.25f, 1, 1, 1, 1, -0.25f, 1, 1, 1, 1, -0.25f, 1, 1, 1, 1},  // Esc, F1-F12
+        {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1},                   // ` 1 ... = Backspace, Del
+        {1.5f, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.5f, 1},             // Tab ... \, PgUp
+        {1.75f, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2.25f, 1},              // Caps ... Enter, PgDn
+        {2.25f, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.75f, 1, 1},              // Shift ... Shift, Up, End
+        {1.25f, 1.25f, 1.25f, 6.25f, 1, 1, 1, 1, 1, 1},                  // Ctrl Win Alt Space Alt Fn Ctrl, arrows
+    };
     const ImVec2 b(a.x + size.x, a.y + size.y);
-    dl->AddRectFilled(a, b, Hex(0x12161E), 8 * S());
-    dl->AddRect(a, b, Hex(0x2A3142), 8 * S(), 0, 1.2f * S());
-    const float pad = 7 * S(), gap = 2.5f * S();
-    const int cols = 16, rows = 6;
-    const float kw = (size.x - 2 * pad - gap * (cols - 1)) / cols, kh = (size.y - 2 * pad - gap * (rows - 1)) / rows;
-    for (int r = 0; r < rows; ++r)
-        for (int k = 0; k < cols; ++k) {
-            if (r == 0 && k >= 13) continue;  // the screen and knob
-            const ImVec2 ka(a.x + pad + k * (kw + gap), a.y + pad + r * (kh + gap));
-            dl->AddRectFilled(ImVec2(ka.x - 1, ka.y - 1), ImVec2(ka.x + kw + 1, ka.y + kh + 1), Col(c, 90), 3 * S());
-            dl->AddRectFilled(ka, ImVec2(ka.x + kw, ka.y + kh), Hex(0x1A1F2A), 2.5f * S());
+    dl->AddRectFilled(a, b, Hex(0x2A2F38), 9 * S());  // the case
+    dl->AddRectFilled(ImVec2(a.x + 2 * S(), a.y + 2 * S()), ImVec2(b.x - 2 * S(), b.y - 2 * S()), Hex(0x171B22), 8 * S());
+    const float pad = 7 * S();
+    const float u = (size.x - 2 * pad) / 16.f;
+    const float rowGap = u * 0.25f;  // the F-row stands apart
+    const float gap = std::max(1.5f, u * 0.09f);
+    for (size_t r = 0; r < kRows.size(); ++r) {
+        float x = a.x + pad;
+        const float y = a.y + pad + r * u + (r > 0 ? rowGap : 0);
+        for (float w : kRows[r]) {
+            if (w < 0) {
+                x += -w * u;
+                continue;
+            }
+            const ImVec2 ka(x + gap / 2, y + gap / 2), kb(x + w * u - gap / 2, y + u - gap / 2);
+            dl->AddRectFilled(ImVec2(ka.x - 1.5f * S(), ka.y - 1.5f * S()), ImVec2(kb.x + 1.5f * S(), kb.y + 1.5f * S()),
+                              Col(c, 110), 3 * S());  // light around the key
+            dl->AddRectFilled(ka, kb, Hex(0x20252F), 2.5f * S());                                  // the keycap
+            dl->AddRectFilled(ImVec2(ka.x + u * 0.12f, ka.y + u * 0.08f), ImVec2(kb.x - u * 0.12f, kb.y - u * 0.2f),
+                              Hex(0x282E3A), 2 * S());  // its top
+            x += w * u;
         }
-    const ImVec2 oa(a.x + pad + 13 * (kw + gap), a.y + pad);
-    dl->AddRectFilled(oa, ImVec2(b.x - pad - kw - gap, oa.y + kh), Hex(0x05070A), 2 * S());  // the screen
-    dl->AddCircleFilled(ImVec2(b.x - pad - kw / 2, oa.y + kh / 2), kh * 0.45f, Hex(0x2A3142), 16);  // the knob
+    }
+    // Top right: the control knob, then the OLED screen.
+    const float y0 = a.y + pad;
+    const ImVec2 knob(a.x + pad + 14.2f * u, y0 + u / 2);
+    dl->AddCircleFilled(knob, u * 0.34f, Hex(0x3A414F), 20);
+    dl->AddCircle(knob, u * 0.34f, Hex(0x505868), 20, 1 * S());
+    const ImVec2 oa(a.x + pad + 14.65f * u, y0 + u * 0.08f), ob(a.x + pad + 16 * u - gap / 2, y0 + u * 0.92f);
+    dl->AddRectFilled(oa, ob, Hex(0x05070A), 2 * S());
+    dl->AddRectFilled(ImVec2(oa.x + u * 0.15f, oa.y + u * 0.3f), ImVec2(oa.x + u * 0.75f, oa.y + u * 0.42f), Col(c, 160));
 }
 
 // The canvas. `selectable`: clicking a device selects it for editing (Manual mode).
@@ -1695,7 +1721,7 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
     // The memory is drawn in the board's slots (and selected by clicking the sticks).
     const bool ramOn = prefs.ramLighting;
     const int sticks = ramOn ? std::max(ctl.hardware().sticks(), 2) : 0;
-    if (prefs.azothKeyboard) items.push_back({device::kKeyboard, device::kKeyboard, ImVec2(300 * S(), 110 * S())});
+    if (prefs.azothKeyboard) items.push_back({device::kKeyboard, device::kKeyboard, ImVec2(330 * S(), 138 * S())});
     if (prefs.logitechDevices) items.push_back({device::kMouse, device::kMouse, ImVec2(70 * S(), 112 * S())});
 
     // Live colors.
