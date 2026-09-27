@@ -29,9 +29,9 @@ Details and limits for each one are in [docs/sdk-emulators.md](docs/sdk-emulator
 ```
  game ─LogiLed─▶ LumaBridge_x64.dll ─forward─▶ G HUB ─▶ Logitech mouse
  game ─Chroma──▶ RzChromaSDK64.dll ──┐
- game ─iCUE────▶ CUESDK.x64_2019.dll ┼─ colors (WM_COPYDATA) ─▶ LumaBridge.exe ─▶ Aura SDK ─▶ Armoury Crate
- game ─LightFX─▶ LightFX.dll ────────┘                            ▲      (motherboard, RAM, fans, Azoth)
- game ─HTTP────────────────────────────────────── GameSense ──────┘
+ game ─iCUE────▶ CUESDK.x64_2019.dll ┼─ colors (WM_COPYDATA) ─▶ LumaBridge.exe ─USB─▶ Aura LED controller
+ game ─LightFX─▶ LightFX.dll ────────┘                            ▲              (motherboard + ARGB fans)
+ game ─HTTP────────────────────────────────────── GameSense ──────┘ ─forward─▶ SteelSeries GG
 ```
 
 Game lighting needs the app running. The DLLs inside games never load ASUS's Aura library
@@ -57,7 +57,8 @@ been run against real hardware yet.** Start with the checks under
 
 ## Quick start
 
-1. Install Armoury Crate (Aura's lighting service is required; there's no way around it).
+1. Check your hardware once: run `Run-HardwareTest.ps1` (see below) and make sure the
+   motherboard and fans turn red/green.
 2. Build ([docs/building.md](docs/building.md)) or download the `LumaBridge-x64` artifact
    from the latest GitHub Actions run, and unzip it anywhere, e.g.
    `C:\Program Files\LumaBridge`.
@@ -91,7 +92,9 @@ docs/              SDK notes, build guide, roadmap, screenshots
 
 ## Known limits
 
-- **Armoury Crate is required.** Aura hardware access goes through ASUS's service.
+- **Supported Aura hardware:** the motherboard's Aura USB controller (board LEDs and ARGB
+  headers, e.g. fans on a hub), driven directly over USB. RAM lighting isn't reachable
+  over USB. The Azoth keyboard is next on the roadmap.
 - **Some newer Chroma titles verify Razer's signature** and ignore the emulator.
 - **Corsair iCUE SDK 4** (2022+ titles) and **Windows 11 Dynamic Lighting** aren't
   covered. See [docs/sdk-emulators.md](docs/sdk-emulators.md) for why.

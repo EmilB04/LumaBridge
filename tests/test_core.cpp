@@ -270,6 +270,17 @@ static void TestAuraUsb() {
     ConfigTable cfg;
     CHECK(ParseConfig(cfgResp, &cfg) && cfg.ArgbHeaders() == 2 && cfg.MainboardLeds() == 5 && cfg.RgbHeaders() == 1);
     CHECK(!ParseConfig(fw, &cfg));
+
+    // The B550-F's real config table, from the hardware test report.
+    const uint8_t b550[] = {0x1E, 0x9F, 0x01, 0x01, 0x00, 0x00, 0x78, 0x3C, 0, 0, 0, 0, 0, 0, 0, 0,
+                            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0x06, 0x02, 0x01, 0xF4};
+    ConfigTable real;
+    for (size_t i = 0; i < sizeof b550; ++i) real.raw[i] = b550[i];
+    CHECK(real.ArgbHeaders() == 1 && real.MainboardLeds() == 5 && real.RgbHeaders() == 2);
+    auto ch = BuildChannels(real);
+    CHECK(ch.size() == 2);
+    CHECK(ch[0].directChannel == 4 && ch[0].leds == 5 && ch[0].auraType == 0x00010000);
+    CHECK(ch[1].directChannel == 0 && ch[1].leds == 120 && ch[1].auraType == 0x00011000);
 }
 
 static void TestCoreProps() {

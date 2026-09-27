@@ -137,6 +137,7 @@ Config LoadConfig(const std::wstring& moduleDir) {
     cfg.realDllPath = Trim(ReadString(ini, L"Logitech", L"RealDllPath", L""));
 
     cfg.auraEnabled = ReadBool(ini, L"Aura", L"Enabled", cfg.auraEnabled);
+    cfg.auraUseSdk = _wcsicmp(Trim(ReadString(ini, L"Aura", L"Backend", L"usb")).c_str(), L"sdk") == 0;
     cfg.maxUpdateHz =
         static_cast<int>(ReadNumber(ini, L"Aura", L"MaxUpdateHz", cfg.maxUpdateHz));
     if (cfg.maxUpdateHz < 1) cfg.maxUpdateHz = 1;

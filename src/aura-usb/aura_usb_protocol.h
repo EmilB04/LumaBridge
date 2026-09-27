@@ -106,4 +106,31 @@ inline bool ParseConfig(const Report& r, ConfigTable* cfg) {
     return true;
 }
 
+// Direct channel of the motherboard's own LEDs (and its 12 V RGB headers). ARGB header i
+// is direct channel i. Confirmed on a ROG STRIX B550-F (AULA3-AR42): channel 0 = the ARGB
+// header, channel 4 = the board.
+constexpr uint8_t kMainboardDirectChannel = 4;
+// Effect channels switched to direct mode (their numbering differs from direct channels).
+constexpr uint8_t kEffectChannels = 8;
+constexpr int kDefaultArgbLeds = 120;
+
+struct UsbChannel {
+    std::wstring name;
+    uint32_t auraType;  // for the UI: 0x00010000 motherboard, 0x00011000 LED strip
+    uint8_t directChannel;
+    int leds;
+};
+
+inline std::vector<UsbChannel> BuildChannels(const ConfigTable& cfg, int argbLeds = kDefaultArgbLeds) {
+    std::vector<UsbChannel> out;
+    const int boardLeds = cfg.MainboardLeds() > 0 ? cfg.MainboardLeds() : 5;
+    out.push_back(UsbChannel{L"Motherboard LEDs", 0x00010000, kMainboardDirectChannel, boardLeds});
+    const int headers = cfg.ArgbHeaders();
+    for (int i = 0; i < headers && i < 4; ++i) {
+        std::wstring name = headers == 1 ? L"ARGB header (fans, strips)" : L"ARGB header " + std::to_wstring(i + 1);
+        out.push_back(UsbChannel{name, 0x00011000, static_cast<uint8_t>(i), argbLeds});
+    }
+    return out;
+}
+
 }  // namespace luma::aurausb

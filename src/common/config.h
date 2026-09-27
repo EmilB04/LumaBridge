@@ -17,6 +17,9 @@ struct Config {
 
     // [Aura]
     bool auraEnabled = true;
+    // How to reach the hardware: the motherboard's Aura USB controller directly (default),
+    // or ASUS's Aura SDK ([Aura] Backend=sdk; reports no devices on current Armoury Crate).
+    bool auraUseSdk = false;
     int maxUpdateHz = 30;
     // Aura device type codes to drive; empty = every device the SDK enumerates.
     std::vector<uint32_t> auraDeviceTypes;

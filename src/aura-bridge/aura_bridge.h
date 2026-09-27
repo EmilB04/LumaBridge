@@ -14,19 +14,13 @@
 #include <string>
 #include <vector>
 
-namespace luma {
+#include "lighting_backend.h"
 
-struct AuraDeviceInfo {
-    std::wstring name;
-    uint32_t type = 0;
-    int lightCount = 0;
-    int width = 0;   // keyboards report a key matrix; 0 when not provided
-    int height = 0;
-};
+namespace luma {
 
 const wchar_t* AuraDeviceTypeName(uint32_t type);
 
-class AuraBridge {
+class AuraBridge : public LightingBackend {
 public:
     AuraBridge();
     ~AuraBridge();
@@ -40,25 +34,26 @@ public:
 
     // Creates the SDK object, calls SwitchMode() to take control and enumerates devices.
     // Returns false (with the HRESULT logged) if the Aura service isn't available.
-    bool Connect(const DeviceFilter& filter = nullptr);
+    bool Connect(const DeviceFilter& filter);
+    bool Connect() override { return Connect(DeviceFilter{}); }
 
     // Hands lighting back to Armoury Crate (ReleaseControl) if requested, and drops all
     // COM references.
-    void Disconnect(bool releaseControl);
+    void Disconnect(bool releaseControl) override;
 
-    bool IsConnected() const;
+    bool IsConnected() const override;
 
     // Every enumerated device, including filtered-out ones.
-    const std::vector<AuraDeviceInfo>& Devices() const;
+    const std::vector<AuraDeviceInfo>& Devices() const override;
 
     // Includes / excludes device `index` (into Devices()) from SetAll.
-    void SetSelected(size_t index, bool selected);
+    void SetSelected(size_t index, bool selected) override;
     bool IsSelected(size_t index) const;
 
     // Sets every light on every selected device to `auraColor` (0x00BBGGRR) and applies.
     // Returns false on a COM failure (e.g. service restarted) -- caller should Disconnect
     // and try Connect again later.
-    bool SetAll(uint32_t auraColor);
+    bool SetAll(uint32_t auraColor) override;
 
 private:
     struct Impl;

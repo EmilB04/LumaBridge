@@ -1,4 +1,33 @@
-# ASUS Aura SDK notes
+# ASUS Aura notes
+
+## Direct USB (default)
+
+LumaBridge talks to the motherboard's **AURA LED Controller** over USB HID, without
+Armoury Crate or the SDK below ([`src/aura-usb`](../src/aura-usb)). This was confirmed on a
+ROG STRIX B550-F (USB `0B05:1939`, firmware `AULA3-AR42-0222`):
+
+- 65-byte reports with id `0xEC`. `EC 82` returns the firmware and `EC B0` the configuration
+  table (1 ARGB header, 5 board LEDs, 2 RGB headers on that board).
+- **Effect channels and direct channels are numbered differently.** Switch every effect
+  channel to direct mode (`EC 35 <ch> 00 00 FF`), then paint direct channels
+  (`EC 40 ...`). Direct channel **0** is the ARGB header (fans through a passive hub) and
+  **4** is the board's own LEDs.
+- LumaBridge re-sends the current frame every second and re-asserts direct mode every
+  2 s, so ASUS's lighting service can't quietly take the lights back.
+- Nothing is ever written to the controller's flash.
+- **Handing back:** the controller has no "give control back" command, and restarting
+  ASUS's lighting service does not restore Armoury Crate's effect. The lights keep the last
+  color until Armoury Crate applies its lighting again.
+- RAM (e.g. HyperX Fury) sits on SMBus, not USB, and would need a kernel driver, so it
+  isn't supported.
+
+`aura-usb-test.exe` and `Run-HardwareTest.ps1` probe all of this on a new board.
+
+# ASUS Aura SDK notes (legacy, `[Aura] Backend=sdk`)
+
+> On current Armoury Crate versions the SDK reports **0 devices**, and listing devices can
+> fail-fast the calling process inside ASUS's `AacKbHal_x64.dll` (Azoth keyboard plug-in).
+> It is kept only for older setups.
 
 Code: [`src/aura-bridge/aura_bridge.cpp`](../src/aura-bridge/aura_bridge.cpp).
 

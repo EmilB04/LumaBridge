@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(LumaBridge LANGUAGES CXX VERSION 0.2.4)
+project(LumaBridge LANGUAGES CXX VERSION 0.2.5)
 
 if(NOT WIN32)
     message(STATUS "Non-Windows host: only the portable core tests will be built.")
@@ -51,11 +51,17 @@ add_library(luma_common STATIC
     src/common/module_bootstrap.cpp)
 target_include_directories(luma_common PUBLIC src/common)
 
+# Direct USB access to the motherboard's Aura controller (the default way to reach the
+# hardware; the Aura SDK reports no devices on current Armoury Crate versions).
+add_library(aura_usb STATIC src/aura-usb/aura_usb.cpp src/aura-usb/usb_aura.cpp)
+target_include_directories(aura_usb PUBLIC src/aura-usb)
+target_link_libraries(aura_usb PUBLIC luma_common hid setupapi)
+
 add_library(aura_bridge STATIC
     src/aura-bridge/aura_bridge.cpp
     src/aura-bridge/aura_mirror.cpp)
 target_include_directories(aura_bridge PUBLIC src/aura-bridge)
-target_link_libraries(aura_bridge PUBLIC luma_common ole32 oleaut32 uuid)
+target_link_libraries(aura_bridge PUBLIC luma_common aura_usb ole32 oleaut32 uuid)
 
 # ---- proxy DLL -----------------------------------------------------------------------
 add_library(lumabridge_proxy SHARED
@@ -150,11 +156,6 @@ target_link_libraries(aura-test PRIVATE aura_bridge)
 
 add_executable(logiled-harness tools/logiled-harness/main.cpp)
 
-# Direct USB access to the motherboard's Aura controller (replacement for the Aura SDK,
-# which reports no devices on current Armoury Crate versions).
-add_library(aura_usb STATIC src/aura-usb/aura_usb.cpp)
-target_include_directories(aura_usb PUBLIC src/aura-usb)
-target_link_libraries(aura_usb PUBLIC luma_common hid setupapi)
 
 add_executable(aura-usb-test tools/aura-usb-test/main.cpp)
 target_link_libraries(aura-usb-test PRIVATE aura_usb)

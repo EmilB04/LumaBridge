@@ -3,9 +3,11 @@
 #include <objbase.h>
 
 #include <algorithm>
+#include <memory>
 #include <cwctype>
 
 #include "ipc.h"
+#include "usb_aura.h"
 #include "log.h"
 
 namespace luma {
@@ -14,6 +16,9 @@ namespace {
 constexpr uint64_t kReconnectDelayMs = 5000;
 constexpr DWORD kIdleWaitMs = 1000;
 constexpr uint64_t kAppKeepAliveMs = 1000;  // resend the current color so the app knows we're alive
+// Re-send the current frame this often even when nothing changed, so ASUS's lighting service
+// can't quietly overwrite it.
+constexpr uint64_t kHardwareRefreshMs = 1000;
 constexpr UINT kSendTimeoutMs = 200;
 
 bool ContainsNoCase(const std::wstring& hay, const std::wstring& needle) {
@@ -221,7 +226,11 @@ void AuraMirror::Run() {
 
     const uint64_t framePeriodMs = std::max<uint64_t>(1, 1000 / cfg_.maxUpdateHz);
     const DWORD pid = GetCurrentProcessId();
-    AuraBridge aura;
+    std::unique_ptr<LightingBackend> backend;
+    if (cfg_.auraUseSdk) backend = std::make_unique<AuraBridge>();
+    else backend = std::make_unique<aurausb::UsbAura>();
+    LightingBackend& aura = *backend;
+    LUMA_INFO("Aura mirror: using %s", cfg_.auraUseSdk ? "the ASUS Aura SDK" : "the Aura USB controller directly");
     uint64_t nextConnectAt = 0;
     uint64_t lastPushAt = 0;
     bool havePushed = false;
@@ -328,7 +337,7 @@ void AuraMirror::Run() {
         }
 
         const uint32_t out = ToAuraColor(ApplyCorrection(cc, color));
-        if (aura.IsConnected() && (!havePushed || out != lastPushed)) {
+        if (aura.IsConnected() && (!havePushed || out != lastPushed || now - lastPushAt >= kHardwareRefreshMs)) {
             // Rate limit: coalesce bursts of game calls into one frame per period.
             if (havePushed && now - lastPushAt < framePeriodMs) {
                 Sleep(static_cast<DWORD>(framePeriodMs - (now - lastPushAt)));

@@ -139,7 +139,7 @@ Controller::Output Controller::Decide() const {
     }
     if (prefs_.idle == IdleBehavior::ManualColor) return manual("No game running - your color");
     Output o;
-    o.label = "No game running - Armoury Crate effects";
+    o.label = "No game running - released to Armoury Crate";
     return o;
 }
 

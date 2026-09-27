@@ -230,14 +230,15 @@ void AutoPage(Controller& ctl, const Fonts& f) {
     BeginCard("idle");
     CardTitle(f, "When no game is running");
     int idle = ctl.prefs().idle == IdleBehavior::ManualColor ? 1 : 0;
-    const char* labels[] = {"Armoury Crate effects", "My manual color"};
+    const char* labels[] = {"Release to Armoury Crate", "My manual color"};
     if (Segmented("idle", &idle, labels, 2, ImGui::GetContentRegionAvail().x)) {
         ctl.prefs().idle = idle ? IdleBehavior::ManualColor : IdleBehavior::ArmouryCrate;
         ctl.Changed();
     }
     ImGui::Dummy(ImVec2(0, 4 * S()));
     Muted("%s", idle ? "Your manual color (and effect) shows between games."
-                     : "Lighting is handed back to Armoury Crate between games.");
+                     : "LumaBridge stops sending colors between games. The lights keep their last color "
+                       "until Armoury Crate applies its lighting again (for example when you open it).");
     EndCard();
 
     BrightnessCard(ctl, f);
@@ -344,15 +345,16 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
     if (st.connected) {
         Pill("Connected", kGreen);
         ImGui::SameLine();
-        Muted("%d device(s) under LumaBridge control", static_cast<int>(st.devices.size()));
+        Muted("%d device(s) under LumaBridge control. Switched-off devices stay dark while LumaBridge "
+              "controls the lights.", static_cast<int>(st.devices.size()));
     } else if (!st.running) {
-        Pill("Armoury Crate has control", kMuted);
+        Pill("Not controlling the lights", kMuted);
         ImGui::SameLine();
         Muted("LumaBridge takes over when a game or your manual color needs the lights.");
     } else {
-        Pill("Aura service not found", kRed);
+        Pill("Aura controller not found", kRed);
         ImGui::SameLine();
-        Muted("Install Armoury Crate and make sure its lighting service is running.");
+        Muted("LumaBridge couldn't find the motherboard's Aura USB controller. Details are in the log.");
     }
     ImGui::Dummy(ImVec2(0, 4 * S()));
     if (ImGui::Button("Rescan devices")) ctl.RescanDevices();
@@ -361,7 +363,7 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
     BeginCard("devices");
     CardTitle(f, "Devices");
     if (lastDevices.empty()) {
-        Muted("No devices seen yet. Switch to Manual mode once so LumaBridge can scan your Aura devices.");
+        Muted("No devices seen yet. Switch to Manual mode once so LumaBridge can find your Aura devices.");
     } else if (ImGui::BeginTable("devtable", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX)) {
         ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 44 * S());
         ImGui::TableSetupColumn("Device", ImGuiTableColumnFlags_WidthStretch);
