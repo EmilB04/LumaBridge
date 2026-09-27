@@ -27,6 +27,7 @@
 #include "lhm.h"
 #include "friendly_names.h"
 #include "azoth_protocol.h"
+#include "logitech_hidpp.h"
 #include "hyperx_ram.h"
 #include "hw_sensors.h"
 #include "lightfx_state.h"
@@ -813,6 +814,73 @@ static void TestAzoth() {
     CHECK(Packets(ColorCycle(0x1F, 0x64), Link::Wireless)[0][0] == 0x02);
 }
 
+static void TestLogitechHidpp() {
+    using namespace luma::app::hidpp;
+    // The G502 X Plus's list (cluster 0): 0 off, 1 fixed, 2 breathing, 3 cycle; RGB effects at index 09.
+    Layout l;
+    l.fixed = 1;
+    l.breathing = 2;
+    l.cycle = 3;
+    l.colorWave = true;
+    // Byte for byte what G HUB sent from byte 4 on (its software ID is 0B, ours 0A).
+    auto same = [](const Report& r, std::initializer_list<uint8_t> params) {
+        if (r[0] != 0x11 || r[1] != 0x01 || r[2] != 0x09 || r[3] != 0x1A) return false;
+        size_t i = 4;
+        for (uint8_t b : params)
+            if (r[i++] != b) return false;
+        for (; i < r.size(); ++i)
+            if (r[i] != 0) return false;
+        return true;
+    };
+    Effect e;
+    e.kind = Kind::Fixed;
+    e.color = luma::Rgb{0x00, 0xFF, 0xFF};
+    CHECK(same(SetEffect(1, 9, l, e), {0x00, 0x01, 0x00, 0xFF, 0xFF, 0x02, 0, 0, 0, 0, 0, 0, 0x01}));
+    e.kind = Kind::Breathing;
+    e.periodMs = 5000;
+    CHECK(same(SetEffect(1, 9, l, e), {0x00, 0x02, 0x00, 0xFF, 0xFF, 0x13, 0x88, 0x00, 0x64, 0, 0, 0, 0x01}));
+    e.kind = Kind::Cycle;
+    CHECK(same(SetEffect(1, 9, l, e), {0x00, 0x03, 0, 0, 0, 0, 0, 0x13, 0x88, 0x64, 0, 0, 0x01}));
+    e.kind = Kind::ColorWave;
+    CHECK(same(SetEffect(1, 9, l, e), {0xFF, 0x00, 0, 0, 0, 0, 0, 0, 0x88, 0x01, 0x64, 0x13, 0x01}));
+    e.periodMs = 5500;
+    e.intensity = 83;
+    CHECK(same(SetEffect(1, 9, l, e), {0xFF, 0x00, 0, 0, 0, 0, 0, 0, 0x7C, 0x01, 0x53, 0x15, 0x01}));
+
+    // Replies.
+    const Report req = Request(1, 9, 1, {0x00});
+    Report ok{0x11, 0x01, 0x09, 0x1A};
+    Report err{0x11, 0x01, 0xFF, 0x09, 0x1A, 0x05};
+    CHECK(Answers(ok, req) && !Refuses(ok, req));
+    CHECK(Refuses(err, req) && !Answers(err, req));
+
+    // LumaBridge's effects -> the mouse's.
+    luma::fx::Params p;
+    p.kind = luma::fx::Kind::RainbowWave;
+    p.speed = 0.2;
+    auto m = ForEffect(p, l);
+    CHECK(m && m->kind == Kind::ColorWave && m->periodMs == 5000);
+    p.saturation = 0.5;  // pastel: the mouse can't
+    CHECK(!ForEffect(p, l));
+    p.saturation = 1;
+    p.kind = luma::fx::Kind::ColorCycle;
+    p.speed = 5;  // faster than the mouse goes
+    m = ForEffect(p, l);
+    CHECK(m && m->kind == Kind::Cycle && m->periodMs == 1000);
+    p.kind = luma::fx::Kind::Breathing;
+    p.color1 = luma::Rgb{1, 2, 3};
+    m = ForEffect(p, l);
+    CHECK(m && m->kind == Kind::Breathing && m->color == (luma::Rgb{1, 2, 3}));
+    p.speed = 0;
+    CHECK(!ForEffect(p, l));
+    p.speed = 0.5;
+    p.kind = luma::fx::Kind::Static;
+    CHECK(!ForEffect(p, l));
+    p.kind = luma::fx::Kind::RainbowWave;
+    l.colorWave = false;  // not known to work on this mouse
+    CHECK(!ForEffect(p, l));
+}
+
 static void TestHyperXRam() {
     using namespace luma::app::ram;
     std::array<luma::Rgb, kMaxLeds> colors{};
@@ -900,6 +968,7 @@ int main() {
     TestLhm();
     TestFriendlyNames();
     TestAzoth();
+    TestLogitechHidpp();
     TestHyperXRam();
     TestHwSensors();
     TestIpc();

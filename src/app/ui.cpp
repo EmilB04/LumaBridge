@@ -1568,12 +1568,14 @@ void PeripheralsCard(Controller& ctl, const Fonts& f) {
     ImGui::PopFont();
     ImGui::SameLine();
     if (!on) Pill("Off", kMuted);
-    else if (st == S_::Active) Pill("Following LumaBridge", kGreen);
+    else if (st == S_::Active) Pill(lg.mouseEffect() ? "Following LumaBridge (mouse's own effect)" : "Following LumaBridge", kGreen);
     else if (st == S_::NoGHub) Pill("G HUB not found", kRed);
     else if (st == S_::Waiting) Pill("Waiting for G HUB", kAmber);
     else Pill("G HUB has them", kMuted);
     Muted("Your Logitech mouse and other Logitech RGB gear show LumaBridge's color, through Logitech's own "
-          "LED SDK in G HUB (nothing goes into a game). They show one color: the first LED of the effect.");
+          "LED SDK in G HUB (nothing goes into a game). They show one color: the first LED of the effect. "
+          "For breathing, color cycle and the rainbow wave, a mouse that has these effects itself "
+          "(G502 X Plus) runs its own, across all its LEDs.");
     if (on && st == S_::Released && !ctl.logitechNote().empty()) Muted("Right now: %s.", ctl.logitechNote().c_str());
     bool enabled = on;
     if (Toggle("Light Logitech devices", &enabled)) ctl.SetLogitechEnabled(enabled);

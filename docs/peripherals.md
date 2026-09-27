@@ -64,6 +64,16 @@ byte `00` instead of `01`, the commands are answered but the mouse doesn't chang
 `tools\hidpp-probe.exe` lists a mouse's HID++ features and effects; `--test` plays wave,
 breathing, cycle and fixed with G HUB's exact bytes.
 
+**In LumaBridge:** for breathing, color cycle and the rainbow wave (the full, vivid rainbow),
+LumaBridge finds the mouse over HID++ and sets its own effect, with the period taken from
+the effect's speed (1–20 s). It finds the effects in cluster 0 by their IDs; the whole-mouse
+color wave is used only on the G502 X Plus, where it's confirmed. G HUB's LED SDK stays
+connected meanwhile, so G HUB doesn't put its own lighting back. For every other effect,
+and for games, the mouse gets one color through the SDK as before; handing the lights back
+to G HUB brings G HUB's lighting back. Code:
+[`logitech_hidpp.h`](../src/app/peripherals/logitech_hidpp.h) (packets, tested against the
+capture) and [`logitech_output.cpp`](../src/app/peripherals/logitech_output.cpp).
+
 ## ASUS ROG Azoth (wired or wireless, experimental)
 
 Captured from Armoury Crate with USBPcap on a wired Azoth (USB `0B05:1A83`, firmware
