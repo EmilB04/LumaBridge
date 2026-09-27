@@ -1630,22 +1630,25 @@ void DrawStick(ImDrawList* dl, ImVec2 sa, ImVec2 sb, RamStyle style, const fx::P
     }
 }
 
-// The lit logo on the I/O cover, drawn simply as a ring: one arc per LED of the board.
-void DrawLogoRing(ImDrawList* dl, ImVec2 c, float r, const std::vector<Rgb>& leds) {
+// The lit logo on the I/O cover, drawn simply as a filled circle: one slice per LED of the
+// board.
+void DrawLogoDisc(ImDrawList* dl, ImVec2 c, float r, const std::vector<Rgb>& leds) {
     const int n = std::max(1, static_cast<int>(leds.size()));
     for (int i = 0; i < n; ++i) {
         const Rgb col = leds.empty() ? Rgb{50, 54, 64} : leds[static_cast<size_t>(i)];
         const float a0 = -1.5707963f + 6.2831853f * i / n, a1 = -1.5707963f + 6.2831853f * (i + 1) / n;
+        dl->PathLineTo(c);  // glow
+        dl->PathArcTo(c, r * 1.35f, a0, a1, 16);
+        dl->PathFillConvex(Col(col, 40));
+        dl->PathLineTo(c);
         dl->PathArcTo(c, r, a0, a1, 16);
-        dl->PathStroke(Col(col, 45), 0, r * 0.55f);  // glow
-        dl->PathArcTo(c, r, a0, a1, 16);
-        dl->PathStroke(Col(col), 0, r * 0.22f);
+        dl->PathFillConvex(Col(col));
     }
 }
 
-// The motherboard as the scan found it: the I/O cover top left (with its lit logo, drawn as a
-// ring, or the TUF badge on those boards, else its LEDs along the edge), the CPU socket, and the
-// memory standing in its slots right of the CPU.
+// The motherboard as the scan found it: the I/O cover top left (with its lit logo, drawn as
+// a filled circle, or the TUF badge on those boards, else its LEDs along the edge), the CPU
+// socket, and the memory standing in its slots right of the CPU.
 void DrawBoard(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& leds, const SetupHardware& hw,
                const std::array<bool, 4>& slots, bool ramLit, const fx::Params* ram, double t, double ramLevel) {
     const ImVec2 b(a.x + size.x, a.y + size.y);
@@ -1666,9 +1669,7 @@ void DrawBoard(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& le
     switch (hw.board) {
     case BoardStyle::Rog:
     case BoardStyle::RogStrix:
-        DrawLogoRing(dl, at(0.19f, 0.32f), size.y * 0.14f, leds);
-        if (hw.board == BoardStyle::RogStrix)  // the red stripe under it (printed, not lit)
-            dl->AddLine(at(0.10f, 0.56f), at(0.30f, 0.66f), Hex(0xD01E2A), 2.5f * S());
+        DrawLogoDisc(dl, at(0.19f, 0.34f), size.y * 0.15f, leds);
         break;
     case BoardStyle::Tuf: {
         const Rgb c = leds.empty() ? Rgb{50, 54, 64} : leds.front();
