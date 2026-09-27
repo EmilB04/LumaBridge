@@ -2071,9 +2071,11 @@ void LogitechCard(Controller& ctl, const Fonts& f) {
         ctl.prefs().logitechForce = force;
         ctl.Changed();
     }
-    Muted("Normally LumaBridge hands Logitech gear back when a game lights it itself (through Logitech LIGHTSYNC "
-          "or G HUB), so you see the game's lighting. With this on they keep LumaBridge's lighting, including the "
-          "game's colors when LumaBridge follows the game; the game's own Logitech lighting may flicker in between.");
+    Muted("On: your Logitech gear follows LumaBridge like the rest, games included (the game's colors when LumaBridge "
+          "follows the game, else e.g. the screen's colors). Off: while a game lights Logitech gear itself (LIGHTSYNC "
+          "through G HUB), LumaBridge hands it to the game; some games light some gear black, like Battlefield 2042 "
+          "a G502 X Plus. If a game's own lighting flickers in, switch the game off under G HUB's \"Manage "
+          "integration\" for the device.");
     EndCard();
 }
 
@@ -2761,8 +2763,8 @@ void GameDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts&
             ImGui::PopStyleColor();
         }
         if (mode == 0 && profile && profile->blocked)
-            Muted("Your Logitech gear shows the game's own lighting (LIGHTSYNC, through G HUB); every other device "
-                  "the screen's colors, since EA's anti-cheat keeps the game's lighting away from LumaBridge.");
+            Muted("The screen's colors on every device: EA's anti-cheat keeps the game's own lighting (Logitech "
+                  "LIGHTSYNC, through G HUB) away from LumaBridge.");
         else
             Muted("%s", kHelp[mode]);
         if (mode == static_cast<int>(GameMode::Color)) {

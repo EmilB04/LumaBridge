@@ -53,25 +53,25 @@ inline const GameProfile* Profiles(size_t* count) {
          "Install Razer Chroma on the Integrations page. Blizzard's anti-cheat may refuse an "
          "unsigned DLL; if nothing happens, use Screen colors."},
         {"bf1", "Battlefield 1", {"bf1.exe"}, {"battlefield1"}, ProfileKind::VendorSdk, Feed::None,
-         "Logitech LIGHTSYNC: your Logitech gear; screen colors on the rest",
+         "Screen colors (its Logitech LIGHTSYNC can't reach LumaBridge)",
          "The game lights Logitech gear through G HUB (LIGHTSYNC). EA's anti-cheat keeps LumaBridge out of the "
-         "game, so that lighting never reaches LumaBridge: while it runs, your Logitech gear shows the game's "
-         "own lighting and every other device the screen's colors.", true},
+         "game, so that lighting never reaches LumaBridge: while it runs, every device shows the screen's colors "
+         "(Logitech gear too, unless it's set to go to the game on its Devices page).", true},
         {"bf2042", "Battlefield 2042", {"bf2042.exe"}, {"battlefield2042"}, ProfileKind::VendorSdk, Feed::None,
-         "Logitech LIGHTSYNC: your Logitech gear; screen colors on the rest",
+         "Screen colors (its Logitech LIGHTSYNC can't reach LumaBridge)",
          "The game lights Logitech gear through G HUB (LIGHTSYNC). EA's anti-cheat keeps LumaBridge out of the "
-         "game, so that lighting never reaches LumaBridge: while it runs, your Logitech gear shows the game's "
-         "own lighting and every other device the screen's colors.", true},
+         "game, so that lighting never reaches LumaBridge: while it runs, every device shows the screen's colors "
+         "(Logitech gear too, unless it's set to go to the game on its Devices page).", true},
         {"bfv", "Battlefield V", {"bfv.exe"}, {"battlefieldv", "battlefield5"}, ProfileKind::VendorSdk, Feed::None,
-         "Logitech LIGHTSYNC: your Logitech gear; screen colors on the rest",
+         "Screen colors (its Logitech LIGHTSYNC can't reach LumaBridge)",
          "The game lights Logitech gear through G HUB (LIGHTSYNC). EA's anti-cheat keeps LumaBridge out of the "
-         "game, so that lighting never reaches LumaBridge: while it runs, your Logitech gear shows the game's "
-         "own lighting and every other device the screen's colors.", true},
+         "game, so that lighting never reaches LumaBridge: while it runs, every device shows the screen's colors "
+         "(Logitech gear too, unless it's set to go to the game on its Devices page).", true},
         {"bf6", "Battlefield 6", {"bf6.exe"}, {"battlefield6"}, ProfileKind::VendorSdk, Feed::None,
-         "Logitech LIGHTSYNC: your Logitech gear; screen colors on the rest",
+         "Screen colors (its Logitech LIGHTSYNC can't reach LumaBridge)",
          "The game lights Logitech gear through G HUB (LIGHTSYNC). EA's anti-cheat keeps LumaBridge out of the "
-         "game, so that lighting never reaches LumaBridge: while it runs, your Logitech gear shows the game's "
-         "own lighting and every other device the screen's colors.", true},
+         "game, so that lighting never reaches LumaBridge: while it runs, every device shows the screen's colors "
+         "(Logitech gear too, unless it's set to go to the game on its Devices page).", true},
         {"bombanana", "BOMBANANA!", {nullptr}, {"bombanana"}, ProfileKind::NoSupport, Feed::None,
          "No known lighting support", "Use Screen colors."},
         {"nobackup", "NO BACKUP", {nullptr}, {"nobackup"}, ProfileKind::NoSupport, Feed::None,
