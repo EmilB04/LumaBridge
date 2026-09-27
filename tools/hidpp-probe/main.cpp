@@ -7,6 +7,10 @@
 //                          cycle, fixed), byte for byte as G HUB sends them
 //   hidpp-probe --perkey   also tries coloring the LEDs one by one (per-key lighting
 //                          0x8081: set zones, then end the frame)
+//   hidpp-probe --map      interactive: lights one zone at a time and asks which LED lit
+//                          (numbered as in G HUB's picture: 1-6 along the bottom from the
+//                          thumb side, 7-8 up the right side), then checks the order with a
+//                          moving dot. Saved to %LOCALAPPDATA%\LumaBridge\mouse-map.txt
 //
 // What G HUB sent (USB capture through the receiver 046D:C547, device index 1): long HID++
 // reports "11 01 <feature> <function|swid> ...". SetRgbClusterEffect (0x8071 function 1):
@@ -25,6 +29,7 @@ extern "C" {
 #include <hidpi.h>
 }
 
+#include <cctype>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -207,6 +212,7 @@ void Pause(const char* what, DWORD ms) {
 int wmain(int argc, wchar_t** argv) {
     const bool test = argc > 1 && _wcsicmp(argv[1], L"--test") == 0;
     const bool perkey = argc > 1 && _wcsicmp(argv[1], L"--perkey") == 0;
+    const bool map = argc > 1 && _wcsicmp(argv[1], L"--map") == 0;
     wchar_t appData[MAX_PATH];
     std::wstring outPath = L"hidpp-probe.txt";
     if (GetEnvironmentVariableW(L"LOCALAPPDATA", appData, MAX_PATH)) {
@@ -215,7 +221,7 @@ int wmain(int argc, wchar_t** argv) {
         outPath = dir + L"\\hidpp-probe.txt";
     }
     g_out = _wfopen(outPath.c_str(), L"w");
-    Log("LumaBridge HID++ probe%s", test ? " (--test: shows effects)" : perkey ? " (--perkey: colors LEDs)" : " (read-only)");
+    Log("LumaBridge HID++ probe%s", test ? " (--test: shows effects)" : perkey ? " (--perkey: colors LEDs)" : map ? " (--map: maps the LEDs)" : " (read-only)");
 
     const auto devices = OpenAll();
     if (devices.empty()) {
@@ -302,7 +308,7 @@ int wmain(int argc, wchar_t** argv) {
                 for (int z : zones) list += std::to_string(z) + " ";
                 Log("    zones: %s", list.c_str());
             }
-            if (perkey && perKey && !zones.empty()) {
+            if ((perkey || map) && perKey && !zones.empty()) {
                 using C = std::array<uint8_t, 3>;
                 auto frame = [&](const char* what, auto zoneColor, DWORD ms = 5000) {
                     // The device's zones, four per report (zone R G B), then end the frame.
@@ -334,6 +340,94 @@ int wmain(int argc, wchar_t** argv) {
                                              {0, 40, 255},  {150, 0, 255}, {255, 0, 150}, {255, 255, 255}};
                 auto white = [](int) { return C{0xFF, 0xFF, 0xFF}; };
                 auto colors = [](int z) { return rainbow[z % 9]; };
+                if (map) {
+                    auto ask = [](const char* q) {
+                        printf("%s ", q);
+                        fflush(stdout);
+                        char line[128] = {};
+                        if (!fgets(line, sizeof line, stdin)) return std::string();
+                        std::string s(line);
+                        while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
+                        return s;
+                    };
+                    Log("  Mapping the LEDs. Press Enter for the default in [brackets].");
+                    std::string mode = ask("  Which way worked in --perkey? 1 = A (nothing first), 2 = B, 3 = C [3]:");
+                    Log("    mode: %s", mode.empty() ? "3" : mode.c_str());
+                    if (mode.empty() || mode == "2" || mode == "3") {
+                        const uint8_t e = mode == "2" ? 3 : 4;
+                        auto r = Request(d.h, dev, rgb, 1, {0xFF, e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01});
+                        Log("    whole-mouse effect %u %s", e, r.empty() ? "refused" : "accepted");
+                    }
+                    static const char* names[9] = {"red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "white"};
+                    std::string legend;
+                    for (int z : zones) legend += "zone " + std::to_string(z) + " " + names[z % 9] + ", ";
+                    frame("every zone its own color", colors, 0);
+                    Log("    %s", legend.c_str());
+                    Log("    you saw: %s", ask("  Which colors do you see, LED 1 to 8? (e.g. red orange yellow ...)").c_str());
+
+                    Log("  One zone at a time. Number the LEDs like G HUB's picture: 1-6 along the bottom curve from the thumb side (left), 7-8 up the right side (7 lower, 8 upper).");
+                    std::vector<std::pair<int, int>> area;  // (zone, area; 0 = nothing)
+                    for (size_t i = 0; i < zones.size(); ++i) {
+                        const int z = zones[i];
+                        char what[48];
+                        snprintf(what, sizeof what, "zone %d red, the rest off", z);
+                        frame(what, [z](int k) { return k == z ? C{0xFF, 0, 0} : C{0, 0, 0}; }, 0);
+                        std::string a = ask("    Which LED lit? (1-8; several: the first; 0 = nothing; r = show again):");
+                        if (a == "r") {
+                            --i;
+                            continue;
+                        }
+                        const int n = atoi(a.c_str());
+                        Log("    zone %d -> LED %d%s%s", z, n, a.empty() || isdigit(static_cast<unsigned char>(a[0])) ? "" : "  note: ",
+                            a.empty() || isdigit(static_cast<unsigned char>(a[0])) ? "" : a.c_str());
+                        area.push_back({z, n});
+                    }
+                    int areas = 0;
+                    for (auto& [z, n] : area) areas = n > areas ? n : areas;
+                    std::string summary;
+                    for (int n = 1; n <= areas; ++n) {
+                        summary += "LED " + std::to_string(n) + ": zone";
+                        for (auto& [z, m] : area)
+                            if (m == n) summary += " " + std::to_string(z);
+                        summary += "; ";
+                    }
+                    Log("  Map: %s", summary.c_str());
+
+                    if (areas > 0) {
+                        Log("  Check: a red dot runs from LED 1 to LED %d, three times.", areas);
+                        for (int round = 0; round < 3; ++round)
+                            for (int n = 1; n <= areas; ++n) {
+                                auto dot = [&](int k) {
+                                    for (auto& [z, m] : area)
+                                        if (z == k) return m == n ? C{0xFF, 0, 0} : C{0, 0, 0x30};
+                                    return C{0, 0, 0};
+                                };
+                                char what[32];
+                                snprintf(what, sizeof what, "LED %d", n);
+                                frame(what, dot, 600);
+                            }
+                        Log("    %s", ask("  Did the dot run smoothly along the bottom and up the right side? (y / n + what you saw):").c_str());
+                        Log("  Check: each LED its own color (1 red, 2 green, 3 blue, 4 yellow, 5 purple, 6 cyan, 7 red, 8 green).");
+                        static const C areaColors[6] = {{255, 0, 0}, {0, 255, 0}, {0, 40, 255}, {255, 230, 0}, {150, 0, 255}, {0, 230, 255}};
+                        frame("LEDs colored", [&](int k) {
+                            for (auto& [z, m] : area)
+                                if (z == k && m > 0) return areaColors[(m - 1) % 6];
+                            return C{0, 0, 0};
+                        }, 0);
+                        Log("    %s", ask("  Does each LED show its own clean color? (y / n + what you saw):").c_str());
+                    }
+                    wchar_t appData2[MAX_PATH];
+                    if (GetEnvironmentVariableW(L"LOCALAPPDATA", appData2, MAX_PATH)) {
+                        std::wstring mp = std::wstring(appData2) + L"\\LumaBridge\\mouse-map.txt";
+                        if (FILE* f = _wfopen(mp.c_str(), L"w")) {
+                            fprintf(f, "G502 X PLUS zones -> LEDs (G HUB's numbering: 1-6 bottom from the thumb side, 7-8 right side)\n");
+                            for (auto& [z, n] : area) fprintf(f, "zone %d LED %d\n", z, n);
+                            fclose(f);
+                            Log("  Saved the map to %ls", mp.c_str());
+                        }
+                    }
+                    Log("  Mapping done. Pick your effect in G HUB again to get it back.");
+                } else {
                 Log("  A: straight away (watch the mouse):");
                 frame("A1: all LEDs white?", white);
                 frame("A2: every LED its own color?", colors);
@@ -351,6 +445,7 @@ int wmain(int argc, wchar_t** argv) {
                     frame(what, [z](int k) { return k == z ? C{0xFF, 0, 0} : C{0, 0, 0}; }, 2500);
                 }
                 Log("  Per-key test done. Pick your effect in G HUB again to get it back.");
+                }
             }
 
             if (!test) continue;
