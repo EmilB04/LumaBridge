@@ -16,6 +16,11 @@ ROG STRIX B550-F (USB `0B05:1939`, firmware `AULA3-AR42-0222`):
   every second, so a color overwritten by ASUS's lighting service comes back quickly.
   Re-sending the *mode* command periodically blanked the LEDs for an instant (a visible
   flicker every 2 s on a B550-F), so it isn't repeated.
+- Every LED on a direct channel is set individually, so per-LED effects are plain frames:
+  LumaBridge renders them ([`src/core/effects.h`](../src/core/effects.h)) and sends a new
+  frame up to `MaxUpdateHz` times per second. The ARGB channel is always sent as 120 LEDs.
+  Fans chained on a hub are one long strip (fan 1 first), and `[Aura] ArgbFans` /
+  `ArgbLedsPerFan` say how to split it.
 - Nothing is ever written to the controller's flash.
 - **Handing back:** the controller has no "give control back" command. Restarting
   Armoury Crate's services or its motherboard helper (`Aac3572MbHal_x86`) doesn't restore

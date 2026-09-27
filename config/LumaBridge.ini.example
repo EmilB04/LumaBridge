@@ -28,6 +28,12 @@ DeviceTypes=all
 ExcludeNames=
 ; Devices switched off on the app's Devices page (exact names, '|' separated).
 DisabledDevices=
+; Fans on the ARGB header, for per-LED effects (gradient, rainbow wave, comet, ...).
+; Fans chained on a hub count in order. be quiet! Light Wings 120 mm: 20 LEDs per fan.
+; ArgbFanLayout: repeat = every fan shows the whole pattern, span = one pattern across all.
+ArgbFans=3
+ArgbLedsPerFan=20
+ArgbFanLayout=repeat
 ; Let game DLLs load the Aura SDK themselves when the LumaBridge app isn't running.
 ; Off by default: a crash inside ASUS's Aura library would take the game down with it.
 DirectFromGames=0

@@ -16,6 +16,22 @@ std::string Narrow(const std::wstring& w) {
 
 }  // namespace
 
+std::vector<AuraDeviceInfo> ProbeDevices(const std::vector<uint16_t>& productIds, int argbLeds) {
+    std::vector<AuraDeviceInfo> out;
+    for (uint16_t pid : productIds) {
+        for (const auto& found : FindControllers(kVendorAsus, pid)) {
+            Device dev;
+            if (!dev.Open(found.path)) continue;
+            Report reply;
+            ConfigTable cfg;
+            if (dev.Transact(ConfigRequest(), 0x30, &reply) && ParseConfig(reply, &cfg))
+                for (const auto& c : BuildChannels(cfg, argbLeds))
+                    out.push_back(AuraDeviceInfo{c.name, c.auraType, c.leds, 0, 0});
+        }
+    }
+    return out;
+}
+
 UsbAura::UsbAura(std::vector<uint16_t> productIds, int argbLeds) : pids_(std::move(productIds)), argbLeds_(argbLeds) {}
 
 bool UsbAura::Connect() {
@@ -79,6 +95,13 @@ bool UsbAura::EnterDirectMode() {
 }
 
 bool UsbAura::SetAll(uint32_t auraColor) {
+    const Rgb color = FromAuraColor(auraColor);
+    std::vector<std::vector<Rgb>> frames;
+    for (const auto& c : channels_) frames.emplace_back(static_cast<size_t>(c.leds), color);
+    return SetFrames(frames);
+}
+
+bool UsbAura::SetFrames(const std::vector<std::vector<Rgb>>& frames) {
     if (!dev_.IsOpen()) return false;
     // Direct mode is entered once per connection: re-sending the mode command blanks the
     // LEDs for an instant, which showed as a flicker every couple of seconds on a B550-F.
@@ -87,11 +110,13 @@ bool UsbAura::SetAll(uint32_t auraColor) {
         LUMA_WARN("Aura USB: write failed (controller unplugged?)");
         return false;
     }
-    const Rgb color = FromAuraColor(auraColor);
     for (size_t i = 0; i < channels_.size(); ++i) {
         // A switched-off device is dark while LumaBridge controls the lights: every channel
         // is in direct mode, so there is no Armoury Crate effect to leave running.
-        std::vector<Rgb> frame(static_cast<size_t>(channels_[i].leds), selected_[i] ? color : Rgb{});
+        std::vector<Rgb> frame(static_cast<size_t>(channels_[i].leds), Rgb{});
+        if (selected_[i] && i < frames.size())
+            for (size_t k = 0; k < frame.size(); ++k)
+                frame[k] = frames[i].empty() ? Rgb{} : frames[i][k < frames[i].size() ? k : frames[i].size() - 1];
         for (const Report& r : DirectColorRequests(channels_[i].directChannel, frame)) {
             if (!dev_.Write(r)) {
                 LUMA_WARN("Aura USB: write failed (controller unplugged?)");

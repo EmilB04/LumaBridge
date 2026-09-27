@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "color.h"
+#include "effects.h"
 #include "lighting_state.h"
 #include "chroma_translate.h"
 #include "aura_usb_protocol.h"
@@ -86,6 +87,91 @@ static void TestHue() {
     CHECK(s.IsAnimating(1000000));
     s.StopEffects();
     CHECK((s.Evaluate(5000) == Rgb{1, 1, 1}));
+}
+
+static void TestEffects() {
+    using namespace luma::fx;
+    Params p;
+    p.color1 = Rgb{255, 0, 0};
+    p.color2 = Rgb{0, 0, 255};
+    p.speed = 1.0;
+
+    p.kind = Kind::Static;
+    CHECK((Render(p, 12.3, 5, 16) == Rgb{255, 0, 0}));
+    CHECK(!IsAnimated(p));
+
+    p.kind = Kind::Breathing;
+    CHECK((Render(p, 0.0, 0, 1) == Rgb{255, 0, 0}));
+    CHECK(Render(p, 0.5, 0, 1).IsBlack());
+
+    p.kind = Kind::Strobe;
+    CHECK((Render(p, 0.25, 0, 1) == Rgb{255, 0, 0}));
+    CHECK(Render(p, 0.75, 0, 1).IsBlack());
+
+    p.kind = Kind::ColorCycle;
+    CHECK((Render(p, 1.0 / 3.0, 0, 16) == Render(p, 1.0 / 3.0, 9, 16)));  // same on every LED
+    CHECK((Render(p, 1.0 / 3.0, 0, 16) == Rgb{0, 255, 0}));
+
+    p.kind = Kind::RainbowWave;
+    CHECK((Render(p, 0.0, 0, 3) == Rgb{255, 0, 0}));
+    CHECK((Render(p, 0.0, 1, 3) == Rgb{0, 255, 0}));
+    CHECK((Render(p, 0.0, 2, 3) == Rgb{0, 0, 255}));
+    CHECK((Render(p, 1.0 / 3.0, 0, 3) == Rgb{0, 255, 0}));  // rotated one step
+
+    p.kind = Kind::Gradient;
+    p.speed = 0;
+    CHECK(!IsAnimated(p));
+    CHECK((Render(p, 5.0, 0, 4) == Rgb{255, 0, 0}));   // color1 at the start
+    CHECK((Render(p, 5.0, 2, 4) == Rgb{0, 0, 255}));   // color2 half way round
+    CHECK((Render(p, 5.0, 1, 4) == Rgb{128, 0, 128}));  // blend in between
+    CHECK((Render(p, 5.0, 3, 4) == Rgb{128, 0, 128}));  // seamless back to color1
+    p.speed = 1.0;
+    CHECK(IsAnimated(p));
+
+    p.kind = Kind::Comet;
+    p.color2 = Rgb{};
+    CHECK((Render(p, 0.25, 4, 16) == Rgb{255, 0, 0}));  // head at LED 4 at t = 0.25
+    CHECK(Render(p, 0.25, 8, 16).IsBlack());            // ahead of the head: background
+    const Rgb tail = Render(p, 0.25, 2, 16);
+    CHECK(tail.r > 0 && tail.r < 255);                   // tail fades
+
+    p.kind = Kind::Twinkle;
+    p.color1 = Rgb{10, 10, 10};
+    p.color2 = Rgb{255, 255, 255};
+    int sparkling = 0;
+    for (int i = 0; i < 64; ++i) sparkling += Render(p, 0.37, i, 64).r > 10;
+    CHECK(sparkling > 0 && sparkling < 32);  // a few LEDs sparkle, most don't
+
+    FanLayout fans{3, 4, true};
+    std::vector<Rgb> frame;
+    p.kind = Kind::RainbowWave;
+    p.speed = 0;
+    RenderFans(p, 0, fans, &frame);
+    CHECK(frame.size() == 12);
+    CHECK(frame[0] == frame[4] && frame[1] == frame[5]);  // every fan the same
+    fans.repeatPerFan = false;
+    RenderFans(p, 0, fans, &frame);
+    CHECK(frame[0] != frame[4]);                          // one pattern across all fans
+    RenderStrip(p, 0, 5, &frame);
+    CHECK(frame.size() == 5);
+
+    fans.repeatPerFan = true;
+    RenderFans(p, 0, fans, &frame, 20);  // more LEDs than the layout: the pattern continues
+    CHECK(frame.size() == 20);
+    CHECK(frame[12] == frame[0] && frame[19] == frame[3]);
+
+    p.kind = Kind::Twinkle;
+    p.speed = 1;
+    RenderFans(p, 0.37, FanLayout{4, 16, true}, &frame);
+    bool fansDiffer = false;
+    for (int i = 0; i < 16; ++i) fansDiffer |= frame[i] != frame[16 + i];
+    CHECK(fansDiffer);  // twinkle never repeats per fan
+
+    RenderFanTest(fans, &frame, 16);
+    CHECK((frame[0] == Rgb{255, 255, 255} && frame[4] == Rgb{255, 255, 255}));  // first LED of each fan
+    CHECK((frame[1] == Rgb{255, 0, 0} && frame[5] == Rgb{0, 255, 0}));          // one color per fan
+    CHECK(frame[12].IsBlack() && frame[15].IsBlack());                          // past the layout: off
+    CHECK((FanLayout{0, 500, true}.TotalLeds() == 120));                        // clamped
 }
 
 static void TestBitmap() {
@@ -386,6 +472,7 @@ int main() {
     TestAuraPacking();
     TestCorrection();
     TestHue();
+    TestEffects();
     TestBitmap();
     TestColorRefs();
     TestState();

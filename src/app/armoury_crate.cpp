@@ -101,11 +101,13 @@ bool LaunchArmouryCrate() {
 bool HandbackTaskInstalled() { return RunHidden(Schtasks(L"/query"), 10000) == 0; }
 
 void HandBackLighting() {
-    if (RunHidden(Schtasks(L"/run"), 10000) == 0) {
-        LUMA_INFO("hand-back: restarting the Aura controller (it reloads Armoury Crate's saved effect)");
+    const int code = RunHidden(Schtasks(L"/run"), 10000);
+    if (code == 0) {
+        LUMA_INFO("hand-back: started the hand-back task (details in %%ProgramData%%\\LumaBridge\\handback.log)");
         return;
     }
-    LUMA_INFO("hand-back: silent hand-back not set up (Games page) - opening Armoury Crate instead");
+    LUMA_INFO("hand-back: couldn't start the hand-back task (schtasks exit %d; not set up?) - opening Armoury "
+              "Crate instead", code);
     LaunchArmouryCrate();
 }
 

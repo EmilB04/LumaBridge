@@ -239,7 +239,7 @@ HICON MakeOrbIcon(Rgb c) {
 
 void UpdateTray(bool add) {
     const auto& out = g_ctl.output();
-    Rgb c = out.kind == Controller::Output::Kind::Stopped ? Rgb{120, 124, 140} : out.color;
+    Rgb c = out.stopped ? Rgb{120, 124, 140} : out.fx.color1;
     if (c.IsBlack()) c = Rgb{40, 40, 48};
     bool iconChanged = add || c != g_trayColor;
     if (iconChanged) {

@@ -5,6 +5,7 @@
 
 #include "armoury_crate.h"
 #include "log.h"
+#include "usb_aura.h"
 
 namespace luma::app {
 namespace {
@@ -37,7 +38,24 @@ bool Controller::Init() {
 
     if (cfg_.gameSenseEnabled)
         gameSense_.Start(cfg_, [] { /* picked up by the next Tick */ });
+    RescanDevices();
     return true;
+}
+
+void Controller::RescanDevices() {
+    if (mirror_.IsRunning()) {
+        mirror_.Rescan();
+        return;
+    }
+    if (cfg_.auraUseSdk) return;  // the SDK can't be listed without taking control
+    knownDevices_ = aurausb::ProbeDevices();
+    LUMA_INFO("device scan (read-only): %d device(s)", static_cast<int>(knownDevices_.size()));
+}
+
+const std::vector<AuraDeviceInfo>& Controller::devices() {
+    auto st = mirror_.GetStatus();
+    if (!st.devices.empty()) knownDevices_ = st.devices;
+    return knownDevices_;
 }
 
 void Controller::ResumeAura() {
@@ -126,17 +144,18 @@ void Controller::OnIpc(const ipc::Frame& f) {
 }
 
 Controller::Output Controller::Decide() const {
-    auto manual = [this](const char* label) {
+    auto lit = [](const char* label) {
         Output o;
-        o.color = prefs_.manualColor;
-        o.hz = prefs_.speedHz;
+        o.stopped = false;
         o.label = label;
-        switch (prefs_.effect) {
-        case ManualEffect::Breathing: o.kind = Output::Kind::Breathing; break;
-        case ManualEffect::Strobe: o.kind = Output::Kind::Strobe; break;
-        case ManualEffect::Rainbow: o.kind = Output::Kind::Rainbow; break;
-        default: o.kind = Output::Kind::Static; o.hz = 0; break;
-        }
+        return o;
+    };
+    auto manual = [&](const char* label) {
+        Output o = lit(label);
+        o.fx.kind = prefs_.effect;
+        o.fx.color1 = prefs_.manualColor;
+        o.fx.color2 = prefs_.manualColor2;
+        o.fx.speed = prefs_.effect == ManualEffect::Static ? 0 : prefs_.speedHz;
         return o;
     };
 
@@ -145,48 +164,54 @@ Controller::Output Controller::Decide() const {
         o.label = "Paused after an unexpected exit";
         return o;
     }
-    if (prefs_.lightingStopped) {
-        Output o;
-        o.label = "Stopped - LumaBridge isn't controlling the lights";
-        return o;
-    }
-    if (prefs_.mode == Mode::Manual) return manual("Manual color");
+    Output o = [&] {
+        if (prefs_.lightingStopped) {
+            Output s;
+            s.label = "Stopped - LumaBridge isn't controlling the lights";
+            return s;
+        }
+        if (prefs_.mode == Mode::Manual) return manual("Manual color");
 
-    if (auto s = tracker_.Active()) {
-        Output o;
-        o.kind = s->flashHz > 0 ? Output::Kind::Strobe : Output::Kind::Static;
-        o.color = s->color;
-        o.hz = s->flashHz;
-        o.label = s->game + " - " + s->sdk;
-        return o;
+        if (auto s = tracker_.Active()) {
+            Output g = lit((s->game + " - " + s->sdk).c_str());
+            g.fx.kind = s->flashHz > 0 ? fx::Kind::Strobe : fx::Kind::Static;
+            g.fx.color1 = s->color;
+            g.fx.speed = s->flashHz;
+            return g;
+        }
+        switch (prefs_.idle) {
+        case IdleBehavior::Rainbow: {
+            Output r = lit("No game running - rainbow");
+            r.fx.kind = fx::Kind::RainbowWave;
+            r.fx.color1 = Rgb{170, 60, 255};  // icon tint; the effect itself is every hue
+            r.fx.speed = 0.1;                 // one slow turn every 10 s
+            return r;
+        }
+        case IdleBehavior::Off: {
+            Output off = lit("No game running - lights off");
+            off.fx.color1 = Rgb{};
+            return off;
+        }
+        case IdleBehavior::ArmouryCrate: {
+            Output ac;  // stopped: hand back
+            ac.label = "No game running - Armoury Crate";
+            return ac;
+        }
+        default:
+            return manual("No game running - your color");
+        }
+    }();
+    if (fanTest_) {
+        // The test pattern shows even while the lights are otherwise handed back.
+        if (o.stopped) o = manual("Fan layout test");
+        o.fanTest = true;
+        o.label = "Fan layout test";
     }
-    switch (prefs_.idle) {
-    case IdleBehavior::Rainbow: {
-        Output o;
-        o.kind = Output::Kind::Rainbow;
-        o.color = Rgb{170, 60, 255};  // icon/preview tint; the effect itself cycles
-        o.hz = 0.1;                   // one slow cycle every 10 s
-        o.label = "No game running - rainbow";
-        return o;
-    }
-    case IdleBehavior::Off: {
-        Output o;
-        o.kind = Output::Kind::Static;
-        o.label = "No game running - lights off";
-        return o;
-    }
-    case IdleBehavior::ArmouryCrate: {
-        Output o;  // Kind::Stopped: hand back
-        o.label = "No game running - Armoury Crate";
-        return o;
-    }
-    default:
-        return manual("No game running - your color");
-    }
+    return o;
 }
 
 void Controller::Apply(const Output& out) {
-    if (out.kind == Output::Kind::Stopped) {
+    if (out.stopped) {
         if (mirror_.IsRunning()) {
             LUMA_INFO("no longer controlling the lights - handing back to Armoury Crate");
             mirror_.Stop();
@@ -201,20 +226,7 @@ void Controller::Apply(const Output& out) {
         mirror_.Start(c, nullptr, "LumaBridge app", /*routeToApp=*/false);
         mirrorHz_ = c.maxUpdateHz;
     }
-    switch (out.kind) {
-    case Output::Kind::Breathing:
-        mirror_.Pulse(out.color, 0, static_cast<int>(1000.0 / out.hz));
-        break;
-    case Output::Kind::Strobe:
-        mirror_.Flash(out.color, 0, static_cast<int>(500.0 / out.hz));
-        break;
-    case Output::Kind::Rainbow:
-        mirror_.Spectrum(static_cast<int>(1000.0 / out.hz));
-        break;
-    default:
-        mirror_.SetStatic(out.color);
-        break;
-    }
+    mirror_.SetPattern(out.fx, cfg_.argbFans, out.fanTest);
 }
 
 void Controller::Tick() {

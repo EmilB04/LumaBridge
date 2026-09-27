@@ -8,10 +8,12 @@ OpenRGB, Artemis or other middleware.
 
 - **Auto mode:** games drive your lights. LumaBridge answers the game's lighting SDK as
   if that brand's software were installed, and follows the game that's currently active.
-- **Manual mode:** color wheel, hex input, presets, breathing and strobe effects,
-  brightness.
+- **Manual mode:** color wheel, hex input, presets, brightness, and effects: static,
+  breathing, strobe, color cycle, and per-LED rainbow wave, gradient, comet and twinkle
+  that run around each ARGB fan.
 - **Calibration:** per-channel gains and gamma so Aura matches your other gear.
-- **Devices:** switch individual Aura devices on or off.
+- **Devices:** switch individual Aura devices on or off, and set up your fans (count, LEDs
+  per fan, test pattern).
 - **Games:** one-click setup per SDK, with live status.
 - Lives in the tray, starts with Windows if you want. The tray icon glows in the current
   color.

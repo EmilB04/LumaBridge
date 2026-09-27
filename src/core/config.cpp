@@ -155,6 +155,12 @@ Config LoadConfig(const std::wstring& moduleDir) {
     cfg.auraDisabledDevices = SplitList(ReadString(ini, L"Aura", L"DisabledDevices", L""), L'|');
     cfg.releaseControlOnShutdown =
         ReadBool(ini, L"Aura", L"ReleaseControlOnShutdown", cfg.releaseControlOnShutdown);
+    cfg.argbFans.fans = static_cast<int>(ReadNumber(ini, L"Aura", L"ArgbFans", cfg.argbFans.fans));
+    cfg.argbFans.ledsPerFan = static_cast<int>(ReadNumber(ini, L"Aura", L"ArgbLedsPerFan", cfg.argbFans.ledsPerFan));
+    cfg.argbFans.fans = cfg.argbFans.Fans();
+    cfg.argbFans.ledsPerFan = cfg.argbFans.LedsPerFan();
+    cfg.argbFans.repeatPerFan =
+        _wcsicmp(Trim(ReadString(ini, L"Aura", L"ArgbFanLayout", L"repeat")).c_str(), L"span") != 0;
 
     // Percentages in the file, fractions in memory.
     cfg.auraCorrection.brightness = ReadNumber(ini, L"Color", L"Brightness", 100.0) / 100.0;

@@ -24,6 +24,17 @@ std::string Narrow(const std::wstring& w) {
     return s;
 }
 
+// Ini names; "rainbow" (all LEDs cycling together) predates the per-LED effects.
+constexpr struct {
+    ManualEffect kind;
+    const wchar_t* name;
+} kEffectNames[] = {
+    {ManualEffect::Static, L"static"},         {ManualEffect::Breathing, L"breathing"},
+    {ManualEffect::Strobe, L"strobe"},         {ManualEffect::ColorCycle, L"rainbow"},
+    {ManualEffect::RainbowWave, L"rainbowwave"}, {ManualEffect::Gradient, L"gradient"},
+    {ManualEffect::Comet, L"comet"},           {ManualEffect::Twinkle, L"twinkle"},
+};
+
 std::wstring Widen(const std::string& s) { return std::wstring(s.begin(), s.end()); }
 
 std::wstring Num(double v) {
@@ -56,13 +67,13 @@ Prefs LoadPrefs(const std::wstring& ini) {
     std::wstring v = Read(ini, L"App", L"Mode");
     if (_wcsicmp(v.c_str(), L"manual") == 0) p.mode = Mode::Manual;
     FromHex(Narrow(Read(ini, L"App", L"ManualColor")), &p.manualColor);
+    FromHex(Narrow(Read(ini, L"App", L"ManualColor2")), &p.manualColor2);
     v = Read(ini, L"App", L"ManualEffect");
-    if (_wcsicmp(v.c_str(), L"breathing") == 0) p.effect = ManualEffect::Breathing;
-    if (_wcsicmp(v.c_str(), L"strobe") == 0) p.effect = ManualEffect::Strobe;
-    if (_wcsicmp(v.c_str(), L"rainbow") == 0) p.effect = ManualEffect::Rainbow;
+    for (const auto& e : kEffectNames)
+        if (_wcsicmp(v.c_str(), e.name) == 0) p.effect = e.kind;
     v = Read(ini, L"App", L"ManualSpeed");
     if (!v.empty()) p.speedHz = static_cast<float>(_wtof(v.c_str()));
-    if (p.speedHz < 0.02f || p.speedHz > 10.f) p.speedHz = 0.5f;
+    if (p.speedHz < 0.f || p.speedHz > 10.f) p.speedHz = 0.5f;
     v = Read(ini, L"App", L"WhenIdle");
     if (_wcsicmp(v.c_str(), L"armourycrate") == 0) p.idle = IdleBehavior::ArmouryCrate;
     if (_wcsicmp(v.c_str(), L"rainbow") == 0) p.idle = IdleBehavior::Rainbow;
@@ -86,11 +97,9 @@ Prefs LoadPrefs(const std::wstring& ini) {
 void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"Mode", p.mode == Mode::Manual ? L"manual" : L"auto");
     WriteConfigValue(ini, L"App", L"ManualColor", Widen(ToHex(p.manualColor)));
-    WriteConfigValue(ini, L"App", L"ManualEffect",
-                     p.effect == ManualEffect::Breathing ? L"breathing"
-                     : p.effect == ManualEffect::Strobe  ? L"strobe"
-                     : p.effect == ManualEffect::Rainbow ? L"rainbow"
-                                                         : L"static");
+    WriteConfigValue(ini, L"App", L"ManualColor2", Widen(ToHex(p.manualColor2)));
+    for (const auto& e : kEffectNames)
+        if (e.kind == p.effect) WriteConfigValue(ini, L"App", L"ManualEffect", e.name);
     WriteConfigValue(ini, L"App", L"ManualSpeed", Num(p.speedHz));
     WriteConfigValue(ini, L"App", L"WhenIdle",
                      p.idle == IdleBehavior::Rainbow        ? L"rainbow"
@@ -113,6 +122,9 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     for (size_t i = 0; i < cfg.auraDisabledDevices.size(); ++i)
         disabled += (i ? L"|" : L"") + cfg.auraDisabledDevices[i];
     WriteConfigValue(ini, L"Aura", L"DisabledDevices", disabled);
+    WriteConfigValue(ini, L"Aura", L"ArgbFans", Num(cfg.argbFans.Fans()));
+    WriteConfigValue(ini, L"Aura", L"ArgbLedsPerFan", Num(cfg.argbFans.LedsPerFan()));
+    WriteConfigValue(ini, L"Aura", L"ArgbFanLayout", cfg.argbFans.repeatPerFan ? L"repeat" : L"span");
     WriteConfigValue(ini, L"Mirror", L"BitmapMode",
                      cfg.bitmapReduce == BitmapReduce::Brightest ? L"brightest" : L"average");
     WriteConfigValue(ini, L"GameSense", L"Enabled", cfg.gameSenseEnabled ? L"1" : L"0");

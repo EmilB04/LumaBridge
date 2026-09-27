@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include "color.h"
+
 namespace luma {
 
 struct AuraDeviceInfo {
@@ -36,6 +38,15 @@ public:
     // Shows `auraColor` (0x00BBGGRR) on every selected device. False on an I/O failure:
     // the caller disconnects and reconnects later.
     virtual bool SetAll(uint32_t auraColor) = 0;
+
+    // Per-LED frame: `frames[i]` holds the colors for device i (Devices()[i]), already
+    // color-corrected. Backends that can't address single LEDs show each device's first
+    // color everywhere.
+    virtual bool SetFrames(const std::vector<std::vector<Rgb>>& frames) {
+        for (const auto& f : frames)
+            if (!f.empty()) return SetAll(ToAuraColor(f[0]));
+        return SetAll(0);
+    }
 };
 
 }  // namespace luma

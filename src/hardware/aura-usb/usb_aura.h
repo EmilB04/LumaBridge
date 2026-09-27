@@ -11,6 +11,11 @@
 
 namespace luma::aurausb {
 
+// Lists the Aura devices of every controller found, WITHOUT taking control (only the
+// firmware / configuration are read; the lights keep whatever they are showing).
+std::vector<AuraDeviceInfo> ProbeDevices(const std::vector<uint16_t>& productIds = {0x1939},
+                                         int argbLeds = kDefaultArgbLeds);
+
 class UsbAura : public LightingBackend {
 public:
     // USB product ids of Aura motherboard controllers to look for.
@@ -22,6 +27,7 @@ public:
     const std::vector<AuraDeviceInfo>& Devices() const override { return infos_; }
     void SetSelected(size_t index, bool selected) override;
     bool SetAll(uint32_t auraColor) override;
+    bool SetFrames(const std::vector<std::vector<Rgb>>& frames) override;
 
 private:
     bool EnterDirectMode();

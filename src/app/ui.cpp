@@ -9,8 +9,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <utility>
+#include <vector>
 
 #include "controller.h"
+#include "effects.h"
 #include "imgui.h"
 #include "integrations.h"
 
@@ -47,23 +50,10 @@ Rgb FromV4(const float* f) {
     return Rgb{b(f[0]), b(f[1]), b(f[2])};
 }
 
-// Color actually visible right now (animates breathing / strobe for the preview).
+// Color actually visible right now on the first LED (the sidebar orb).
 Rgb PreviewColor(const Controller::Output& o) {
-    const double t = ImGui::GetTime();
-    switch (o.kind) {
-    case Controller::Output::Kind::Breathing: {
-        double k = 0.5 + 0.5 * std::cos(t * o.hz * 2.0 * 3.14159265358979);
-        return Scale(o.color, k);
-    }
-    case Controller::Output::Kind::Strobe:
-        return std::fmod(t * o.hz, 1.0) < 0.5 ? o.color : Rgb{};
-    case Controller::Output::Kind::Rainbow:
-        return FromHue(std::fmod(t * o.hz, 1.0) * 360.0);
-    case Controller::Output::Kind::Stopped:
-        return Rgb{60, 64, 76};
-    default:
-        return o.color;
-    }
+    if (o.stopped) return Rgb{60, 64, 76};
+    return fx::Render(o.fx, ImGui::GetTime(), 0, 1);
 }
 
 // ---- Widgets -------------------------------------------------------------------------
@@ -183,6 +173,120 @@ bool LabeledSlider(const char* label, float* v, float min, float max, const char
     return changed;
 }
 
+// ---- Effects -------------------------------------------------------------------------
+
+struct EffectInfo {
+    const char* name;
+    const char* help;
+    float minSpeed, maxSpeed;  // maxSpeed 0: no speed slider
+    const char* speedFmt;
+};
+
+// Indexed by fx::Kind.
+const EffectInfo kEffects[] = {
+    {"Static", "One color on every LED.", 0, 0, ""},
+    {"Breathing", "Fades your color in and out.", 0.1f, 3.f, "%.1f breaths per second"},
+    {"Strobe", "Flashes your color on and off.", 0.1f, 10.f, "%.1f flashes per second"},
+    {"Color cycle", "Every LED shows the same color, cycling through the spectrum.", 0, 0, ""},
+    {"Rainbow wave", "The whole spectrum around each fan, turning.", 0.05f, 2.f, "%.2f turns per second"},
+    {"Gradient", "Blends your two colors around each fan. Speed 0 keeps it still.", 0.f, 2.f,
+     "%.2f turns per second"},
+    {"Comet", "A comet of your color with a fading tail chases around, over the second color.", 0.1f, 3.f,
+     "%.1f laps per second"},
+    {"Twinkle", "Your color with sparkles of the second color.", 0.1f, 3.f, "%.1f per second"},
+};
+
+// Effect picker: two rows of four.
+bool EffectGrid(fx::Kind* kind, float width) {
+    const char* names[8];
+    for (int i = 0; i < 8; ++i) names[i] = kEffects[i].name;
+    int sel = static_cast<int>(*kind);
+    int row1 = sel < 4 ? sel : -1, row2 = sel >= 4 ? sel - 4 : -1;
+    bool changed = false;
+    if (Segmented("fx1", &row1, names, 4, width)) {
+        *kind = static_cast<fx::Kind>(row1);
+        changed = true;
+    }
+    if (Segmented("fx2", &row2, names + 4, 4, width)) {
+        *kind = static_cast<fx::Kind>(row2 + 4);
+        changed = true;
+    }
+    return changed;
+}
+
+ImU32 Col(Rgb c, int a = 255) { return IM_COL32(c.r, c.g, c.b, a); }
+
+// Draws the fans on the ARGB header as rings of LEDs, and the board's LEDs as a row, showing
+// what `out` looks like right now.
+void LightsPreview(const Controller::Output& out, const fx::FanLayout& layout, int boardLeds) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const double t = ImGui::GetTime();
+    std::vector<Rgb> fans, board;
+    if (out.stopped) {
+        fans.assign(static_cast<size_t>(layout.TotalLeds()), Rgb{50, 54, 64});
+        board.assign(static_cast<size_t>(boardLeds), Rgb{50, 54, 64});
+    } else {
+        if (out.fanTest) fx::RenderFanTest(layout, &fans);
+        else fx::RenderFans(out.fx, t, layout, &fans);
+        if (out.fanTest) board.assign(static_cast<size_t>(boardLeds), Rgb{});
+        else fx::RenderStrip(out.fx, t, boardLeds, &board);
+    }
+
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const int n = layout.Fans();
+    const float gap = 14 * S();
+    const float size = std::min(96 * S(), (avail - gap * (std::min(n, 6) - 1)) / std::min(n, 6));
+    const int perRow = std::max(1, static_cast<int>((avail + gap) / (size + gap)));
+    const int per = layout.LedsPerFan();
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const int rows = (n + perRow - 1) / perRow;
+    for (int fan = 0; fan < n; ++fan) {
+        const float x = origin.x + (fan % perRow) * (size + gap);
+        const float y = origin.y + (fan / perRow) * (size + gap);
+        const ImVec2 c(x + size / 2, y + size / 2);
+        const float ringR = size * 0.40f;
+        dl->AddCircleFilled(c, size * 0.47f, Hex(0x0A0C10), 48);
+        dl->AddCircleFilled(c, size * 0.16f, Hex(kCardHover), 32);  // hub
+        const float dot = std::clamp(ringR * 3.14159f / per * 0.8f, 1.5f * S(), 6 * S());
+        for (int i = 0; i < per; ++i) {
+            const Rgb led = fans[static_cast<size_t>(fan * per + i)];
+            // LED 0 at the top, clockwise.
+            const float a = -1.5707963f + 6.2831853f * i / per;
+            const ImVec2 pt(c.x + std::cos(a) * ringR, c.y + std::sin(a) * ringR);
+            dl->AddCircleFilled(pt, dot * 2.2f, Col(led, 45), 16);  // glow
+            dl->AddCircleFilled(pt, dot, Col(led), 16);
+        }
+    }
+    ImGui::Dummy(ImVec2(avail, rows * size + (rows - 1) * gap));
+
+    if (boardLeds > 0) {
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        Muted("Motherboard");
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float d = 12 * S();
+        for (int i = 0; i < boardLeds; ++i) {
+            const ImVec2 pt(p.x + d / 2 + i * (d + 8 * S()), p.y + d / 2 + 2 * S());
+            dl->AddCircleFilled(pt, d, Col(board[static_cast<size_t>(i)], 45), 16);
+            dl->AddCircleFilled(pt, d / 2, Col(board[static_cast<size_t>(i)]), 16);
+        }
+        ImGui::Dummy(ImVec2(avail, d + 4 * S()));
+    }
+}
+
+int BoardLedCount(Controller& ctl) {
+    for (const auto& d : ctl.devices())
+        if (d.type == 0x00010000) return d.lightCount;
+    return 5;
+}
+
+void PreviewCard(Controller& ctl, const Fonts& f) {
+    BeginCard("preview");
+    CardTitle(f, "Preview");
+    LightsPreview(ctl.output(), ctl.config().argbFans, BoardLedCount(ctl));
+    Muted("Fans on the ARGB header, as set up on the Devices page.");
+    EndCard();
+}
+
 // ---- Pages ---------------------------------------------------------------------------
 
 void BrightnessCard(Controller& ctl, const Fonts& f) {
@@ -240,7 +344,7 @@ void AutoPage(Controller& ctl, const Fonts& f) {
     ImGui::Dummy(ImVec2(0, 4 * S()));
     static const char* kIdleHelp[] = {
         "Your manual color and effect (Lighting > Manual) show between games.",
-        "A slow rainbow cycles across the motherboard and fans between games.",
+        "A slow rainbow wave turns around the fans and motherboard between games.",
         "The motherboard and fans stay dark between games.",
         "Between games LumaBridge hands the lights back to Armoury Crate's own effect. Set up "
         "\"Armoury Crate hand-back\" on the Games page once to make this silent.",
@@ -248,6 +352,7 @@ void AutoPage(Controller& ctl, const Fonts& f) {
     Muted("%s", kIdleHelp[idle]);
     EndCard();
 
+    PreviewCard(ctl, f);
     BrightnessCard(ctl, f);
 }
 
@@ -292,27 +397,41 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
 
         ImGui::Dummy(ImVec2(0, 6 * S()));
         ImGui::TextUnformatted("Effect");
-        int effect = static_cast<int>(p.effect);
-        const char* effects[] = {"Static", "Breathing", "Strobe", "Rainbow"};
-        if (Segmented("effect", &effect, effects, 4, colW)) {
-            p.effect = static_cast<ManualEffect>(effect);
-            if (p.effect == ManualEffect::Rainbow && p.speedHz > 1.f) p.speedHz = 0.1f;
+        if (EffectGrid(&p.effect, colW)) {
+            const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
+            if (p.effect == ManualEffect::ColorCycle) p.speedHz = std::min(p.speedHz, 0.5f);
+            else if (e.maxSpeed > 0) p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
             ctl.Changed();
         }
-        if (p.effect == ManualEffect::Rainbow) {
-            ImGui::Dummy(ImVec2(0, 4 * S()));
-            Muted("Cycles through every color; the color picked above isn't used.");
+        const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
+        Muted("%s", e.help);
+        if (p.effect == ManualEffect::ColorCycle) {
             float seconds = 1.f / std::max(p.speedHz, 0.02f);
             if (LabeledSlider("One full cycle every", &seconds, 2.f, 60.f, "%.0f seconds")) {
                 p.speedHz = 1.f / seconds;
                 ctl.Changed();
             }
-        } else if (p.effect != ManualEffect::Static) {
+        } else if (e.maxSpeed > 0) {
+            p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
+            if (LabeledSlider("Speed", &p.speedHz, e.minSpeed, e.maxSpeed, e.speedFmt)) ctl.Changed();
+        }
+        if (fx::UsesSecondColor(p.effect)) {
             ImGui::Dummy(ImVec2(0, 4 * S()));
-            if (p.speedHz < 0.1f) p.speedHz = 0.1f;
-            if (LabeledSlider("Speed", &p.speedHz, 0.1f, p.effect == ManualEffect::Strobe ? 10.f : 3.f,
-                              "%.1f per second"))
+            float c2[3] = {p.manualColor2.r / 255.f, p.manualColor2.g / 255.f, p.manualColor2.b / 255.f};
+            if (ImGui::ColorEdit3("Second color", c2, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel)) {
+                p.manualColor2 = FromV4(c2);
                 ctl.Changed();
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Swap")) {
+                std::swap(p.manualColor, p.manualColor2);
+                ctl.Changed();
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Off")) {
+                p.manualColor2 = Rgb{};
+                ctl.Changed();
+            }
         }
 
         ImGui::Dummy(ImVec2(0, 6 * S()));
@@ -349,13 +468,54 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
     ImGui::EndGroup();
     EndCard();
 
+    PreviewCard(ctl, f);
     BrightnessCard(ctl, f);
 }
 
+void FansCard(Controller& ctl, const Fonts& f) {
+    BeginCard("fans");
+    CardTitle(f, "Fans on the ARGB header");
+    Muted("Per-LED effects (rainbow wave, gradient, comet, twinkle) need to know how the LEDs are "
+          "grouped. Fans chained on a hub count in order. be quiet! Light Wings 120 mm: 20 LEDs per fan.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    fx::FanLayout& l = ctl.config().argbFans;
+    const float w = std::min(220 * S(), ImGui::GetContentRegionAvail().x / 2 - 8 * S());
+    ImGui::BeginGroup();
+    ImGui::TextUnformatted("Fans");
+    ImGui::SetNextItemWidth(w);
+    if (ImGui::SliderInt("##fans", &l.fans, 1, 8, "%d", ImGuiSliderFlags_AlwaysClamp)) ctl.Changed();
+    ImGui::EndGroup();
+    ImGui::SameLine(0, 16 * S());
+    ImGui::BeginGroup();
+    ImGui::TextUnformatted("LEDs per fan");
+    ImGui::SetNextItemWidth(w);
+    if (ImGui::InputInt("##leds", &l.ledsPerFan, 1, 4)) {
+        l.ledsPerFan = l.LedsPerFan();
+        ctl.Changed();
+    }
+    ImGui::EndGroup();
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    int span = l.repeatPerFan ? 0 : 1;
+    const char* modes[] = {"Same pattern on every fan", "One pattern across all fans"};
+    if (Segmented("fanmode", &span, modes, 2, ImGui::GetContentRegionAvail().x)) {
+        l.repeatPerFan = span == 0;
+        ctl.Changed();
+    }
+    bool test = ctl.fanTest();
+    if (ImGui::Checkbox("Show test pattern", &test)) ctl.SetFanTest(test);
+    ImGui::SameLine();
+    Muted("Each fan should be one solid color with a single white LED. If a color spills onto the "
+          "next fan, change LEDs per fan.");
+    if (ctl.fanTest()) {
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        LightsPreview(ctl.output(), l, 0);
+    }
+    EndCard();
+}
+
 void DevicesPage(Controller& ctl, const Fonts& f) {
-    static std::vector<AuraDeviceInfo> lastDevices;  // survives while Armoury Crate has control
     auto st = ctl.auraStatus();
-    if (!st.devices.empty()) lastDevices = st.devices;
+    const auto& lastDevices = ctl.devices();
 
     BeginCard("status");
     CardTitle(f, "Aura connection");
@@ -367,7 +527,8 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
     } else if (!st.running) {
         Pill("Not controlling the lights", kMuted);
         ImGui::SameLine();
-        Muted("LumaBridge takes over when a game or your manual color needs the lights.");
+        Muted("%d device(s) found. LumaBridge takes over when a game or your manual color needs the "
+              "lights.", static_cast<int>(lastDevices.size()));
     } else {
         Pill("Aura controller not found", kRed);
         ImGui::SameLine();
@@ -380,7 +541,7 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
     BeginCard("devices");
     CardTitle(f, "Devices");
     if (lastDevices.empty()) {
-        Muted("No devices seen yet. Switch to Manual mode once so LumaBridge can find your Aura devices.");
+        Muted("No Aura devices found. Click Rescan devices; if it stays empty, the log (Settings) says why.");
     } else if (ImGui::BeginTable("devtable", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX)) {
         ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 44 * S());
         ImGui::TableSetupColumn("Device", ImGuiTableColumnFlags_WidthStretch);
@@ -416,6 +577,8 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
         ImGui::EndTable();
     }
     EndCard();
+
+    FansCard(ctl, f);
 }
 
 void GamesPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
@@ -720,6 +883,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
 
     // Re-check integration status whenever the Games page is opened.
     if (ui.page == Page::Games && ui.lastPage != Page::Games) ui.integrationsLoaded = false;
+    if (ui.page != Page::Devices && ctl.fanTest()) ctl.SetFanTest(false);  // the test is a Devices-page thing
     ui.lastPage = ui.page;
 
     switch (ui.page) {

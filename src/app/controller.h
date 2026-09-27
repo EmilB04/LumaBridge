@@ -30,13 +30,14 @@ public:
     // What is currently being shown, for the UI.
     struct Output {
         // Stopped: LumaBridge isn't driving the lights (paused or stopped by the user).
-        enum class Kind { Stopped, Static, Breathing, Strobe, Rainbow } kind = Kind::Stopped;
-        Rgb color{};
-        double hz = 0;
-        std::string label;  // "Battlefield 1 - Logitech LIGHTSYNC", "Manual color", ...
+        bool stopped = true;
+        fx::Params fx;         // the effect (games: Static, or Strobe while they flash)
+        bool fanTest = false;  // fans show the layout test pattern (Devices page)
+        std::string label;     // "Battlefield 1 - Logitech LIGHTSYNC", "Manual color", ...
 
         bool SameLighting(const Output& o) const {
-            return kind == o.kind && color == o.color && hz == o.hz;
+            return stopped == o.stopped && fanTest == o.fanTest && fx.kind == o.fx.kind &&
+                   fx.color1 == o.fx.color1 && fx.color2 == o.fx.color2 && fx.speed == o.fx.speed;
         }
     };
 
@@ -55,6 +56,10 @@ public:
 
     void SetGameSenseEnabled(bool enabled);
 
+    // Fan layout test pattern (Devices page); not saved.
+    void SetFanTest(bool on) { fanTest_ = on; }
+    bool fanTest() const { return fanTest_; }
+
     // Lighting control is off either because the previous run didn't exit cleanly (crash-loop
     // guard) or because the user chose "Stop controlling the lights". ResumeAura() clears both.
     enum class Pause { None, AfterCrash, ByUser };
@@ -64,7 +69,11 @@ public:
     bool auraPaused() const { return pause() != Pause::None; }
     void ResumeAura();
     void StopLighting();
-    void RescanDevices() { mirror_.Rescan(); }
+    // Re-lists devices: through the running mirror, or with a read-only probe when
+    // LumaBridge isn't controlling the lights (so Armoury Crate keeps them).
+    void RescanDevices();
+    // Devices seen most recently (live while controlling, else the last probe).
+    const std::vector<AuraDeviceInfo>& devices();
 
     const Output& output() const { return output_; }
     const std::vector<Source>& sources() const { return tracker_.All(); }
@@ -89,12 +98,14 @@ private:
 
     int mirrorHz_ = 0;
     bool auraPaused_ = false;
+    bool fanTest_ = false;
     bool shutDown_ = false;
     Output output_;
     bool outputApplied_ = false;
     bool dirty_ = false;
     uint64_t dirtySince_ = 0;
     std::map<uint32_t, std::string> processNames_;
+    std::vector<AuraDeviceInfo> knownDevices_;
 };
 
 }  // namespace luma::app

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "color.h"
+#include "effects.h"
 #include "log.h"
 
 namespace luma {
@@ -32,6 +33,9 @@ struct Config {
     bool auraDirectFromGames = false;
     // Exact Aura device names switched off in the app ('|' separated in the ini).
     std::vector<std::wstring> auraDisabledDevices;
+    // How the LEDs on the ARGB header are grouped into fans, for per-LED effects
+    // (ArgbFans, ArgbLedsPerFan, ArgbFanLayout=repeat|span).
+    fx::FanLayout argbFans;
 
     // [Color]
     ColorCorrection auraCorrection;

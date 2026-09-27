@@ -9,11 +9,14 @@
 
 #include "color.h"
 #include "config.h"
+#include "effects.h"
 
 namespace luma::app {
 
 enum class Mode { Auto, Manual };
-enum class ManualEffect { Static, Breathing, Strobe, Rainbow };
+// Manual effects are the per-LED effects (ColorCycle is the classic "rainbow": all LEDs one
+// hue; RainbowWave spreads the hues around each fan).
+using ManualEffect = fx::Kind;
 // What Auto mode shows when no game is sending lighting. ArmouryCrate hands the lights back
 // (stop + start Armoury Crate so it re-applies its effect).
 enum class IdleBehavior { ManualColor, Rainbow, Off, ArmouryCrate };
@@ -21,8 +24,9 @@ enum class IdleBehavior { ManualColor, Rainbow, Off, ArmouryCrate };
 struct Prefs {
     Mode mode = Mode::Auto;
     Rgb manualColor{0, 140, 255};
+    Rgb manualColor2{255, 255, 255};  // second color of gradient / comet / twinkle
     ManualEffect effect = ManualEffect::Static;
-    float speedHz = 0.5f;  // breathing cycles / strobe flashes / rainbow cycles per second
+    float speedHz = 0.5f;  // effect cycles per second (0 = still, for gradients)
     IdleBehavior idle = IdleBehavior::ManualColor;
     // "Stop controlling the lights": remembered across restarts until resumed.
     bool lightingStopped = false;

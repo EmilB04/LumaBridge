@@ -20,6 +20,7 @@
 #include "aura_bridge.h"
 #include "color.h"
 #include "config.h"
+#include "effects.h"
 #include "lighting_state.h"
 
 namespace luma {
@@ -46,6 +47,10 @@ public:
     void Pulse(Rgb c, int durationMs, int intervalMs);
     void Spectrum(int periodMs);  // rainbow: every hue once per period
     void StopEffects();
+    // Per-LED effect (app only): rendered for every device each frame, ARGB headers as
+    // `fans`. `fanTest` shows the layout test pattern on the fans instead. Any of the
+    // single-color calls above switches back to single-color mode.
+    void SetPattern(const fx::Params& params, const fx::FanLayout& fans, bool fanTest = false);
     void Save();
     void Restore();
 
@@ -75,6 +80,14 @@ private:
 
     std::mutex mutex_;
     LightingState state_;  // guarded by mutex_
+    struct Pattern {
+        bool active = false;
+        fx::Params params;
+        fx::FanLayout fans;
+        bool fanTest = false;
+        uint64_t startedAt = 0;  // effect time 0 (GetTickCount64)
+        uint64_t version = 0;
+    } pattern_;  // guarded by mutex_
 
     mutable std::mutex settingsMutex_;  // guards everything below
     ColorCorrection correction_;
