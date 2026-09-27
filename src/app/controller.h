@@ -11,6 +11,7 @@
 
 #include <windows.h>
 
+#include <future>
 #include <map>
 #include <optional>
 #include <string>
@@ -21,6 +22,7 @@
 #include "config.h"
 #include "game_catalog.h"
 #include "game_detector.h"
+#include "game_library.h"
 #include "gamesense_server.h"
 #include "ipc.h"
 #include "source_tracker.h"
@@ -88,6 +90,13 @@ public:
     // Sources that don't belong to any detected game (e.g. a game outside the known libraries).
     std::vector<Source> unmatchedSources() const;
 
+    // Games installed on this PC (Games List page), scanned in the background.
+    const std::vector<InstalledGame>& library() const { return library_; }
+    bool libraryScanning() const { return libraryJob_.valid(); }
+    void RescanLibrary();
+    void AddManualGame(const std::wstring& exePath);
+    void RemoveManualGame(const std::wstring& exePath);
+
     const Output& output() const { return output_; }
     const std::vector<Source>& sources() const { return tracker_.All(); }
     AuraMirror::Status auraStatus() const { return mirror_.GetStatus(); }
@@ -123,6 +132,9 @@ private:
     std::vector<AuraDeviceInfo> knownDevices_;
     GameDetector detector_;
     std::vector<GameStatus> games_;
+    std::vector<InstalledGame> library_;
+    std::future<std::vector<InstalledGame>> libraryJob_;
+    bool libraryRescanPending_ = false;  // the list changed while a scan was running
 };
 
 }  // namespace luma::app

@@ -482,7 +482,15 @@ static void TestGameCatalog() {
     CHECK(LightingSdkForModule(L"d3d11.dll") == nullptr);
 
     CHECK(Normalize("Rocket League") == Normalize("ROCKETLEAGUE"));
+    CHECK(CleanName(L"Battlefield\u2122 1") == L"Battlefield 1" && CleanName(L"Game\u00AE") == L"Game");
     CHECK(IsGenericProductName(L"Unreal Engine") && IsGenericProductName(L"") && !IsGenericProductName(L"Rocket League"));
+
+    const std::string vdf = "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"C:\\\\Program Files (x86)\\\\Steam\"\n"
+                            "\t\t\"apps\" { \"730\" \"1\" }\n\t}\n\t\"1\" { \"path\" \"D:\\\\SteamLibrary\" }\n}";
+    const auto paths = VdfValues(vdf, "path");
+    CHECK(paths.size() == 2 && paths[0] == "C:\\Program Files (x86)\\Steam" && paths[1] == "D:\\SteamLibrary");
+    const std::string acf = "\"AppState\" { \"appid\" \"1238840\" \"name\" \"Battlefield\u2122 1\" \"installdir\" \"Battlefield 1\" }";
+    CHECK(VdfValues(acf, "installdir").at(0) == "Battlefield 1" && VdfValues(acf, "NAME").size() == 1);
 
     CHECK(ClassifySupport(true, false, false, false) == Support::Active);
     CHECK(ClassifySupport(false, true, false, true) == Support::Known);

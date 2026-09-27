@@ -19,7 +19,7 @@
     background logon Windows uses for that didn't have the rights pnputil needs, so the
     task ended with result 1 and the lights stayed frozen.)
 
-    The LumaBridge app runs this for you (Games page → Armoury Crate hand-back → Set up).
+    The LumaBridge app runs this for you (Integrations page → Armoury Crate hand-back → Set up).
 
 .EXAMPLE
     .\Install-HandbackTask.ps1
@@ -31,6 +31,10 @@ param([switch] $Uninstall)
 $ErrorActionPreference = 'Stop'
 $TaskPath = '\LumaBridge\'
 $TaskName = 'Hand back lighting'
+# Bumped whenever the task changes; LumaBridge asks to set it up again when the recorded
+# version is older (kHandbackTaskVersion in src/app/integrations.h).
+$TaskVersion = 3
+$VersionKey = 'HKLM:\SOFTWARE\LumaBridge'
 
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not ([Security.Principal.WindowsPrincipal] $id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -39,6 +43,7 @@ if (-not ([Security.Principal.WindowsPrincipal] $id).IsInRole([Security.Principa
 
 if ($Uninstall) {
     Unregister-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $VersionKey -Name HandbackTaskVersion -ErrorAction SilentlyContinue
     Write-Host 'Removed the hand-back task.'
     exit 0
 }
@@ -56,6 +61,30 @@ function Write-Log($text) { Add-Content -Path $log -Value ("{0} {1}" -f (Get-Dat
 $me = [Security.Principal.WindowsIdentity]::GetCurrent()
 $admin = ([Security.Principal.WindowsPrincipal] $me).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 Write-Log "hand-back started as $($me.Name), elevated=$admin"
+
+Add-Type -Namespace LumaBridge -Name Native -MemberDefinition @"
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+public static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr sa, uint disposition, uint flags, IntPtr template);
+[DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+"@
+# Is any program holding one of the controller's HID interfaces open? Checked by opening it
+# exclusively (and closing it right away): a restart while it's open gets deferred to the
+# next reboot, and until then Windows refuses every further restart.
+function Get-HeldInterfaces($usbId) {
+    $vidPid = ($usbId -split '\\')[1]
+    $held = @()
+    foreach ($hid in @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
+                       Where-Object { $_.InstanceId -like "HID\$vidPid*" })) {
+        $path = '\\?\' + ($hid.InstanceId -replace '\\', '#') + '#{4d1e55b2-f16f-11cf-88cb-001111000030}'
+        # GENERIC_READ | GENERIC_WRITE, no sharing, OPEN_EXISTING
+        $h = [LumaBridge.Native]::CreateFileW($path, [uint32]3221225472, 0, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
+        $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        if ($h -eq [IntPtr](-1)) { if ($err -eq 32) { $held += $hid.InstanceId } }
+        else { [void][LumaBridge.Native]::CloseHandle($h) }
+    }
+    return ,$held
+}
+
 $pattern = '^USB\\VID_0B05&PID_(1867|1872|18A3|18A5|1939|19AF|1AA6)\\[^\\]+$'
 $controllers = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
     Where-Object { $_.InstanceId -match $pattern })
@@ -65,8 +94,31 @@ if (-not $controllers.Count) {
         ForEach-Object { Write-Log "  ASUS USB device: $($_.InstanceId) ($($_.FriendlyName))" }
 }
 foreach ($c in $controllers) {
-    $out = & pnputil.exe /restart-device "$($c.InstanceId)" 2>&1 | Out-String
-    Write-Log ("pnputil /restart-device {0} ({1}) -> exit {2}: {3}" -f $c.InstanceId, $c.FriendlyName, $LASTEXITCODE, $out.Trim())
+    $id = $c.InstanceId
+    $held = Get-HeldInterfaces $id
+    if ($held.Count) {
+        Write-Log "controller in use by another program ($($held -join ', '))"
+        # Armoury Crate's motherboard helper keeps the controller open; its service starts it
+        # again by itself.
+        foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like 'Aac*MbHal*' })) {
+            Write-Log "stopping $($p.ProcessName) (pid $($p.Id)), Armoury Crate's motherboard helper"
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Milliseconds 1500
+        $held = Get-HeldInterfaces $id
+    }
+    if ($held.Count) {
+        Write-Log "still in use by another program - not restarting $id (Windows would only finish it at the next reboot)"
+        Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match 'aac|armoury|lighting|aura|asus|rgb' } |
+            ForEach-Object { Write-Log "  running: $($_.ProcessName) (pid $($_.Id))" }
+        continue
+    }
+    $out = & pnputil.exe /restart-device "$id" 2>&1 | Out-String
+    $code = $LASTEXITCODE
+    Write-Log ("pnputil /restart-device {0} -> exit {1}: {2}" -f $id, $code, ($out.Trim() -replace '\s+', ' '))
+    if ($code -eq 50 -or $code -eq 3010) {
+        Write-Log 'Windows has the restart waiting for a reboot: restart the PC once, then hand-back works again'
+    }
 }
 '@
 $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
@@ -95,4 +147,6 @@ if (-not $sddl.Contains($ace)) {
     $sddl = if ($firstAce -ge 0) { $sddl.Insert($firstAce, $ace) } else { $sddl + $ace }
     $task.SetSecurityDescriptor($sddl, 0)
 }
+if (-not (Test-Path $VersionKey)) { New-Item -Path $VersionKey | Out-Null }
+Set-ItemProperty -Path $VersionKey -Name HandbackTaskVersion -Value $TaskVersion -Type DWord
 Write-Host "Registered task $TaskPath$TaskName (runs as SYSTEM; $($id.Name) may start it)"

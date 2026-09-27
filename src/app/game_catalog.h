@@ -118,6 +118,20 @@ inline std::string Normalize(const std::string& s) {
     return out;
 }
 
+// "Battlefield™ 1" -> "Battlefield 1": trademark signs clutter names and the UI font may not
+// have them.
+inline std::wstring CleanName(std::wstring s) {
+    std::wstring out;
+    for (wchar_t c : s)
+        if (c != L'\u2122' && c != L'\u00AE' && c != L'\u00A9') out += c;
+    // collapse double spaces left behind
+    std::wstring tidy;
+    for (wchar_t c : out)
+        if (!(c == L' ' && !tidy.empty() && tidy.back() == L' ')) tidy += c;
+    while (!tidy.empty() && tidy.back() == L' ') tidy.pop_back();
+    return tidy;
+}
+
 // Product names that say nothing about which game it is.
 inline bool IsGenericProductName(const std::wstring& name) {
     const std::wstring n = Lower(name);
@@ -144,5 +158,31 @@ inline Support ClassifySupport(bool sending, bool seenBefore, bool sdkLoaded, bo
 }
 
 inline bool SupportsLighting(Support s) { return s == Support::Active || s == Support::Known || s == Support::SdkLoaded; }
+
+// ---- Installed-game manifests --------------------------------------------------------
+
+// Values of every `"key" "value"` pair with this key (case-insensitive) in a Valve KeyValues
+// text (libraryfolders.vdf, appmanifest_*.acf). Backslash escapes are undone.
+inline std::vector<std::string> VdfValues(const std::string& text, const std::string& key) {
+    std::vector<std::string> tokens;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '"') continue;
+        std::string tok;
+        for (++i; i < text.size() && text[i] != '"'; ++i) {
+            if (text[i] == '\\' && i + 1 < text.size()) ++i;
+            tok += text[i];
+        }
+        tokens.push_back(tok);
+    }
+    auto lower = [](std::string s) {
+        for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    const std::string k = lower(key);
+    std::vector<std::string> out;
+    for (size_t i = 0; i + 1 < tokens.size(); ++i)
+        if (lower(tokens[i]) == k) out.push_back(tokens[++i]);
+    return out;
+}
 
 }  // namespace luma::app::games

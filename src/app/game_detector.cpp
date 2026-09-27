@@ -18,6 +18,8 @@ constexpr uint64_t kScanMs = 2000;
 constexpr uint64_t kStoreReloadMs = 60000;
 constexpr uint64_t kModuleRecheckMs = 10000;  // SDKs are often loaded after the menus appear
 
+}  // namespace
+
 std::string Utf8(const std::wstring& w) {
     if (w.empty()) return {};
     const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
@@ -26,14 +28,18 @@ std::string Utf8(const std::wstring& w) {
     return s;
 }
 
+namespace {
+
 std::wstring Trim(std::wstring s) {
     while (!s.empty() && (s.back() == L' ' || s.back() == L'\0')) s.pop_back();
     while (!s.empty() && s.front() == L' ') s.erase(s.begin());
     return s;
 }
 
+}  // namespace
+
 // ProductName, else FileDescription, from the exe's version resource.
-std::wstring VersionName(const std::wstring& path) {
+std::wstring ExeProductName(const std::wstring& path) {
     DWORD ignored = 0;
     const DWORD size = GetFileVersionInfoSizeW(path.c_str(), &ignored);
     if (!size) return L"";
@@ -58,6 +64,8 @@ std::wstring VersionName(const std::wstring& path) {
     }
     return L"";
 }
+
+namespace {
 
 // Does the game's folder (or the exe's own folder) ship an anti-cheat?
 bool HasAntiCheatFolder(const std::wstring& exePath, const std::wstring& gameRoot) {
@@ -113,7 +121,6 @@ void GameDetector::LoadGameConfigStore() {
 }
 
 void GameDetector::Inspect(uint32_t pid, Entry* e) {
-    if (games::IsHelperExe(e->exeName)) return;
     HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (!h) return;
     wchar_t buf[MAX_PATH * 2];
@@ -124,8 +131,11 @@ void GameDetector::Inspect(uint32_t pid, Entry* e) {
     const std::wstring path(buf, size);
 
     const games::PathInfo where = games::ClassifyPath(path);
-    const bool windowsGame = windowsGames_.count(games::Lower(path)) != 0;
-    if (!where.inLibrary && !windowsGame) return;
+    const std::wstring lower = games::Lower(path);
+    const bool windowsGame = windowsGames_.count(lower) != 0;
+    const bool added = extraGames_.count(lower) != 0;
+    if (!where.inLibrary && !windowsGame && !added) return;
+    if (!added && games::IsHelperExe(e->exeName)) return;  // what the user added always counts
 
     e->candidate = true;
     RunningGame& g = e->info;
@@ -138,15 +148,16 @@ void GameDetector::Inspect(uint32_t pid, Entry* e) {
     g.pid = pid;
     g.exe = Utf8(e->exeName);
     g.folder = Utf8(where.folder);
-    g.store = where.inLibrary ? Utf8(where.store) : "Windows";
-    std::wstring name = VersionName(path);
+    g.path = path;
+    g.store = added ? "Added by you" : where.inLibrary ? Utf8(where.store) : "Windows";
+    std::wstring name = ExeProductName(path);
     if (name.empty()) name = where.folder;
     if (name.empty()) {
         name = e->exeName;
         const size_t dot = name.find_last_of(L'.');
         if (dot != std::wstring::npos) name.resize(dot);
     }
-    g.name = Utf8(name);
+    g.name = Utf8(games::CleanName(name));
 }
 
 void GameDetector::CheckModules(Entry* e, uint64_t now) {
@@ -181,6 +192,15 @@ void GameDetector::CheckModules(Entry* e, uint64_t now) {
         e->info.modulesReadable = false;
     }
     CloseHandle(h);
+}
+
+void GameDetector::SetExtraGames(const std::vector<std::wstring>& exePaths) {
+    std::set<std::wstring> next;
+    for (const auto& p : exePaths) next.insert(games::Lower(p));
+    if (next == extraGames_) return;
+    extraGames_ = std::move(next);
+    entries_.clear();  // look at every process again
+    nextScan_ = 0;
 }
 
 bool GameDetector::Poll(uint64_t now) {

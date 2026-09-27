@@ -82,7 +82,7 @@ writes its own log (`lumabridge-app.log`, `lumabridge.log` for the Logitech prox
 LumaBridge\
   LumaBridge.exe              the app, the only thing you normally start
   LumaBridge.ini.example      all settings (the app edits them for you)
-  integrations\               game SDK stand-ins, installed from the app's Games page
+  integrations\               game SDK stand-ins, installed from the app's Integrations page
     x86\                      32-bit versions for older games
   tools\                      hardware tests (Run-HardwareTest.ps1 runs them all)
   scripts\                    install helpers the app runs for you

@@ -13,7 +13,7 @@ constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Ru
 constexpr wchar_t kRunValue[] = L"LumaBridge";
 
 std::wstring Read(const std::wstring& ini, const wchar_t* section, const wchar_t* key) {
-    wchar_t buf[1024];
+    wchar_t buf[16384];  // ManualGames can hold several full paths
     GetPrivateProfileStringW(section, key, L"", buf, static_cast<DWORD>(std::size(buf)), ini.c_str());
     return buf;
 }
@@ -99,6 +99,14 @@ Prefs LoadPrefs(const std::wstring& ini) {
         if (bar == std::string::npos) break;
         pos = bar + 1;
     }
+    const std::wstring manual = Read(ini, L"App", L"ManualGames");
+    for (size_t pos = 0; pos < manual.size();) {
+        size_t bar = manual.find(L'|', pos);
+        std::wstring g = manual.substr(pos, bar - pos);
+        if (!g.empty()) p.manualGames.push_back(g);
+        if (bar == std::wstring::npos) break;
+        pos = bar + 1;
+    }
     return p;
 }
 
@@ -122,6 +130,9 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     std::string games;
     for (size_t i = 0; i < p.lightingGames.size(); ++i) games += (i ? "|" : "") + p.lightingGames[i];
     WriteConfigValue(ini, L"App", L"LightingGames", Widen(games));
+    std::wstring manual;
+    for (size_t i = 0; i < p.manualGames.size(); ++i) manual += (i ? L"|" : L"") + p.manualGames[i];
+    WriteConfigValue(ini, L"App", L"ManualGames", manual);
 
     WriteConfigValue(ini, L"Color", L"Brightness", Num(cfg.auraCorrection.brightness * 100.0));
     WriteConfigValue(ini, L"Color", L"GainR", Num(cfg.auraCorrection.gainR * 100.0));

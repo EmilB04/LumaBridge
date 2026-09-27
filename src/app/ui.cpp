@@ -6,6 +6,7 @@
 #include <cstdarg>
 #include <functional>
 #include <iterator>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -315,7 +316,7 @@ void AutoPage(Controller& ctl, const Fonts& f) {
         ImGui::Dummy(ImVec2(0, 4 * S()));
         Muted("Games from Steam, Epic, EA, Ubisoft, GOG, Xbox, Riot and the ones Windows knows about "
               "show up here when they start. Those with Logitech, Razer, SteelSeries, Corsair or "
-              "Alienware lighting drive your lights; set them up on the Games page.");
+              "Alienware lighting drive your lights; set them up on the Integrations page.");
     }
     const uint64_t now = GetTickCount64();
     int row = 0;
@@ -384,7 +385,7 @@ void AutoPage(Controller& ctl, const Fonts& f) {
         "A slow rainbow wave turns around the fans and motherboard between games.",
         "The motherboard and fans stay dark between games.",
         "Between games LumaBridge hands the lights back to Armoury Crate's own effect. Set up "
-        "\"Armoury Crate hand-back\" on the Games page once to make this silent.",
+        "\"Armoury Crate hand-back\" on the Integrations page once to make this silent.",
     };
     Muted("%s", kIdleHelp[idle]);
     EndCard();
@@ -618,8 +619,130 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
     FansCard(ctl, f);
 }
 
-void GamesPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
+// ---- Games List ------------------------------------------------------------------------
+
+std::string ToUtf8(const std::wstring& w) { return Utf8(w); }
+
+bool ContainsNoCase(const std::string& hay, const char* needle) {
+    std::string h = hay, n = needle;
+    for (auto& c : h) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (auto& c : n) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return h.find(n) != std::string::npos;
+}
+
+// The running game (if any) that is this installed game.
+const Controller::GameStatus* RunningAs(const Controller& ctl, const InstalledGame& g) {
+    const std::wstring dir = games::Lower(g.dir) + L"\\";
+    for (const auto& r : ctl.games()) {
+        const std::wstring path = games::Lower(r.game.path);
+        if (!g.exePath.empty() ? path == games::Lower(g.exePath) : path.rfind(dir, 0) == 0) return &r;
+    }
+    return nullptr;
+}
+
+void GamesListPage(HWND hwnd, Controller& ctl, UiState& ui, const Fonts& f) {
+    const auto& lib = ctl.library();
+    const auto& seen = ctl.prefs().lightingGames;
+
+    BeginCard("library-head");
+    CardTitle(f, "Games on this PC");
+    Muted("Found in Steam, Epic, EA, Ubisoft, GOG, Xbox, Riot, Rockstar and the games Windows knows about. "
+          "Missing one? Add it, and LumaBridge will recognise it whenever it runs.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    if (PrimaryButton("Add a game...")) {
+        const std::wstring exe = PickExe(hwnd, L"Choose the game's .exe");
+        if (!exe.empty()) ctl.AddManualGame(exe);
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(ctl.libraryScanning());
+    if (ImGui::Button(ctl.libraryScanning() ? "Scanning..." : "Rescan")) ctl.RescanLibrary();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(std::max(120 * S(), ImGui::GetContentRegionAvail().x));
+    ImGui::InputTextWithHint("##filter", "Search", ui.gameFilter, sizeof ui.gameFilter);
+    EndCard();
+
+    // Status per game: lighting now > has sent lighting before > ships SDK files > nothing seen.
+    struct Row {
+        const InstalledGame* g;
+        const Controller::GameStatus* running;
+        int rank;  // for sorting: running first
+    };
+    std::vector<Row> rows;
+    for (const auto& g : lib) {
+        if (ui.gameFilter[0] && !ContainsNoCase(ToUtf8(g.name), ui.gameFilter) &&
+            !ContainsNoCase(ToUtf8(g.store), ui.gameFilter))
+            continue;
+        const auto* r = RunningAs(ctl, g);
+        rows.push_back({&g, r, r ? 0 : 1});
+    }
+    std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.rank < b.rank; });
+
+    BeginCard("library");
+    if (lib.empty()) {
+        Muted(ctl.libraryScanning() ? "Looking for games..." : "No games found. Add one with \"Add a game...\".");
+    } else {
+        Muted("%d game(s)%s", static_cast<int>(lib.size()), ctl.libraryScanning() ? " - rescanning..." : "");
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+    }
+    if (!rows.empty() &&
+        ImGui::BeginTable("games", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Game", ImGuiTableColumnFlags_WidthStretch, 3.f);
+        ImGui::TableSetupColumn("Store", ImGuiTableColumnFlags_WidthStretch, 1.2f);
+        ImGui::TableSetupColumn("Dynamic lighting", ImGuiTableColumnFlags_WidthStretch, 2.2f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 80 * S());
+        ImGui::TableHeadersRow();
+        int id = 0;
+        std::wstring removeExe;
+        for (const Row& row : rows) {
+            const InstalledGame& g = *row.g;
+            ImGui::PushID(id++);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            const std::string name = ToUtf8(g.name);
+            if (row.running) ImGui::PushFont(f.bold);
+            ImGui::TextUnformatted(name.c_str());
+            if (row.running) ImGui::PopFont();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ToUtf8(g.exePath.empty() ? g.dir : g.exePath).c_str());
+            if (row.running) {
+                ImGui::SameLine();
+                Pill("Running", kAccent);
+            }
+            ImGui::TableNextColumn();
+            Muted("%s", ToUtf8(g.store).c_str());
+            ImGui::TableNextColumn();
+            bool hasSeen = false;
+            for (const auto& exe : g.exeNames) hasSeen |= std::find(seen.begin(), seen.end(), exe) != seen.end();
+            if (row.running && row.running->support == games::Support::Active) {
+                Pill("Lighting now", kGreen);
+            } else if (hasSeen || (row.running && games::SupportsLighting(row.running->support))) {
+                Pill("Supported", kGreen);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("LumaBridge has seen this game send lighting.");
+            } else if (!g.sdk.empty()) {
+                const std::string label = "Likely - " + g.sdk;
+                Pill(label.c_str(), kAmber);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The game's folder has %s files. It shows as Supported once it sends lighting.",
+                                      g.sdk.c_str());
+            } else {
+                Muted("Not detected");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("No lighting SDK files in its folder and no lighting seen yet. Some games build "
+                                      "the SDK in, so play it once with LumaBridge running to be sure.");
+            }
+            ImGui::TableNextColumn();
+            if (g.manual && ImGui::SmallButton("Remove")) removeExe = g.exePath;
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+        if (!removeExe.empty()) ctl.RemoveManualGame(removeExe);
+    }
+    EndCard();
+}
+
+void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
     const auto& gs = ctl.gameSense();
+    in.SetOwner(hwnd);
     if (!ui.integrationsLoaded || in.TakeFinished()) {
         in.Refresh(gs.IsRunning(), gs.Port(), gs.CorePropsWritten(), gs.FoundSteelSeriesGG(), gs.ForwardPort(),
                    gs.ForwardOk());
@@ -643,7 +766,7 @@ void GamesPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const 
             Pill(it.id == "gamesense" ? "GG not answering" : "Vendor software present", kAmber);
             break;
         case IntegrationState::PerGame: Pill("Per game", kAccent); break;
-        case IntegrationState::Problem: Pill("Needs repair", kRed); break;
+        case IntegrationState::Problem: Pill(it.id == "handback" ? "Update needed" : "Needs repair", kRed); break;
         }
         Muted("%s", it.description.c_str());
         Muted("%s", it.detail.c_str());
@@ -670,6 +793,12 @@ void GamesPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const 
                 std::wstring dir = PickFolder(hwnd, L"Choose the game's folder");
                 if (!dir.empty()) in.Remove("corsair", dir);
             }
+        } else if (it.id == "handback" && it.state != IntegrationState::NotInstalled) {
+            // Setting it up again replaces the task (needed after updates that change it).
+            if (it.state == IntegrationState::Problem ? PrimaryButton("Update") : ImGui::Button("Set up again"))
+                in.Install(it.id);
+            ImGui::SameLine();
+            if (ImGui::Button("Remove")) in.Remove(it.id);
         } else if (it.state == IntegrationState::Active) {
             if (ImGui::Button("Remove")) in.Remove(it.id);
         } else if (it.state == IntegrationState::Conflict) {
@@ -678,10 +807,20 @@ void GamesPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const 
             if (PrimaryButton(it.id == "logitech" || it.id == "handback" ? "Set up" : "Install")) in.Install(it.id);
         }
         ImGui::EndDisabled();
+        // The result of the last action, right under its button.
+        if (in.LastId() == it.id) {
+            const std::string msg = in.LastMessage();
+            if (!msg.empty()) {
+                ImGui::Dummy(ImVec2(0, 2 * S()));
+                const bool bad = msg.rfind("Failed", 0) == 0 || msg.rfind("Could not", 0) == 0 ||
+                                 msg.rfind("Cancelled", 0) == 0;
+                ImGui::PushStyleColor(ImGuiCol_Text, V4(in.Busy() ? kAmber : bad ? kRed : kGreen));
+                ImGui::TextWrapped("%s", msg.c_str());
+                ImGui::PopStyleColor();
+            }
+        }
         EndCard();
     }
-    std::string msg = in.LastMessage();
-    if (!msg.empty()) Muted("%s", msg.c_str());
 }
 
 void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
@@ -744,7 +883,7 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
     BeginCard("handback");
     CardTitle(f, "Armoury Crate");
     Muted("Stopping hands the motherboard and fans back to Armoury Crate's own effect. Exiting "
-          "LumaBridge does the same. With \"Armoury Crate hand-back\" set up (Games page) this is "
+          "LumaBridge does the same. With \"Armoury Crate hand-back\" set up (Integrations page) this is "
           "silent; otherwise Armoury Crate opens and you click an effect once.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
     if (ctl.auraPaused()) {
@@ -785,7 +924,8 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width) {
     const struct {
         Page page;
         const char* label;
-    } items[] = {{Page::Lighting, "Lighting"}, {Page::Devices, "Devices"}, {Page::Games, "Games"},
+    } items[] = {{Page::Lighting, "Lighting"},         {Page::GamesList, "Games List"},
+                 {Page::Devices, "Devices"},           {Page::Integrations, "Integrations"},
                  {Page::Settings, "Settings"}};
     ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.f, 0.5f));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8 * S());
@@ -888,7 +1028,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
     ImGui::BeginChild("main", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding);
 
     // Header: page title + global mode switch.
-    const char* titles[] = {"Lighting", "Devices", "Games", "Settings"};
+    const char* titles[] = {"Lighting", "Games List", "Devices", "Integrations", "Settings"};  // Page order
     ImGui::PushFont(f.title);
     ImGui::TextUnformatted(titles[static_cast<int>(ui.page)]);
     ImGui::PopFont();
@@ -918,8 +1058,8 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
         EndCard();
     }
 
-    // Re-check integration status whenever the Games page is opened.
-    if (ui.page == Page::Games && ui.lastPage != Page::Games) ui.integrationsLoaded = false;
+    // Re-check integration status whenever the Integrations page is opened.
+    if (ui.page == Page::Integrations && ui.lastPage != Page::Integrations) ui.integrationsLoaded = false;
     if (ui.page != Page::Devices && ctl.fanTest()) ctl.SetFanTest(false);  // the test is a Devices-page thing
     ui.lastPage = ui.page;
 
@@ -929,7 +1069,8 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
         else ManualPage(ctl, ui, f);
         break;
     case Page::Devices: DevicesPage(ctl, f); break;
-    case Page::Games: GamesPage(hwnd, ctl, integrations, ui, f); break;
+    case Page::GamesList: GamesListPage(hwnd, ctl, ui, f); break;
+    case Page::Integrations: IntegrationsPage(hwnd, ctl, integrations, ui, f); break;
     case Page::Settings: SettingsPage(ctl, ui, f); break;
     }
 

@@ -15,6 +15,7 @@ struct RunningGame {
     uint32_t pid = 0;
     std::string name;    // display name ("Rocket League")
     std::string exe;     // "RocketLeague.exe"
+    std::wstring path;   // full exe path
     std::string folder;  // its folder in the store's library, if any
     std::string store;   // "Steam", "Epic Games", ... or "Windows" (Game Bar list)
     std::string sdk;     // lighting SDK it loaded ("Razer Chroma"), empty if none seen
@@ -27,6 +28,8 @@ public:
     // Rescans every couple of seconds; returns true when the list changed.
     bool Poll(uint64_t now);
     const std::vector<RunningGame>& Games() const { return games_; }
+    // Exe paths the user added on the Games List page: games wherever they're installed.
+    void SetExtraGames(const std::vector<std::wstring>& exePaths);
 
 private:
     struct Entry {
@@ -43,10 +46,15 @@ private:
 
     std::map<uint32_t, Entry> entries_;
     std::set<std::wstring> windowsGames_;  // lower-case exe paths Windows lists as games
+    std::set<std::wstring> extraGames_;    // lower-case exe paths added by the user
     std::vector<RunningGame> games_;
     uint64_t nextScan_ = 0;
     uint64_t nextStoreLoad_ = 0;
     bool antiCheatRunning_ = false;  // an anti-cheat process is running right now
 };
+
+// ProductName / FileDescription of an exe, skipping generic ones ("Unreal Engine"); "" if none.
+std::wstring ExeProductName(const std::wstring& path);
+std::string Utf8(const std::wstring& w);
 
 }  // namespace luma::app

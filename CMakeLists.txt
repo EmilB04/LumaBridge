@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(LumaBridge LANGUAGES CXX VERSION 0.3.1)
+project(LumaBridge LANGUAGES CXX VERSION 0.3.2)
 
 if(NOT WIN32)
     message(STATUS "Non-Windows host: only the portable core tests will be built.")
@@ -140,6 +140,7 @@ if(LUMA_ARCH STREQUAL "x64")
         src/app/integrations.cpp
         src/app/armoury_crate.cpp
         src/app/game_detector.cpp
+        src/app/game_library.cpp
         src/app/res/app.rc)
     target_include_directories(lumabridge_app PRIVATE src/app)
     target_link_libraries(lumabridge_app PRIVATE imgui aura_bridge gamesense luma_common shell32 ole32 advapi32 dbghelp psapi version)
@@ -166,12 +167,17 @@ target_link_libraries(aura-usb-test PRIVATE aura_usb)
 # PawnIOLib.dll is loaded dynamically, nothing to link).
 add_executable(ram-probe tools/ram-probe/main.cpp)
 
+# Read-only probe of G HUB's local WebSocket (does it report game lighting?).
+add_executable(ghub-probe tools/ghub-probe/main.cpp)
+target_link_libraries(ghub-probe PRIVATE winhttp iphlpapi ws2_32)
+
 if(MINGW)
     # wmain entry points
     target_link_options(aura-test PRIVATE -municode)
     target_link_options(logiled-harness PRIVATE -municode)
     target_link_options(aura-usb-test PRIVATE -municode)
     target_link_options(ram-probe PRIVATE -municode)
+    target_link_options(ghub-probe PRIVATE -municode)
 endif()
 
 # Release layout:
@@ -180,7 +186,7 @@ endif()
 #   tools\                                     hardware tests
 #   scripts\                                   install helpers the app runs
 install(TARGETS lumabridge_proxy chroma_emu corsair_emu lightfx_emu RUNTIME DESTINATION integrations)
-install(TARGETS aura-test aura-usb-test ram-probe logiled-harness RUNTIME DESTINATION tools)
+install(TARGETS aura-test aura-usb-test ram-probe ghub-probe logiled-harness RUNTIME DESTINATION tools)
 install(FILES scripts/Run-HardwareTest.ps1 DESTINATION tools)
 install(FILES scripts/Install-LogiLedProxy.ps1 scripts/Install-SdkEmulators.ps1 scripts/Install-HandbackTask.ps1
         DESTINATION scripts)

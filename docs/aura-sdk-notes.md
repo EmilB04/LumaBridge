@@ -28,7 +28,7 @@ ROG STRIX B550-F (USB `0B05:1939`, firmware `AULA3-AR42-0222`):
   **restarting the controller's USB device** (`pnputil /restart-device`, or disable and
   enable in Device Manager). The controller then reloads the effect Armoury Crate saved
   in it, the same thing that happens at boot. That needs admin rights, so
-  `scripts/Install-HandbackTask.ps1` (Games page → Armoury Crate hand-back → Set up)
+  `scripts/Install-HandbackTask.ps1` (Integrations page → Armoury Crate hand-back → Set up)
   registers a background scheduled task once, and LumaBridge starts it without a prompt
   whenever it hands back: for the idle choice "Armoury Crate", **Stop controlling the
   lights**, and exit. Without the task, LumaBridge opens Armoury Crate instead.

@@ -12,7 +12,7 @@
 3. `logiled-harness.exe <G HUB dll>` then `logiled-harness.exe LumaBridge_x64.dll` →
    the mouse behaves identically in both runs, and Aura follows in the second.
 4. Process Monitor on BF1 (see `logiled-exports.md`), install, play, read the log.
-5. A Chroma game, a GameSense game, and a Corsair game (Games page), one at a time.
+5. A Chroma game, a GameSense game, and a Corsair game (Integrations page), one at a time.
    Each should show up on the Lighting page while it runs.
 
 ## Milestone 4: per-key (Azoth)

@@ -1,4 +1,4 @@
-// "Games" page: which game-lighting SDKs are hooked up, and one-click install / remove
+// "Integrations" page: which game-lighting SDKs are hooked up, and one-click install / remove
 // (wrapping the PowerShell scripts shipped next to the app, elevated when needed).
 #pragma once
 
@@ -41,14 +41,18 @@ public:
     void Install(const std::string& id, const std::wstring& gameDir = L"", bool force = false);
     void Remove(const std::string& id, const std::wstring& gameDir = L"");
 
+    // Parent window for the administrator prompt (so it opens in front of the app).
+    void SetOwner(HWND owner) { owner_ = owner; }
     bool Busy() const { return busy_; }
+    // Id of the integration the last action was for ("" before any).
+    std::string LastId() const;
     // One-line result of the last action ("" while none); thread-safe.
     std::string LastMessage() const;
     // True once after a background action finished (the UI then calls Refresh).
     bool TakeFinished() { return finished_.exchange(false); }
 
 private:
-    void Run(const std::string& what, const std::wstring& script, const std::wstring& args,
+    void Run(const std::string& id, const std::string& what, const std::wstring& script, const std::wstring& args,
              bool elevated);
 
     std::vector<Integration> items_;
@@ -57,11 +61,19 @@ private:
     std::atomic<bool> finished_{false};
     mutable std::mutex msgMutex_;
     std::string message_;
+    std::string lastId_;
     std::thread worker_;
+    HWND owner_ = nullptr;
 };
+
+// Version of the hand-back task Install-HandbackTask.ps1 registers (it records it in
+// HKLM\SOFTWARE\LumaBridge\HandbackTaskVersion); an older task needs setting up again.
+constexpr DWORD kHandbackTaskVersion = 3;
 
 std::wstring AppDirectory();
 // Folder picker; empty when cancelled.
 std::wstring PickFolder(HWND owner, const wchar_t* title);
+// Picks an .exe; empty when cancelled.
+std::wstring PickExe(HWND owner, const wchar_t* title);
 
 }  // namespace luma::app

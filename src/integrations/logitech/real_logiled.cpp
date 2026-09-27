@@ -29,12 +29,15 @@ constexpr wchar_t kSdkClsidKey[] =
 #if defined(_WIN64)
 constexpr REGSAM kRegView = KEY_WOW64_64KEY;
 constexpr const wchar_t* kDefaultPaths[] = {
+    L"%ProgramFiles%\\LGHUB\\sdks\\sdk_legacy_led_x64.dll",  // current G HUB
     L"%ProgramFiles%\\LGHUB\\sdk_legacy_led_x64.dll",
     L"%ProgramFiles%\\Logitech Gaming Software\\SDK\\LED\\x64\\LogitechLed.dll",
 };
 #else
 constexpr REGSAM kRegView = KEY_WOW64_32KEY;
 constexpr const wchar_t* kDefaultPaths[] = {
+    L"%ProgramW6432%\\LGHUB\\sdks\\sdk_legacy_led_x86.dll",  // current G HUB
+    L"%ProgramFiles%\\LGHUB\\sdks\\sdk_legacy_led_x86.dll",
     L"%ProgramW6432%\\LGHUB\\sdk_legacy_led_x86.dll",
     L"%ProgramFiles%\\LGHUB\\sdk_legacy_led_x86.dll",
     L"%ProgramW6432%\\Logitech Gaming Software\\SDK\\LED\\x86\\LogitechLed.dll",

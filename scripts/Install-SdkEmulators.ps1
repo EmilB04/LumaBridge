@@ -4,7 +4,7 @@
     Corsair iCUE) and prepares the SteelSeries GameSense folder.
 
 .DESCRIPTION
-    The LumaBridge app calls this for you (Games page). You can also run it by hand.
+    The LumaBridge app calls this for you (Integrations page). You can also run it by hand.
 
     -Sdk Chroma    RzChromaSDK64.dll / RzChromaSDK.dll -> System32 / SysWOW64 (admin), or -GameDir
     -Sdk LightFX   LightFX.dll                         -> System32 / SysWOW64 (admin), or -GameDir

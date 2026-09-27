@@ -35,6 +35,8 @@ struct Prefs {
     // Exe names (lower case) of games that have sent lighting before: shown as supporting
     // dynamic lighting even before they start sending.
     std::vector<std::string> lightingGames;
+    // Games the user added on the Games List page (full exe paths).
+    std::vector<std::wstring> manualGames;
     static constexpr size_t kMaxRecent = 8;
 };
 

@@ -94,27 +94,39 @@ long long FileSize(const std::wstring& path) {
     return (static_cast<long long>(a.nFileSizeHigh) << 32) | a.nFileSizeLow;
 }
 
-// Copies what the hand-back task wrote (from `offset` on) into the app log once it has had
-// time to run, so one log shows whether the controller restart worked.
+// Copies what the hand-back task wrote (from `offset` on) into the app log once it has
+// finished (restarting the controller can take ~10 s), so one log shows whether it worked.
 void LogHandbackResult(std::wstring path, long long offset) {
     std::thread([path, offset] {
-        Sleep(8000);
-        FILE* f = _wfopen(path.c_str(), L"rb");
-        if (!f) {
-            LUMA_WARN("hand-back: the task wrote no log (did it run?)");
+        std::string text;
+        for (int waited = 0; waited < 30000; waited += 1000) {
+            Sleep(1000);
+            text.clear();
+            FILE* f = _wfopen(path.c_str(), L"rb");
+            if (!f) continue;
+            _fseeki64(f, offset, SEEK_SET);
+            char buf[4096];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof buf, f)) > 0) text.append(buf, n);
+            fclose(f);
+            // The task's last line for each controller:
+            if (text.find("pnputil /restart-device") != std::string::npos ||
+                text.find("not restarting") != std::string::npos || text.find("no Aura") != std::string::npos)
+                break;
+        }
+        if (text.empty()) {
+            LUMA_WARN("hand-back: the task wrote nothing within 30 s (did it run?)");
             return;
         }
-        _fseeki64(f, offset, SEEK_SET);
-        char line[512];
-        int lines = 0;
-        while (fgets(line, sizeof line, f)) {
-            std::string s(line);
-            while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
-            if (!s.empty()) LUMA_INFO("hand-back task: %s", s.c_str());
-            ++lines;
+        size_t start = 0;
+        while (start < text.size()) {
+            size_t end = text.find('\n', start);
+            if (end == std::string::npos) end = text.size();
+            std::string line = text.substr(start, end - start);
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            if (!line.empty()) LUMA_INFO("hand-back task: %s", line.c_str());
+            start = end + 1;
         }
-        fclose(f);
-        if (!lines) LUMA_WARN("hand-back: the task logged nothing within 8 s");
     }).detach();
 }
 
@@ -149,8 +161,12 @@ void HandBackLighting() {
         LogHandbackResult(log, before);
         return;
     }
-    LUMA_INFO("hand-back: couldn't start the hand-back task (schtasks exit %d; not set up?) - opening Armoury "
-              "Crate instead", code);
+    if (HandbackTaskInstalled()) {
+        // Set up, but /run was refused: it's still busy with the previous hand-back.
+        LUMA_INFO("hand-back: the hand-back task is still running from the previous hand-back");
+        return;
+    }
+    LUMA_INFO("hand-back: the hand-back task isn't set up (schtasks exit %d) - opening Armoury Crate instead", code);
     LaunchArmouryCrate();
 }
 

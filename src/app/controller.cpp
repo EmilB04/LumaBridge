@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <iterator>
 
 #include "armoury_crate.h"
@@ -40,7 +41,40 @@ bool Controller::Init() {
     if (cfg_.gameSenseEnabled)
         gameSense_.Start(cfg_, [] { /* picked up by the next Tick */ });
     RescanDevices();
+    detector_.SetExtraGames(prefs_.manualGames);
+    RescanLibrary();
     return true;
+}
+
+void Controller::RescanLibrary() {
+    if (libraryJob_.valid()) return;  // already scanning
+    libraryJob_ = std::async(std::launch::async, ScanInstalledGames, prefs_.manualGames);
+}
+
+void Controller::AddManualGame(const std::wstring& exePath) {
+    auto& m = prefs_.manualGames;
+    for (const auto& g : m)
+        if (_wcsicmp(g.c_str(), exePath.c_str()) == 0) return;
+    m.push_back(exePath);
+    LUMA_INFO("games list: added %s", Utf8(exePath).c_str());
+    detector_.SetExtraGames(m);
+    Changed();
+    if (libraryJob_.valid()) libraryRescanPending_ = true;
+    else RescanLibrary();
+}
+
+void Controller::RemoveManualGame(const std::wstring& exePath) {
+    auto& m = prefs_.manualGames;
+    m.erase(std::remove_if(m.begin(), m.end(),
+                           [&](const std::wstring& g) { return _wcsicmp(g.c_str(), exePath.c_str()) == 0; }),
+            m.end());
+    detector_.SetExtraGames(m);
+    library_.erase(std::remove_if(library_.begin(), library_.end(),
+                                  [&](const InstalledGame& g) {
+                                      return g.manual && _wcsicmp(g.exePath.c_str(), exePath.c_str()) == 0;
+                                  }),
+                   library_.end());
+    Changed();
 }
 
 void Controller::RescanDevices() {
@@ -309,6 +343,13 @@ void Controller::Tick() {
     }
     tracker_.Prune(now, [](const Source&) { return false; });
     UpdateGames(now);
+    if (libraryJob_.valid() && libraryJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        library_ = libraryJob_.get();
+        if (libraryRescanPending_) {
+            libraryRescanPending_ = false;
+            RescanLibrary();
+        }
+    }
 
     Output next = Decide();
     if (!outputApplied_ || !next.SameLighting(output_)) {

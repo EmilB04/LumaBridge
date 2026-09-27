@@ -4,7 +4,7 @@ The goal is dynamic game lighting on hardware the game doesn't support. LumaBrid
 each game's lighting SDK as if the vendor's software and devices were installed, then
 sends the colors to Aura.
 
-| SDK | How games reach it | LumaBridge piece | Install (Games page does this) |
+| SDK | How games reach it | LumaBridge piece | Install (Integrations page does this) |
 |---|---|---|---|
 | Logitech LIGHTSYNC | LED SDK DLL found via registry | `LumaBridge_x64.dll` proxy (see [logiled-exports.md](logiled-exports.md)) | per-user registry redirect |
 | Razer Chroma | `RzChromaSDK64.dll` from System32 | Chroma emulator DLL | System32, admin once |
@@ -94,7 +94,7 @@ GG's file is restored. Forwarding only ever goes to a loopback address, and
 ## Corsair iCUE (CUE SDK 2.x / 3.x)
 
 `CUESDK.x64_2019.dll` / `CUESDK_2019.dll` ([`src/integrations/corsair`](../src/integrations/corsair)).
-Games ship this DLL themselves, so it's installed per game. **Games → Corsair → Add to a
+Games ship this DLL themselves, so it's installed per game. **Integrations → Corsair → Add to a
 game…** finds every `CUESDK*.dll` in the folder you pick, backs it up and replaces it.
 
 Implemented: handshake, device count/info, LED positions (per device), key-name lookup,

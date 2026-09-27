@@ -19,13 +19,15 @@ struct Fonts {
     ImFont* caption = nullptr;  // not "small": rpcndr.h #defines small
 };
 
-enum class Page { Lighting, Devices, Games, Settings };
+// Sidebar order.
+enum class Page { Lighting, GamesList, Devices, Integrations, Settings };
 
 struct UiState {
     Page page = Page::Lighting;
     Page lastPage = Page::Lighting;
     char hex[16] = "";
     bool hexEditing = false;
+    char gameFilter[64] = "";
     bool integrationsLoaded = false;
     bool autostart = false;
     bool autostartLoaded = false;
