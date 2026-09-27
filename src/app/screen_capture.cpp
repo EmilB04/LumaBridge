@@ -37,6 +37,16 @@ void ScreenCapture::Stop() {
     problem_.clear();
 }
 
+bool ScreenCapture::LatestFrame(std::vector<uint8_t>* bgra, int* w, int* h, uint64_t* seq) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!have_) return false;
+    *bgra = frame_;
+    *w = frameW_;
+    *h = frameH_;
+    *seq = frameSeq_;
+    return true;
+}
+
 std::string ScreenCapture::problem() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return problem_;
@@ -204,6 +214,10 @@ void ScreenCapture::Run() {
                     }
                     std::lock_guard<std::mutex> lock(mutex_);
                     latest_ = c;
+                    frame_ = pixels;
+                    frameW_ = static_cast<int>(sampleW);
+                    frameH_ = static_cast<int>(sampleH);
+                    ++frameSeq_;
                     have_ = true;
                 }
             }

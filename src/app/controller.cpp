@@ -308,6 +308,16 @@ Controller::Output Controller::Decide() const {
         }
         games::ScreenColors sc;
         if (const GameStatus* g = ScreenColorsGame(); g && screen_.Latest(&sc)) {
+            if (g->profile && g->profile->blocked) {
+                // Its events read from the screen: hits, low health, death.
+                const auto st = hud_.state();
+                Output o = lit((g->game.name + (st == games::HudLighting::State::Normal
+                                                   ? std::string(" - screen colors (watching for hits)")
+                                                   : std::string(" - ") + games::HudLighting::Name(st)))
+                                   .c_str());
+                o.fx = hud_.Output(sc, GetTickCount64());
+                return o;
+            }
             Output o = lit((g->game.name + " - screen colors").c_str());
             o.fx.kind = fx::Kind::Gradient;  // left of the screen <-> right, around each fan
             o.fx.color1 = sc.left;
@@ -512,7 +522,26 @@ void Controller::Tick() {
     const bool wantScreen = ScreenColorsGame() != nullptr && !auraPaused_ && !prefs_.lightingStopped &&
                             prefs_.mode == Mode::Auto;
     if (wantScreen && !screen_.Running()) screen_.Start();
-    if (!wantScreen && screen_.Running()) screen_.Stop();
+    if (!wantScreen && screen_.Running()) {
+        screen_.Stop();
+        hud_ = games::HudLighting{};
+    }
+    // Read the HUD of each new frame (only matters for the games that use it).
+    if (wantScreen) {
+        int w = 0, h = 0;
+        uint64_t seq = 0;
+        if (screen_.LatestFrame(&hudPixels_, &w, &h, &seq) && seq != hudFrame_) {
+            hudFrame_ = seq;
+            const games::HudSignals s = games::ReadHud(hudPixels_, w, h);
+            if (++hudLogged_ % 100 == 0)  // every ~8 s: the readings, for tuning the thresholds
+                LUMA_INFO("screen readings: edge red %.2f, middle red %.2f, saturation %.2f, brightness %.2f (%s)",
+                          s.edgeRed, s.centerRed, s.saturation, s.brightness, games::HudLighting::Name(hud_.state()));
+            if (hud_.Update(s, now))
+                LUMA_INFO("game events from the screen: %s (edge red %.2f, middle red %.2f, saturation %.2f, "
+                          "brightness %.2f)",
+                          games::HudLighting::Name(hud_.state()), s.edgeRed, s.centerRed, s.saturation, s.brightness);
+        }
+    }
     if (libraryJob_.valid() && libraryJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         library_ = libraryJob_.get();
         RefreshFeedSettings();

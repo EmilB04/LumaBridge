@@ -53,25 +53,29 @@ inline const GameProfile* Profiles(size_t* count) {
          "Install Razer Chroma on the Integrations page. Blizzard's anti-cheat may refuse an "
          "unsigned DLL; if nothing happens, use Screen colors."},
         {"bf1", "Battlefield 1", {"bf1.exe"}, {"battlefield1"}, ProfileKind::VendorSdk, Feed::None,
-         "Screen colors (its Logitech LIGHTSYNC can't reach LumaBridge)",
+         "From the screen: hits, low health, death",
          "The game lights Logitech gear through G HUB (LIGHTSYNC). EA's anti-cheat keeps LumaBridge out of the "
-         "game, so that lighting never reaches LumaBridge: while it runs, every device shows the screen's colors "
-         "(Logitech gear too, unless it's set to go to the game on its Devices page).", true},
+         "game, so that lighting never reaches LumaBridge. Instead LumaBridge reads the game from the screen image: "
+         "every device shows the screen's colors, flashes red when you're hit, breathes red at low health and "
+         "dims while you're dead.", true},
         {"bf2042", "Battlefield 2042", {"bf2042.exe"}, {"battlefield2042"}, ProfileKind::VendorSdk, Feed::None,
-         "Screen colors (its Logitech LIGHTSYNC can't reach LumaBridge)",
+         "From the screen: hits, low health, death",
          "The game lights Logitech gear through G HUB (LIGHTSYNC). EA's anti-cheat keeps LumaBridge out of the "
-         "game, so that lighting never reaches LumaBridge: while it runs, every device shows the screen's colors "
-         "(Logitech gear too, unless it's set to go to the game on its Devices page).", true},
+         "game, so that lighting never reaches LumaBridge. Instead LumaBridge reads the game from the screen image: "
+         "every device shows the screen's colors, flashes red when you're hit, breathes red at low health and "
+         "dims while you're dead.", true},
         {"bfv", "Battlefield V", {"bfv.exe"}, {"battlefieldv", "battlefield5"}, ProfileKind::VendorSdk, Feed::None,
-         "Screen colors (its Logitech LIGHTSYNC can't reach LumaBridge)",
+         "From the screen: hits, low health, death",
          "The game lights Logitech gear through G HUB (LIGHTSYNC). EA's anti-cheat keeps LumaBridge out of the "
-         "game, so that lighting never reaches LumaBridge: while it runs, every device shows the screen's colors "
-         "(Logitech gear too, unless it's set to go to the game on its Devices page).", true},
+         "game, so that lighting never reaches LumaBridge. Instead LumaBridge reads the game from the screen image: "
+         "every device shows the screen's colors, flashes red when you're hit, breathes red at low health and "
+         "dims while you're dead.", true},
         {"bf6", "Battlefield 6", {"bf6.exe"}, {"battlefield6"}, ProfileKind::VendorSdk, Feed::None,
-         "Screen colors (its Logitech LIGHTSYNC can't reach LumaBridge)",
+         "From the screen: hits, low health, death",
          "The game lights Logitech gear through G HUB (LIGHTSYNC). EA's anti-cheat keeps LumaBridge out of the "
-         "game, so that lighting never reaches LumaBridge: while it runs, every device shows the screen's colors "
-         "(Logitech gear too, unless it's set to go to the game on its Devices page).", true},
+         "game, so that lighting never reaches LumaBridge. Instead LumaBridge reads the game from the screen image: "
+         "every device shows the screen's colors, flashes red when you're hit, breathes red at low health and "
+         "dims while you're dead.", true},
         {"bombanana", "BOMBANANA!", {nullptr}, {"bombanana"}, ProfileKind::NoSupport, Feed::None,
          "No known lighting support", "Use Screen colors."},
         {"nobackup", "NO BACKUP", {nullptr}, {"nobackup"}, ProfileKind::NoSupport, Feed::None,

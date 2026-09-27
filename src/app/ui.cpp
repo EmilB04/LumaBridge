@@ -2763,8 +2763,9 @@ void GameDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts&
             ImGui::PopStyleColor();
         }
         if (mode == 0 && profile && profile->blocked)
-            Muted("The screen's colors on every device: EA's anti-cheat keeps the game's own lighting (Logitech "
-                  "LIGHTSYNC, through G HUB) away from LumaBridge.");
+            Muted("Read from the screen, on every device: the screen's colors, a red flash when you're hit, red "
+                  "breathing at low health, dim while you're dead. (EA's anti-cheat keeps the game's own Logitech "
+                  "LIGHTSYNC lighting away from LumaBridge.)");
         else
             Muted("%s", kHelp[mode]);
         if (mode == static_cast<int>(GameMode::Color)) {
