@@ -196,6 +196,10 @@ target_link_libraries(hidpp-probe PRIVATE hid setupapi)
 # Read-only probe of G HUB's local WebSocket (does it report game lighting?).
 add_executable(ghub-probe tools/ghub-probe/main.cpp)
 target_link_libraries(ghub-probe PRIVATE winhttp iphlpapi ws2_32)
+# Chroma Broadcast probe: can Razer Synapse pass games' Chroma lighting to LumaBridge?
+add_executable(chroma-probe tools/chroma-probe/main.cpp)
+target_include_directories(chroma-probe PRIVATE src/integrations/razer)
+target_link_libraries(chroma-probe PRIVATE winhttp version)
 
 if(MINGW)
     # wmain entry points
@@ -205,6 +209,7 @@ if(MINGW)
     target_link_options(ram-probe PRIVATE -municode)
     target_link_options(hw_helper PRIVATE -municode)
     target_link_options(ghub-probe PRIVATE -municode)
+    target_link_options(chroma-probe PRIVATE -municode)
     target_link_options(device-probe PRIVATE -municode)
     target_link_options(hidpp-probe PRIVATE -municode)
     target_link_options(azoth-probe PRIVATE -municode)
@@ -221,7 +226,7 @@ install(TARGETS hw_helper RUNTIME DESTINATION .)
 install(FILES third_party/pawnio/PawnIO_setup.exe third_party/pawnio/COPYING third_party/pawnio/README.md DESTINATION pawnio)
 install(FILES third_party/pawnio/modules/SmbusPIIX4.bin third_party/pawnio/modules/LpcIO.bin
         third_party/pawnio/modules/AMDFamily17.bin third_party/pawnio/modules/COPYING DESTINATION pawnio/modules)
-install(TARGETS aura-test aura-usb-test ram-probe ghub-probe device-probe hidpp-probe azoth-probe logiled-harness RUNTIME DESTINATION tools)
+install(TARGETS aura-test aura-usb-test ram-probe ghub-probe chroma-probe device-probe hidpp-probe azoth-probe logiled-harness RUNTIME DESTINATION tools)
 install(FILES scripts/Run-HardwareTest.ps1 DESTINATION tools)
 install(FILES scripts/Install-LogiLedProxy.ps1 scripts/Install-SdkEmulators.ps1 scripts/Install-HandbackTask.ps1 scripts/Install-Helper.ps1 scripts/Write-GameFile.ps1
         DESTINATION scripts)
