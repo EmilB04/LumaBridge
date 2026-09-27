@@ -1,5 +1,5 @@
 // Unit tests for the platform-independent core. Builds on any OS:
-//   g++ -std=c++17 -I src/common -I src/chroma-emu tests/test_core.cpp -o test_core && ./test_core
+//   g++ -std=c++17 -I src/common -I src/chroma-emu -I src/corsair-emu -I src/lightfx-emu -I src/gamesense tests/test_core.cpp -o test_core && ./test_core
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -7,6 +7,13 @@
 #include "color.h"
 #include "lighting_state.h"
 #include "chroma_translate.h"
+#include "fake_devices.h"
+#include "gamesense_engine.h"
+#include "http_parser.h"
+#include "ipc.h"
+#include "json.h"
+#include "source_tracker.h"
+#include "lightfx_state.h"
 
 using namespace luma;
 
@@ -153,6 +160,152 @@ static void TestChroma() {
     CHECK(link.Update(DeviceClass::ChromaLink, Rgb{3, 3, 3}).has_value());
 }
 
+static void TestJson() {
+    Json j;
+    CHECK(Json::Parse(R"({"a": [1, 2.5, -3e2], "b": {"c": "x\"yé"}, "d": true, "e": null})", &j));
+    CHECK(j["a"].size() == 3);
+    CHECK(j["a"][1].Number() == 2.5);
+    CHECK(j["a"][2].Number() == -300);
+    CHECK(j["b"]["c"].String() == "x\"y\xC3\xA9");
+    CHECK(j["d"].Bool());
+    CHECK(j["e"].IsNull());
+    CHECK(j["missing"]["deeper"].IsNull());
+    CHECK(!Json::Parse("{\"a\":}", &j));
+    CHECK(!Json::Parse("[1,2", &j));
+    CHECK(!Json::Parse("{} x", &j));
+    std::string deep(200, '[');
+    CHECK(!Json::Parse(deep, &j));  // depth limit, no stack overflow
+}
+
+static void TestHttp() {
+    using namespace luma::http;
+    Parser p;
+    std::string two = "POST /game_event HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\n\r\n{}"
+                      "POST /game_heartbeat?x=1 HTTP/1.1\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                      "3\r\n{\"a\r\n3\r\n\":1\r\n1\r\n}\r\n0\r\n\r\n";
+    p.Feed(two.data(), 10);
+    Request r;
+    CHECK(p.Next(&r) == Parser::Status::NeedMore);
+    p.Feed(two.data() + 10, two.size() - 10);
+    CHECK(p.Next(&r) == Parser::Status::Done);
+    CHECK(r.method == "POST" && r.path == "/game_event" && r.body == "{}" && r.keepAlive);
+    CHECK(p.Next(&r) == Parser::Status::Done);
+    CHECK(r.path == "/game_heartbeat" && r.body == "{\"a\":1}" && !r.keepAlive);
+    CHECK(p.Next(&r) == Parser::Status::NeedMore);
+}
+
+static void TestGameSense() {
+    using namespace luma::gamesense;
+    Engine e;
+    auto post = [&](const char* path, const std::string& body, uint64_t t) {
+        return e.Handle(path, body, t).status;
+    };
+    CHECK(post("/game_metadata", R"({"game":"TEST","deinitialize_timer_length_ms":5000})", 0) == 200);
+    // health: gradient red(0)..green(100) on the function keys, percent bar
+    CHECK(post("/bind_game_event", R"({"game":"TEST","event":"HEALTH","min_value":0,"max_value":200,
+        "handlers":[{"device-type":"keyboard","zone":"function-keys","mode":"percent",
+        "color":{"gradient":{"zero":{"red":255,"green":0,"blue":0},"hundred":{"red":0,"green":255,"blue":0}}}}]})", 0) == 200);
+    CHECK(!e.Current().has_value());
+    CHECK(post("/game_event", R"({"game":"TEST","event":"HEALTH","data":{"value":200}})", 10) == 200);
+    CHECK(e.Current().has_value() && (e.Current()->color == Rgb{0, 255, 0}));
+    post("/game_event", R"({"game":"TEST","event":"HEALTH","data":{"value":100}})", 20);
+    CHECK((e.Current()->color == Rgb{128, 128, 0}));
+    post("/game_event", R"({"game":"TEST","event":"HEALTH","data":{"value":0}})", 30);
+    CHECK(e.Current()->color.IsBlack());  // empty bar
+
+    // A full-keyboard bitmap handler outranks the function-key bar.
+    post("/bind_game_event", R"({"game":"TEST","event":"FRAME","handlers":[{"device-type":"rgb-per-key-zones",
+        "zone":"all","mode":"bitmap"}]})", 40);
+    post("/game_event", R"({"game":"TEST","event":"FRAME","data":{"frame":{"bitmap":[[0,0,200],[0,0,0],[0,0,100]]}}})", 50);
+    CHECK((e.Current()->color == Rgb{0, 0, 150}));
+    post("/game_event", R"({"game":"TEST","event":"HEALTH","data":{"value":150}})", 60);
+    CHECK((e.Current()->color == Rgb{0, 0, 150}));
+
+    // Ranges + flashing.
+    post("/bind_game_event", R"({"game":"TEST","event":"ALARM","handlers":[{"device-type":"rgb-1-zone","zone":"one",
+        "color":[{"low":0,"high":0,"color":{"red":0,"green":0,"blue":0}},{"low":1,"high":100,"color":{"red":255,"green":0,"blue":0}}],
+        "rate":{"frequency":[{"low":50,"high":100,"frequency":4}]}}]})", 70);
+    post("/remove_game_event", R"({"game":"TEST","event":"FRAME"})", 75);
+    post("/game_event", R"({"game":"TEST","event":"ALARM","data":{"value":80}})", 80);
+    CHECK((e.Current()->color == Rgb{255, 0, 0}) && e.Current()->flashHz == 4);
+    post("/game_event", R"({"game":"TEST","event":"ALARM","data":{"value":10}})", 90);
+    CHECK(e.Current()->flashHz == 0);
+
+    // Deinitialize timer.
+    CHECK(e.AnyActive());
+    e.Tick(4000);
+    CHECK(e.AnyActive());
+    e.Tick(6000);
+    CHECK(!e.AnyActive() && !e.Current().has_value());
+
+    CHECK(post("/game_event", "not json", 0) == 400);
+}
+
+static void TestCorsairDevices() {
+    using namespace luma::corsair;
+    auto devs = BuildFakeDevices();
+    CHECK(devs.size() == 2);
+    CHECK(devs[0].type == CDT_Keyboard && devs[0].leds.size() == 104);
+    CHECK(devs[1].type == CDT_Mouse && devs[1].leds.size() == 4);
+    CHECK(devs[0].leds.front().id == 1 && devs[1].leds.back().id == 108);
+    int w = LedIdForKeyName(devs, 'w');
+    CHECK(w != 0 && w == LedIdForKeyName(devs, 'W'));
+    CHECK(LedIdForKeyName(devs, '~') == 0);
+    LedFrame f;
+    f.Set(w, 300, -5, 0);
+    Rgb c;
+    CHECK(f.Get(w, &c) && (c == Rgb{255, 0, 0}));
+    f.Set(1, 0, 0, 255);
+    CHECK((f.Reduce(BitmapReduce::Average) == Rgb{128, 0, 128}));
+}
+
+static void TestLightFx() {
+    using namespace luma::lightfx;
+    CHECK((FromPacked(0xFFFF0000u) == Rgb{255, 0, 0}));
+    CHECK(FromPacked(0x00FF0000u).IsBlack());  // zero brightness = off
+    CHECK((FromStruct(LFX_COLOR{0, 200, 0, 128}) == Rgb{0, 100, 0}));
+    State s;
+    CHECK(!s.Update());
+    s.SetColor(Rgb{1, 2, 3});
+    CHECK(s.CurrentColor().IsBlack());  // buffered until Update
+    auto cmd = s.Update();
+    CHECK(cmd && cmd->kind == Command::Kind::Static && (s.CurrentColor() == Rgb{1, 2, 3}));
+    s.SetTiming(300);
+    s.Action(LFX_ACTION_PULSE, Rgb{9, 9, 9}, std::nullopt);
+    cmd = s.Update();
+    CHECK(cmd && cmd->kind == Command::Kind::Pulse && cmd->periodMs == 600);
+    s.Action(LFX_ACTION_MORPH, Rgb{1, 1, 1}, Rgb{5, 5, 5});
+    CHECK((s.Update()->color == Rgb{5, 5, 5}));
+}
+
+static void TestSources() {
+    using namespace luma::app;
+    SourceTracker t;
+    CHECK(!t.Active());
+    t.OnFrame(100, "Logitech LIGHTSYNC", "bf1", Rgb{255, 0, 0}, 0, 1000);
+    t.OnFrame(0, "SteelSeries GameSense", "CSGO", Rgb{0, 255, 0}, 0, 2000);
+    CHECK(t.Active()->game == "CSGO");
+    t.OnFrame(100, "Logitech LIGHTSYNC", "bf1", Rgb{255, 0, 0}, 0, 2500);  // keep-alive, no change
+    CHECK(t.Active()->game == "CSGO");
+    t.OnFrame(100, "Logitech LIGHTSYNC", "bf1", Rgb{0, 0, 255}, 0, 2600);  // real change
+    CHECK(t.Active()->game == "bf1");
+    t.OnRelease(100, "Logitech LIGHTSYNC");
+    CHECK(t.Active()->game == "CSGO");
+    t.Prune(2000 + SourceTracker::kTimeoutMs + 1, [](const Source&) { return false; });
+    CHECK(!t.Active());
+}
+
+static void TestIpc() {
+    using namespace luma::ipc;
+    Frame f = MakeFrame(FrameKind::Color, 42, 1, 2, 3, "A very long source name that must be truncated");
+    Frame g;
+    CHECK(ParseFrame(&f, sizeof f, &g));
+    CHECK(g.pid == 42 && g.r == 1 && g.b == 3 && std::strlen(g.source) == sizeof g.source - 1);
+    CHECK(!ParseFrame(&f, sizeof f - 1, &g));
+    f.kind = static_cast<FrameKind>(9);
+    CHECK(!ParseFrame(&f, sizeof f, &g));
+}
+
 int main() {
     TestPercent();
     TestAuraPacking();
@@ -161,6 +314,13 @@ int main() {
     TestColorRefs();
     TestState();
     TestChroma();
+    TestJson();
+    TestHttp();
+    TestGameSense();
+    TestCorsairDevices();
+    TestLightFx();
+    TestSources();
+    TestIpc();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return EXIT_FAILURE;

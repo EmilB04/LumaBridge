@@ -278,6 +278,18 @@ void AuraBridge::Disconnect(bool releaseControl) {
     impl_->connected = false;
 }
 
+void AuraBridge::SetSelected(size_t index, bool selected) {
+    if (index >= impl_->devices.size()) return;
+    Device& d = impl_->devices[index];
+    if (d.selected != selected)
+        LUMA_INFO("Aura: \"%s\" %s", Narrow(d.info.name).c_str(), selected ? "enabled" : "disabled");
+    d.selected = selected;
+}
+
+bool AuraBridge::IsSelected(size_t index) const {
+    return index < impl_->devices.size() && impl_->devices[index].selected;
+}
+
 bool AuraBridge::SetAll(uint32_t auraColor) {
     if (!impl_->connected) return false;
     for (auto& d : impl_->devices) {

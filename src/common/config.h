@@ -23,6 +23,8 @@ struct Config {
     // Case-insensitive substrings; a device whose name contains one is skipped.
     std::vector<std::wstring> auraExcludeNames;
     bool releaseControlOnShutdown = true;
+    // Exact Aura device names switched off in the app ('|' separated in the ini).
+    std::vector<std::wstring> auraDisabledDevices;
 
     // [Color]
     ColorCorrection auraCorrection;
@@ -33,6 +35,11 @@ struct Config {
     // [Chroma] (RzChromaSDK emulator only)
     std::wstring chromaAmbientSource = L"auto";  // auto|keyboard|mouse|headset|mousepad|keypad|chromalink
     bool chromaReportDevicesConnected = true;     // QueryDevice says every device is connected
+
+    // [GameSense] (LumaBridgeHost.exe only)
+    bool gameSenseEnabled = true;
+    int gameSensePort = 49713;       // 0 = let Windows pick; falls back to that if taken
+    std::wstring gameSenseCoreProps;  // empty = %PROGRAMDATA%\SteelSeries\SteelSeries Engine 3\coreProps.json
 
     // [Log]
     std::wstring logFile;  // empty = %LOCALAPPDATA%\LumaBridge\lumabridge.log
@@ -49,5 +56,12 @@ Config LoadConfig(const std::wstring& moduleDir);
 bool ParseAuraDeviceType(const std::wstring& token, uint32_t* out);
 
 std::wstring LocalAppDataDir();  // %LOCALAPPDATA%\LumaBridge (not created)
+
+// The per-user config the app edits: %LOCALAPPDATA%\LumaBridge\LumaBridge.ini.
+std::wstring UserConfigPath();
+
+// Writes one key (creates the file and folder if needed).
+bool WriteConfigValue(const std::wstring& iniPath, const wchar_t* section, const wchar_t* key,
+                      const std::wstring& value);
 
 }  // namespace luma

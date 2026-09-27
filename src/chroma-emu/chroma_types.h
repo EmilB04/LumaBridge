@@ -4,7 +4,7 @@
 // Only the *layouts we read* matter for safety: every read of an effect parameter is bounded
 // by the smallest struct size that effect type can have. Enum values below are the SDK 2.x/3.x
 // values; if a game renders wrong colors, check these first against the current
-// RzChromaSDKTypes.h (see docs/chroma-emulation.md).
+// RzChromaSDKTypes.h (see docs/sdk-emulators.md).
 #pragma once
 
 #include <cstdint>

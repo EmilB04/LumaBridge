@@ -55,6 +55,9 @@ with what matrix size.
 
 ## Gotchas
 
+- Only one process should call `SwitchMode()` at a time. That's why the LumaBridge app
+  is the single Aura owner while it runs, and game DLLs send their colors to it instead
+  of opening their own Aura session.
 - `SwitchMode()` takes over **all** Aura devices, including ones the config excludes,
   which then freeze on their last color. `ReleaseControl` (on `LogiLedShutdown` / `UnInit`)
   gives them back.

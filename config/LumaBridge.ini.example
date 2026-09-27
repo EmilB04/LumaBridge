@@ -1,6 +1,6 @@
-; LumaBridge configuration.
-; Copy to LumaBridge.ini either next to the DLL, or to %LOCALAPPDATA%\LumaBridge\LumaBridge.ini
-; (the Chroma emulator in System32 always uses the %LOCALAPPDATA% copy).
+; LumaBridge configuration: %LOCALAPPDATA%\LumaBridge\LumaBridge.ini
+; The app edits this file for you (Settings / Devices pages); editing by hand is optional.
+; A LumaBridge.ini next to a game-folder DLL overrides it for that DLL only.
 ; Every key is optional; the values shown are the defaults.
 
 [Logitech]
@@ -21,6 +21,8 @@ MaxUpdateHz=30
 DeviceTypes=all
 ; Skip devices whose name contains any of these (comma separated, case-insensitive).
 ExcludeNames=
+; Devices switched off on the app's Devices page (exact names, '|' separated).
+DisabledDevices=
 ; Hand lighting back to Armoury Crate when the game shuts the SDK down.
 ReleaseControlOnShutdown=1
 
@@ -47,9 +49,29 @@ AmbientSource=auto
 ; Answer "connected" to every QueryDevice() so games light up devices you don't own.
 ReportDevicesConnected=1
 
+[GameSense]
+; Built-in SteelSeries GameSense server (LumaBridge.exe).
+Enabled=1
+; Loopback port; a free one is picked if this is taken.
+Port=49713
+; Empty = %ProgramData%\SteelSeries\SteelSeries Engine 3\coreProps.json
+CorePropsPath=
+
+[App]
+; auto (games drive the lights) | manual
+Mode=auto
+ManualColor=#008CFF
+; static | breathing | strobe
+ManualEffect=static
+; cycles / flashes per second
+ManualSpeed=0.5
+; What Auto mode shows between games: armourycrate | manual
+WhenIdle=armourycrate
+StartMinimized=1
+
 [Log]
 ; debug | info | warn | error | off
 Level=info
-; Empty = %LOCALAPPDATA%\LumaBridge\lumabridge.log (the Chroma emulator writes
-; lumabridge-chroma.log next to it)
+; Empty = %LOCALAPPDATA%\LumaBridge\lumabridge.log (the app and each emulator write
+; lumabridge-app.log, lumabridge-chroma.log, lumabridge-corsair.log, ... next to it)
 File=

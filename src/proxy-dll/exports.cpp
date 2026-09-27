@@ -76,7 +76,7 @@ T Fallback() {
 }
 
 bool StartSession(bool realOk) {
-    if (g_cfg.auraEnabled) g_mirror.Start(g_cfg, g_selfModule);
+    if (g_cfg.auraEnabled) g_mirror.Start(g_cfg, g_selfModule, "Logitech LIGHTSYNC");
     LUMA_INFO("LogiLedInit: real=%s aura=%s", realOk ? "ok" : "unavailable",
               MirrorActive() ? "running" : "off");
     return realOk || MirrorActive();

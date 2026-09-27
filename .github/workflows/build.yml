@@ -21,11 +21,9 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure
       - name: Package
         run: cmake --install build --config Release --prefix dist
-      - name: Add scripts and docs
+      - name: Add readme
         shell: pwsh
-        run: |
-          Copy-Item scripts/*.ps1 dist/
-          Copy-Item README.md dist/
+        run: Copy-Item README.md dist/
       - uses: actions/upload-artifact@v4
         with:
           name: LumaBridge-${{ matrix.arch }}

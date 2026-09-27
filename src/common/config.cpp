@@ -44,11 +44,11 @@ bool ReadBool(const std::wstring& ini, const wchar_t* section, const wchar_t* ke
            _wcsicmp(s.c_str(), L"on") == 0;
 }
 
-std::vector<std::wstring> SplitList(const std::wstring& s) {
+std::vector<std::wstring> SplitList(const std::wstring& s, wchar_t sep = L',') {
     std::vector<std::wstring> out;
     size_t start = 0;
     while (start <= s.size()) {
-        size_t comma = s.find(L',', start);
+        size_t comma = s.find(sep, start);
         if (comma == std::wstring::npos) comma = s.size();
         std::wstring item = Trim(s.substr(start, comma - start));
         if (!item.empty()) out.push_back(item);
@@ -69,6 +69,18 @@ std::wstring LocalAppDataDir() {
     DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return L"";
     return std::wstring(buf) + L"\\LumaBridge";
+}
+
+std::wstring UserConfigPath() {
+    std::wstring dir = LocalAppDataDir();
+    return dir.empty() ? L"" : dir + L"\\LumaBridge.ini";
+}
+
+bool WriteConfigValue(const std::wstring& iniPath, const wchar_t* section, const wchar_t* key,
+                      const std::wstring& value) {
+    size_t sep = iniPath.find_last_of(L"\\/");
+    if (sep != std::wstring::npos) CreateDirectoryW(iniPath.substr(0, sep).c_str(), nullptr);
+    return WritePrivateProfileStringW(section, key, value.c_str(), iniPath.c_str()) != 0;
 }
 
 bool ParseAuraDeviceType(const std::wstring& token, uint32_t* out) {
@@ -138,6 +150,7 @@ Config LoadConfig(const std::wstring& moduleDir) {
         if (ParseAuraDeviceType(t, &type)) cfg.auraDeviceTypes.push_back(type);
     }
     cfg.auraExcludeNames = SplitList(ReadString(ini, L"Aura", L"ExcludeNames", L""));
+    cfg.auraDisabledDevices = SplitList(ReadString(ini, L"Aura", L"DisabledDevices", L""), L'|');
     cfg.releaseControlOnShutdown =
         ReadBool(ini, L"Aura", L"ReleaseControlOnShutdown", cfg.releaseControlOnShutdown);
 
@@ -155,6 +168,11 @@ Config LoadConfig(const std::wstring& moduleDir) {
     cfg.chromaAmbientSource = Trim(ReadString(ini, L"Chroma", L"AmbientSource", L"auto"));
     cfg.chromaReportDevicesConnected = ReadBool(ini, L"Chroma", L"ReportDevicesConnected",
                                                 cfg.chromaReportDevicesConnected);
+
+    cfg.gameSenseEnabled = ReadBool(ini, L"GameSense", L"Enabled", cfg.gameSenseEnabled);
+    cfg.gameSensePort = static_cast<int>(ReadNumber(ini, L"GameSense", L"Port", cfg.gameSensePort));
+    if (cfg.gameSensePort < 0 || cfg.gameSensePort > 65535) cfg.gameSensePort = 49713;
+    cfg.gameSenseCoreProps = Trim(ReadString(ini, L"GameSense", L"CorePropsPath", L""));
 
     std::wstring logFile = Trim(ReadString(ini, L"Log", L"File", L""));
     if (!logFile.empty()) cfg.logFile = logFile;

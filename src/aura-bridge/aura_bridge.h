@@ -51,6 +51,10 @@ public:
     // Every enumerated device, including filtered-out ones.
     const std::vector<AuraDeviceInfo>& Devices() const;
 
+    // Includes / excludes device `index` (into Devices()) from SetAll.
+    void SetSelected(size_t index, bool selected);
+    bool IsSelected(size_t index) const;
+
     // Sets every light on every selected device to `auraColor` (0x00BBGGRR) and applies.
     // Returns false on a COM failure (e.g. service restarted) -- caller should Disconnect
     // and try Connect again later.

@@ -6,20 +6,19 @@
 // There is no pass-through: this DLL replaces the Razer one.
 #include <windows.h>
 
-#include <iterator>
 #include <objbase.h>
 
 #include <cstring>
 #include <map>
 #include <mutex>
 #include <optional>
-#include <string>
 
 #include "aura_mirror.h"
 #include "chroma_translate.h"
 #include "chroma_types.h"
 #include "config.h"
 #include "log.h"
+#include "module_bootstrap.h"
 
 using namespace luma;
 using namespace luma::chroma;
@@ -50,12 +49,6 @@ AuraMirror g_mirror;
 AmbientSelector g_selector;
 std::map<GUID, StoredEffect, GuidLess> g_effects;
 
-std::string Narrow(const std::wstring& w) {
-    std::string s;
-    for (wchar_t c : w) s += (c < 128) ? static_cast<char>(c) : '?';
-    return s;
-}
-
 AmbientSource ParseAmbientSource(const std::wstring& s) {
     static const struct {
         const wchar_t* name;
@@ -72,26 +65,7 @@ AmbientSource ParseAmbientSource(const std::wstring& s) {
 
 void Bootstrap() {
     std::call_once(g_bootstrapOnce, [] {
-        wchar_t buf[MAX_PATH * 2];
-        std::wstring self;
-        DWORD n = GetModuleFileNameW(g_selfModule, buf, static_cast<DWORD>(std::size(buf)));
-        if (n > 0 && n < std::size(buf)) self.assign(buf, n);
-        g_cfg = LoadConfig(self.substr(0, self.find_last_of(L"\\/")));
-        // Separate log file from the LogiLed proxy so both can run in one game.
-        if (!g_cfg.logFile.empty()) {
-            size_t dot = g_cfg.logFile.find_last_of(L'.');
-            g_cfg.logFile = (dot == std::wstring::npos ? g_cfg.logFile : g_cfg.logFile.substr(0, dot)) +
-                            L"-chroma.log";
-        }
-        log::Init(g_cfg.logFile, g_cfg.logLevel);
-
-        wchar_t exe[MAX_PATH * 2] = {};
-        GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(std::size(exe)));
-        LUMA_INFO("==== LumaBridge Chroma emulator loaded into %s (pid %lu) ====",
-                  Narrow(exe).c_str(), GetCurrentProcessId());
-        LUMA_INFO("emulator: %s", Narrow(self).c_str());
-        LUMA_INFO("config: %s", g_cfg.sourcePath.empty() ? "(none found, using defaults)"
-                                                         : Narrow(g_cfg.sourcePath).c_str());
+        g_cfg = BootstrapModule(g_selfModule, L"chroma", "Chroma emulator");
         g_selector = AmbientSelector(ParseAmbientSource(g_cfg.chromaAmbientSource));
     });
 }
@@ -136,7 +110,7 @@ extern "C" RZRESULT CHROMA_CALL Init() {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_initialized) return RZRESULT_SUCCESS;
     g_initialized = true;
-    if (g_cfg.auraEnabled) g_mirror.Start(g_cfg, g_selfModule);
+    if (g_cfg.auraEnabled) g_mirror.Start(g_cfg, g_selfModule, "Razer Chroma");
     LUMA_INFO("Chroma: Init (aura %s)", g_mirror.IsRunning() ? "running" : "off");
     return RZRESULT_SUCCESS;
 }

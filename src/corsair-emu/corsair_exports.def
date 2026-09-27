@@ -1,0 +1,24 @@
+; Export table of the Corsair CUE SDK 2.x / 3.x runtime (CUESDK.x64_2019.dll and friends).
+EXPORTS
+    CorsairPerformProtocolHandshake
+    CorsairGetLastError
+    CorsairGetDeviceCount
+    CorsairGetDeviceInfo
+    CorsairGetLedPositions
+    CorsairGetLedPositionsByDeviceIndex
+    CorsairGetLedIdForKeyName
+    CorsairSetLedsColors
+    CorsairSetLedsColorsAsync
+    CorsairSetLedsColorsBufferByDeviceIndex
+    CorsairSetLedsColorsFlushBuffer
+    CorsairSetLedsColorsFlushBufferAsync
+    CorsairGetLedsColors
+    CorsairGetLedsColorsByDeviceIndex
+    CorsairRequestControl
+    CorsairReleaseControl
+    CorsairSetLayerPriority
+    CorsairRegisterKeypressCallback
+    CorsairSubscribeForEvents
+    CorsairUnsubscribeFromEvents
+    CorsairGetBoolPropertyValue
+    CorsairGetInt32PropertyValue

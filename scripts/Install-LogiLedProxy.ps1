@@ -12,7 +12,8 @@
                     touched, and -Uninstall simply deletes it. Works if the game reads the
                     merged HKCR view (HKCU wins over HKLM) -- try this first.
     -Scope Machine  rewrites the HKLM value (admin). Use if the User scope has no effect.
-                    The original path is saved to LumaBridge.ini (RealDllPath) and to
+                    The original path is saved to %LOCALAPPDATA%\LumaBridge\LumaBridge.ini
+                    (RealDllPath) and to
                     logiled-registry-backup.txt. G HUB updates may reset it.
 
     -GameDir <dir>  instead copies the proxy into a game folder under the DLL name the game
@@ -137,10 +138,12 @@ if ($Scope -eq 'User') {
     Assert-Admin
     if ($current -and ($current -ne $ProxyPath)) {
         Set-Content $backup $current
-        Set-IniValue (Join-Path (Split-Path $ProxyPath) 'LumaBridge.ini') 'Logitech' 'RealDllPath' $current
+        $userIni = Join-Path $env:LOCALAPPDATA 'LumaBridge\LumaBridge.ini'
+        New-Item -ItemType Directory -Force (Split-Path $userIni) | Out-Null
+        Set-IniValue $userIni 'Logitech' 'RealDllPath' $current
         Write-Host "Saved original ($current) to $backup and LumaBridge.ini"
     }
     Set-Item -Path $machineKey -Value $ProxyPath
     Write-Host "HKLM: $machineKey = $ProxyPath"
 }
-Write-Host 'Done. Start the game, then check %LOCALAPPDATA%\LumaBridge\lumabridge.log.'
+Write-Host 'Done. Start the game; LumaBridge shows it on the Lighting page.'

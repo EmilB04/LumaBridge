@@ -62,10 +62,10 @@ int wmain(int argc, wchar_t** argv) {
             return 1;
         }
 
-        std::wprintf(L"%zu Aura device(s):\n", aura.Devices().size());
+        std::wprintf(L"%d Aura device(s):\n", static_cast<int>(aura.Devices().size()));
         for (size_t i = 0; i < aura.Devices().size(); ++i) {
             const auto& d = aura.Devices()[i];
-            std::wprintf(L"  [%zu] %-32ls type=0x%08X (%ls) lights=%d matrix=%dx%d\n", i,
+            std::wprintf(L"  [%d] %-32ls type=0x%08X (%ls) lights=%d matrix=%dx%d\n", static_cast<int>(i),
                          d.name.c_str(), d.type, AuraDeviceTypeName(d.type), d.lightCount,
                          d.width, d.height);
         }
