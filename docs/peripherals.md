@@ -36,7 +36,8 @@ What `ghub-probe` found (G HUB with a G502 X Plus over LIGHTSPEED):
   the lighting paths the probe subscribed to reported anything, so the paths G HUB's window
   uses to set effects are still unknown.
 - G HUB also runs `logi_lamparray_service`, which offers its devices to Windows Dynamic
-  Lighting (the `LampArray` API, one color per LED).
+  Lighting. The G502 X Plus shows up there, but Windows only offers it one color at a time,
+  with no effects, so that route is one color too.
 
 ## ASUS ROG Azoth (wired or wireless, experimental)
 
