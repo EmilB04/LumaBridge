@@ -8,7 +8,8 @@ OpenRGB, Artemis or other middleware.
 
 - **Dashboard:** lighting, the running game, CPU / GPU load and temperatures, memory, fan
   speeds, Aura devices and connections at a glance. Cards can be hidden and reordered. Fan
-  speeds and board temperatures come from LibreHardwareMonitor when it runs.
+  speeds and CPU / board temperatures come from LumaBridge itself once Hardware access is set
+  up (Ryzen CPUs, Nuvoton NCT679x boards), else from LibreHardwareMonitor if it runs.
 - **Auto mode:** games drive your lights. LumaBridge answers the game's lighting SDK as
   if that brand's software were installed, and follows the game that's currently active.
   Every running game is listed, with whether it supports dynamic lighting. Counter-Strike 2,
@@ -20,8 +21,10 @@ OpenRGB, Artemis or other middleware.
   direction), and the same color wheel, hex input and swatches for both colors.
 - **Calibration:** per-channel gains and gamma so Aura matches your other gear.
 - **Logitech devices** (mice, ...) follow along through G HUB's own LED SDK.
-- **RAM** (HyperX / Kingston FURY RGB DDR4, experimental) follows along through a small
-  elevated helper and the PawnIO driver.
+- **RAM** (HyperX / Kingston FURY RGB DDR4, experimental) follows along, and the dashboard
+  shows fan speeds and CPU / board temperatures by itself: one click on the Devices page
+  (Hardware access) sets it up, with the signed PawnIO driver included
+  ([third_party/pawnio](third_party/pawnio/README.md)). No LibreHardwareMonitor needed.
 - **Devices:** switch individual Aura devices on or off, and set up your fans (count, LEDs
   per fan, test pattern).
 - **Games List:** every game on the PC; open one to set up its built-in lighting (CS2,
@@ -120,8 +123,8 @@ docs/                          SDK notes, build guide, roadmap, release notes, s
 
 - **Supported Aura hardware:** the motherboard's Aura USB controller (board LEDs and ARGB
   headers, e.g. fans on a hub), driven directly over USB. RAM lighting (HyperX / Kingston
-  FURY RGB DDR4 only, AMD chipsets, experimental) needs the PawnIO driver and a helper set up
-  once with administrator rights ([docs/peripherals.md](docs/peripherals.md)).
+  FURY RGB DDR4 only, AMD chipsets, experimental) and the built-in sensors need Hardware access
+  set up once, with one administrator prompt ([docs/peripherals.md](docs/peripherals.md)).
 - **Some newer Chroma titles verify Razer's signature** and ignore the emulator.
 - **Corsair iCUE SDK 4** (2022+ titles) and **Windows 11 Dynamic Lighting** aren't
   covered. See [docs/sdk-emulators.md](docs/sdk-emulators.md) for why.

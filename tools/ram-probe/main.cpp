@@ -131,7 +131,10 @@ int wmain(int argc, wchar_t** argv) {
                      L"Install it from https://pawnio.eu and run this again.\n");
         return 1;
     }
-    const std::wstring module = argc > 1 ? argv[1] : ExeDir() + L"\\SmbusPIIX4.bin";
+    // Next to this exe, else the copy bundled with LumaBridge (..\pawnio\modules).
+    std::wstring module = argc > 1 ? argv[1] : ExeDir() + L"\\SmbusPIIX4.bin";
+    if (argc <= 1 && GetFileAttributesW(module.c_str()) == INVALID_FILE_ATTRIBUTES)
+        module = ExeDir() + L"\\..\\pawnio\\modules\\SmbusPIIX4.bin";
     std::vector<UCHAR> blob;
     if (!ReadFileBytes(module, &blob)) {
         std::wprintf(L"Module not found: %ls\n"

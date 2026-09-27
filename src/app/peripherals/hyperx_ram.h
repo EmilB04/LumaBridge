@@ -7,13 +7,12 @@
 //   base + 3*led + 0/1/2 = R/G/B  per LED; base 0x11 / 0x41 / 0x71 / 0xA1 for SPD slots 0-3
 //   base + 0x10 + 3*led = 0..100  per-LED brightness
 //   E1 = 02, E1 = 03              apply
+//   E3 = 05, D1/D2 = timer        the sticks' own rainbow (used when LumaBridge lets go)
 //
 // The sticks' own configuration chips (SPD, 0x50-0x57) and every other address are never
 // written: the only address is kController, and every write goes through IsAllowed(), which
 // admits only the registers above. Pure, tested.
-//
-// Also the shared memory between the app and the elevated helper (LumaBridge-RAM.exe) that
-// does the SMBus writes.
+// The SMBus writes happen in the elevated hardware helper (src/helper).
 #pragma once
 
 #include <array>
@@ -34,6 +33,9 @@ constexpr uint8_t kRegApply = 0xE1;
 constexpr uint8_t kRegDirect = 0xE5;
 constexpr uint8_t kDirectMode = 0x21;
 constexpr uint8_t kFullBrightness = 0x64;  // 100
+constexpr uint8_t kRegModeRandom = 0xE3, kRainbowMode = 0x05;
+constexpr uint8_t kRegTimerHigh = 0xD1, kRegTimerLow = 0xD2;
+constexpr uint16_t kRainbowTimer = 0x07D0;  // the sticks' normal rainbow speed
 
 inline uint8_t SlotBase(int slot) {
     static const uint8_t kBase[kSlots] = {0x11, 0x41, 0x71, 0xA1};
@@ -46,7 +48,8 @@ struct Write {
 
 // Whether LumaBridge may ever write `reg` of the controller.
 inline bool IsAllowed(uint8_t reg) {
-    if (reg == kRegApply || reg == kRegDirect) return true;
+    if (reg == kRegApply || reg == kRegDirect || reg == kRegModeRandom || reg == kRegTimerHigh || reg == kRegTimerLow)
+        return true;
     for (int s = 0; s < kSlots; ++s)
         for (int led = 0; led < kLedsPerStick; ++led) {
             const int color = SlotBase(s) + 3 * led, bright = SlotBase(s) + 0x10 + 3 * led;
@@ -79,40 +82,14 @@ inline std::vector<Write> Frame(uint8_t sticks, const std::array<Rgb, kMaxLeds>&
     return w;
 }
 
-// ---- App <-> helper -------------------------------------------------------------------
-
-// Created by the helper (running as SYSTEM) with access for signed-in users; the app opens it.
-constexpr wchar_t kSharedName[] = L"Global\\LumaBridgeRam";
-constexpr uint32_t kMagic = 0x4D52424C;  // "LBRM"
-constexpr uint32_t kVersion = 1;
-
-enum class HelperStatus : uint32_t {
-    Starting = 0,
-    Ready,           // found the sticks, waiting for colors
-    Active,          // writing colors
-    NoPawnIO,        // the PawnIO driver isn't installed
-    NoModule,        // SmbusPIIX4.bin missing next to the helper
-    ModuleFailed,    // PawnIO refused the module: not an AMD chipset, or an old module
-    NotKingston,     // SMBIOS lists no Kingston / HyperX memory
-    NoController,    // nothing answers at 0x27
-    NoSticks,        // no DDR4 stick answers at 0x50-0x53
-    WriteFailed,     // writes kept failing: stopped
-    BusBusy,         // couldn't get the shared SMBus lock
-};
-
-struct Shared {
-    uint32_t magic, version;
-    // App -> helper.
-    uint32_t appPid;
-    uint32_t own;        // 1: show `colors`; 0: stop writing (the sticks keep the last color)
-    uint32_t seq;        // bumped by the app when `colors` changes
-    uint64_t appBeat;    // the app's GetTickCount64(), refreshed a few times a second
-    uint8_t colors[kMaxLeds][3];
-    // Helper -> app.
-    uint32_t helperPid;
-    HelperStatus status;
-    uint32_t sticks;     // bit i: a stick in SPD slot i
-    uint64_t helperBeat;
-};
+// Register writes that hand the sticks back to their own rainbow effect.
+inline std::vector<Write> OwnRainbow() {
+    return {{kRegApply, 0x01},
+            {kRegModeRandom, kRainbowMode},
+            {kRegTimerHigh, static_cast<uint8_t>(kRainbowTimer >> 8)},
+            {kRegTimerLow, static_cast<uint8_t>(kRainbowTimer & 0xFF)},
+            {kRegApply, 0x02},
+            {kRegApply, 0x03}};
+}
 
 }  // namespace luma::app::ram

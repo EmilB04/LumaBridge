@@ -547,11 +547,7 @@ std::string Gb(uint64_t bytes) {
 }
 
 void LhmHint() {
-    Muted("Fan speeds and CPU / board temperatures come from LibreHardwareMonitor (free): run it, then "
-          "Options > Remote Web Server > Run (port 8085).");
-    if (ImGui::SmallButton("Get LibreHardwareMonitor"))
-        ShellExecuteW(nullptr, L"open", L"https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases",
-                      nullptr, nullptr, SW_SHOWNORMAL);
+    Muted("Fan speeds and CPU / board temperatures: set up Hardware access on the Devices page (one click).");
 }
 
 // Friendly name and icon for an Aura device.
@@ -625,7 +621,7 @@ void WCpu(DashCtx& c) {
         ImGui::SameLine();
         Muted("%s", t->name.c_str());
     } else if (!s.lhmConnected) {
-        Muted("Temperature: needs LibreHardwareMonitor (see Fans).");
+        Muted("Temperature: set up Hardware access (Devices).");
     }
     if (s.cpuThreads) Muted("%d threads", s.cpuThreads);
 }
@@ -673,7 +669,7 @@ void WGpu(DashCtx& c) {
         }
         if (g.vramTotal) line += (g.vramUsed ? Gb(g.vramUsed) + " / " : std::string()) + Gb(g.vramTotal) + " VRAM";
         Muted("%s", line.c_str());
-        if (load < 0 && temp < 0) Muted("Live stats: NVIDIA cards work out of the box; others need LibreHardwareMonitor.");
+        if (load < 0 && temp < 0) Muted("Live stats: NVIDIA cards only for now.");
     }
 }
 
@@ -730,7 +726,7 @@ void WFans(DashCtx& c) {
         }
     if (idle) Muted("%d header(s) with nothing connected / stopped", idle);
     if (!s.lhmConnected) LhmHint();
-    else if (!shown && !idle) Muted("LibreHardwareMonitor reports no fans.");
+    else if (!shown && !idle) Muted("No fans reported.");
 }
 
 void WTemps(DashCtx& c) {
@@ -786,16 +782,17 @@ void WDevices(DashCtx& c) {
         Muted("%s", active ? "via G HUB" : "G HUB has them");
     }
     if (c.ctl.prefs().ramLighting) {
-        const auto st = c.ctl.ram().state();
-        IconItem(Icon::Memory, 18 * S(), st == RamOutput::State::Active ? Hex(kAccent) : Hex(kMuted));
+        using R = HardwareHelper::RamState;
+        const auto st = c.ctl.hardware().ramState();
+        IconItem(Icon::Memory, 18 * S(), st == R::Active ? Hex(kAccent) : Hex(kMuted));
         ImGui::SameLine();
         ImGui::TextUnformatted("RAM");
         ImGui::SameLine();
-        Muted("%s", st == RamOutput::State::Active     ? "HyperX / Kingston FURY"
-                    : st == RamOutput::State::Problem  ? "can't light it (Devices)"
-                    : st == RamOutput::State::NotSetUp ? "not set up (Devices)"
-                    : st == RamOutput::State::Released ? "Armoury Crate's lighting"
-                                                       : "starting...");
+        Muted("%s", st == R::Active     ? "HyperX / Kingston FURY"
+                    : st == R::Problem  ? "can't light it (Devices)"
+                    : st == R::Released ? "Armoury Crate's lighting"
+                    : c.ctl.hardware().state() == HardwareHelper::State::NotSetUp ? "needs hardware access (Devices)"
+                                                                                  : "starting...");
     }
     if (c.ctl.prefs().azothKeyboard) {
         const auto st = c.ctl.azoth().state();
@@ -811,10 +808,12 @@ void WDevices(DashCtx& c) {
 
 void EnsureIntegrations(Controller& ctl, Integrations& in, UiState& ui) {
     const auto& gs = ctl.gameSense();
-    if (!ui.integrationsLoaded || in.TakeFinished()) {
+    const bool finished = in.TakeFinished();
+    if (!ui.integrationsLoaded || finished) {
         in.Refresh(gs.IsRunning(), gs.Port(), gs.CorePropsWritten(), gs.FoundSteelSeriesGG(), gs.ForwardPort(),
                    gs.ForwardOk());
         ui.integrationsLoaded = true;
+        if (finished) ctl.hardware().Retry();  // e.g. the hardware helper was just set up
     }
 }
 
@@ -1616,15 +1615,83 @@ void PeripheralsCard(Controller& ctl, const Fonts& f) {
     EndCard();
 }
 
-void MemoryCard(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
+// Result of the last Set up / Remove of the hardware helper, under its button.
+void HelperMessage(Integrations& in) {
+    if (in.LastId() != "helper") return;
+    const std::string msg = in.LastMessage();
+    if (msg.empty()) return;
+    const bool bad = msg.rfind("Failed", 0) == 0 || msg.rfind("Could not", 0) == 0 || msg.rfind("Cancelled", 0) == 0;
+    ImGui::PushStyleColor(ImGuiCol_Text, V4(in.Busy() ? kAmber : bad ? kRed : kGreen));
+    ImGui::TextWrapped("%s", msg.c_str());
+    ImGui::PopStyleColor();
+}
+
+const Integration* HelperSetup(Controller& ctl, Integrations& in, UiState& ui) {
     EnsureIntegrations(ctl, in, ui);
-    const Integration* setup = nullptr;
     for (const auto& it : in.list())
-        if (it.id == "ram") setup = &it;
+        if (it.id == "helper") return &it;
+    return nullptr;
+}
+
+void SetUpHelperButton(Integrations& in, const Integration* setup) {
+    ImGui::BeginDisabled(in.Busy());
+    const bool update = setup && setup->state == IntegrationState::Problem;
+    if (PrimaryButton(in.Busy() ? "Setting up..." : update ? "Update (administrator, once)" : "Set up (administrator, once)"))
+        in.Install("helper");
+    ImGui::EndDisabled();
+}
+
+void HardwareCard(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
+    const Integration* setup = HelperSetup(ctl, in, ui);
     const bool setUp = setup && setup->state == IntegrationState::Active;
-    const auto& ram = ctl.ram();
-    using R = RamOutput::State;
-    const R st = ram.state();
+    const auto& hw = ctl.hardware();
+    using H = HardwareHelper::State;
+    const H st = hw.state();
+
+    BeginCard("hardware");
+    IconItem(Icon::Gear, 18 * S(), Hex(setUp && st == H::Running ? kAccent : kMuted));
+    ImGui::SameLine(0, 10 * S());
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted("Hardware access");
+    ImGui::PopFont();
+    ImGui::SameLine(0, 12 * S());
+    if (!setUp) Pill(setup && setup->state == IntegrationState::Problem ? "Update needed" : "Not set up", kAmber);
+    else if (st == H::Running) Pill("Ready", kGreen);
+    else if (st == H::NoPawnIO) Pill("Driver missing", kRed);
+    else Pill("Starting...", kAmber);
+    Muted("RAM lighting, fan speeds and CPU / board temperatures need access Windows only gives to administrators. "
+          "One click sets it up: LumaBridge installs PawnIO (a small signed driver made for this, included with "
+          "LumaBridge) and its own helper, which LumaBridge then starts by itself. Nothing else to download.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    if (setUp && st == H::Running) {
+        const auto sensors = hw.Sensors();
+        int fans = 0, temps = 0;
+        for (const auto& x : sensors) (x.type == sensors::SensorType::Fan ? fans : temps)++;
+        const std::string chip = hw.chip();
+        Muted("Reading %d temperature(s) and %d fan(s)%s.", temps, fans,
+              chip.empty() ? "" : (" from the board's " + chip).c_str());
+    } else if (setUp && st == H::NoPawnIO) {
+        Muted("The PawnIO driver isn't installed any more. Set up again to reinstall it.");
+    }
+    if (!setUp || st == H::NoPawnIO) {
+        SetUpHelperButton(in, setup);
+    } else {
+        ImGui::BeginDisabled(in.Busy());
+        if (ImGui::SmallButton("Set up again")) in.Install("helper");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Remove")) in.Remove("helper");
+        ImGui::EndDisabled();
+    }
+    HelperMessage(in);
+    EndCard();
+}
+
+void MemoryCard(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
+    const Integration* setup = HelperSetup(ctl, in, ui);
+    const bool setUp = setup && setup->state == IntegrationState::Active;
+    const auto& hw = ctl.hardware();
+    using R = HardwareHelper::RamState;
+    const R st = hw.ramState();
     const bool on = ctl.prefs().ramLighting;
 
     BeginCard("memory");
@@ -1635,65 +1702,42 @@ void MemoryCard(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
     ImGui::PopFont();
     ImGui::SameLine(0, 12 * S());
     if (!on) Pill("Off", kMuted);
+    else if (!setUp) Pill("Needs hardware access", kAmber);
     else if (st == R::Active) {
         char b[48];
-        snprintf(b, sizeof b, "Following LumaBridge (%d stick%s)", ram.sticks(), ram.sticks() == 1 ? "" : "s");
+        snprintf(b, sizeof b, "Following LumaBridge (%d stick%s)", hw.sticks(), hw.sticks() == 1 ? "" : "s");
         Pill(b, kGreen);
     } else if (st == R::Problem) Pill("Can't light the RAM", kRed);
-    else if (st == R::NotSetUp || !setUp) Pill("Not set up", kAmber);
     else if (st == R::Released) Pill("Armoury Crate's lighting", kMuted);
     else Pill("Starting...", kAmber);
     ImGui::SameLine();
     Pill("Experimental", kAccent);
-    Muted("HyperX / Kingston FURY RGB DDR4 sticks show LumaBridge's effect across their five LEDs. RAM lighting "
-          "sits on the motherboard's SMBus, which only a helper with administrator rights can reach (through the "
-          "signed PawnIO driver, AMD chipsets). LumaBridge only ever writes the sticks' lighting registers, never "
-          "their configuration chip. If the sticks flicker, Armoury Crate is lighting them too: switch the RAM "
-          "off in Armoury Crate.");
-    if (on && st == R::Problem) {
+    Muted("HyperX / Kingston FURY RGB DDR4 sticks show LumaBridge's effect across their five LEDs (AMD chipsets). "
+          "LumaBridge only ever writes the sticks' lighting registers, never their configuration chip. If the sticks "
+          "flicker, Armoury Crate is lighting them too: switch the RAM off in Armoury Crate.");
+    if (on && setUp && st == R::Problem) {
         ImGui::PushStyleColor(ImGuiCol_Text, V4(kRed));
-        ImGui::TextWrapped("%s", ram.problem().c_str());
+        ImGui::TextWrapped("%s", hw.ramProblem().c_str());
         ImGui::PopStyleColor();
     }
     ImGui::Dummy(ImVec2(0, 2 * S()));
-    if (!setUp) {
-        ImGui::TextUnformatted("Set up once:");
-        Muted("1. Install the PawnIO driver.");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("pawnio.eu"))
-            ShellExecuteW(nullptr, L"open", L"https://pawnio.eu", nullptr, nullptr, SW_SHOWNORMAL);
-        Muted("2. Download SmbusPIIX4.bin from the PawnIO.Modules releases and put it next to LumaBridge.exe.");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Releases"))
-            ShellExecuteW(nullptr, L"open", L"https://github.com/namazso/PawnIO.Modules/releases", nullptr, nullptr,
-                          SW_SHOWNORMAL);
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Open LumaBridge's folder"))
-            ShellExecuteW(nullptr, L"open", AppDirectory().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        Muted("3. Set up the helper (asks for administrator approval once).");
-        ImGui::BeginDisabled(in.Busy());
-        if (PrimaryButton(setup && setup->state == IntegrationState::Problem ? "Update the helper" : "Set up the helper"))
-            in.Install("ram");
-        ImGui::EndDisabled();
-        ImGui::Dummy(ImVec2(0, 2 * S()));
+    ImGui::TextUnformatted("When LumaBridge lets go (switched off, Armoury Crate's turn, exit)");
+    static const char* kRelease[] = {"Their own rainbow", "Off", "Keep the last color"};
+    int release = std::clamp(ctl.prefs().ramRelease, 0, 2);
+    if (Segmented("ramrelease", &release, kRelease, 3, std::min(520 * S(), ImGui::GetContentRegionAvail().x))) {
+        ctl.prefs().ramRelease = release;
+        ctl.Changed();
     }
     bool enabled = on;
-    if (Toggle("Light the RAM", &enabled)) ctl.SetRamEnabled(enabled);
-    if (setUp) {
+    if (Toggle("Light the RAM", &enabled)) {
+        ctl.SetRamEnabled(enabled);
+        if (enabled && !setUp && !in.Busy()) in.Install("helper");  // one click: switching it on sets it up
+    }
+    if (on && !setUp) {
         ImGui::SameLine();
-        ImGui::BeginDisabled(in.Busy());
-        if (ImGui::SmallButton("Set up again")) in.Install("ram");
-        ImGui::EndDisabled();
+        SetUpHelperButton(in, setup);
     }
-    if (in.LastId() == "ram") {
-        const std::string msg = in.LastMessage();
-        if (!msg.empty()) {
-            const bool bad = msg.rfind("Failed", 0) == 0 || msg.rfind("Could not", 0) == 0 || msg.rfind("Cancelled", 0) == 0;
-            ImGui::PushStyleColor(ImGuiCol_Text, V4(in.Busy() ? kAmber : bad ? kRed : kGreen));
-            ImGui::TextWrapped("%s", msg.c_str());
-            ImGui::PopStyleColor();
-        }
-    }
+    HelperMessage(in);
     EndCard();
 }
 
@@ -1768,6 +1812,7 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
     }
     EndCard();
 
+    HardwareCard(ctl, in, ui, f);
     PeripheralsCard(ctl, f);
     MemoryCard(ctl, in, ui, f);
     FansCard(ctl, f);
@@ -2237,11 +2282,7 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
 void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
     const auto& gs = ctl.gameSense();
     in.SetOwner(hwnd);
-    if (!ui.integrationsLoaded || in.TakeFinished()) {
-        in.Refresh(gs.IsRunning(), gs.Port(), gs.CorePropsWritten(), gs.FoundSteelSeriesGG(), gs.ForwardPort(),
-                   gs.ForwardOk());
-        ui.integrationsLoaded = true;
-    }
+    EnsureIntegrations(ctl, in, ui);
 
     Muted("LumaBridge answers games as if the vendor's software and devices were installed, then sends "
           "the colors to your Aura devices.");
@@ -2249,7 +2290,7 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
 
     for (const auto& it : in.list()) {
         BeginCard(it.id.c_str());
-        IconItem(it.id == "handback" ? Icon::Lighting : it.id == "ram" ? Icon::Memory : Icon::Plug, 18 * S(), Hex(kAccent));
+        IconItem(it.id == "handback" ? Icon::Lighting : it.id == "helper" ? Icon::Gear : Icon::Plug, 18 * S(), Hex(kAccent));
         ImGui::SameLine(0, 10 * S());
         ImGui::PushFont(f.bold);
         ImGui::TextUnformatted(it.name.c_str());
@@ -2289,7 +2330,7 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
                 std::wstring dir = PickFolder(hwnd, L"Choose the game's folder");
                 if (!dir.empty()) in.Remove("corsair", dir);
             }
-        } else if ((it.id == "handback" || it.id == "ram") && it.state != IntegrationState::NotInstalled) {
+        } else if ((it.id == "handback" || it.id == "helper") && it.state != IntegrationState::NotInstalled) {
             // Setting it up again replaces the task (needed after updates that change it).
             if (it.state == IntegrationState::Problem ? PrimaryButton("Update") : ImGui::Button("Set up again"))
                 in.Install(it.id);
@@ -2300,7 +2341,7 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
         } else if (it.state == IntegrationState::Conflict) {
             if (ImGui::Button("Replace vendor runtime")) in.Install(it.id, L"", true);
         } else {
-            if (PrimaryButton(it.id == "logitech" || it.id == "handback" || it.id == "ram" ? "Set up" : "Install"))
+            if (PrimaryButton(it.id == "logitech" || it.id == "handback" || it.id == "helper" ? "Set up" : "Install"))
                 in.Install(it.id);
         }
         ImGui::EndDisabled();
@@ -2553,6 +2594,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
 
+    integrations.SetOwner(hwnd);  // administrator prompts open in front of LumaBridge, from any page
     const float sidebarW = 210 * S();
     Sidebar(ctl, ui, f, sidebarW);
     ImGui::SameLine(0, 0);
@@ -2565,7 +2607,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
     const char* subtitles[] = {"Your system and lighting at a glance",
                                "Auto follows your games; Manual is your own look",
                                "Every game on this PC, and how it lights up",
-                               "Aura, fans, keyboard and mouse",
+                               "Aura, fans, RAM, keyboard and mouse",
                                "Answer games as the lighting software they look for",
                                "Calibration, startup and more"};
     ImGui::BeginGroup();

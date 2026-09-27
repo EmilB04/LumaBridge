@@ -66,6 +66,8 @@ struct Prefs {
     bool azothKeyboard = false;
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper (experimental, opt-in).
     bool ramLighting = false;
+    // What the RAM shows when LumaBridge lets go of it: 0 its own rainbow, 1 off, 2 the last color.
+    int ramRelease = 0;
     static constexpr size_t kMaxRecent = 8;
 };
 

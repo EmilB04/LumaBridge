@@ -3,9 +3,9 @@
 //   - names: board, BIOS, CPU, memory modules (SMBIOS), GPUs (DXGI);
 //   - CPU load and memory use (Windows);
 //   - NVIDIA GPUs: temperature, load, fan, VRAM, power (NVML, shipped with the driver);
-//   - everything else - fan speeds, CPU / board temperatures - from LibreHardwareMonitor's
-//     web server when it's running (reading those sensors needs a kernel driver, which
-//     LumaBridge deliberately doesn't install).
+//   - fan speeds, CPU / board temperatures: from LumaBridge's hardware helper (through the
+//     bundled PawnIO driver, once set up on the Devices page), else from LibreHardwareMonitor's
+//     web server when it's running.
 #pragma once
 
 #include <windows.h>
@@ -37,7 +37,8 @@ struct SystemSnapshot {
     uint64_t memTotal = 0, memUsed = 0;
     std::vector<GpuStat> gpus;
     bool nvml = false;           // NVIDIA's library is available
-    bool lhmConnected = false;   // LibreHardwareMonitor answered
+    bool lhmConnected = false;   // sensors available (the helper's or LibreHardwareMonitor's)
+    std::string sensorSource;    // "LumaBridge (Nuvoton NCT6798D)", "LibreHardwareMonitor"
     std::vector<Sensor> lhm;
     uint64_t updatedAt = 0;
 };
@@ -50,6 +51,8 @@ public:
     // The latest data; also keeps the poller awake for a few seconds.
     SystemSnapshot Snapshot();
     int lhmPort() const { return lhmPort_; }
+    // Sensors from the hardware helper; preferred over LibreHardwareMonitor's while there are any.
+    void SetBuiltInSensors(std::vector<Sensor> sensors, std::string chip);
 
 private:
     void Run();
@@ -60,6 +63,8 @@ private:
     int lhmPort_ = 8085;
     std::mutex mutex_;
     SystemSnapshot snap_;
+    std::vector<Sensor> builtIn_;
+    std::string builtInChip_;
 };
 
 }  // namespace luma::app::sensors

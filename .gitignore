@@ -8,3 +8,5 @@ LumaBridge.ini
 # SDK headers/binaries are not redistributable
 /third_party/*
 !/third_party/README.md
+# ...except PawnIO, which may be redistributed unmodified (third_party/pawnio/README.md)
+!/third_party/pawnio/

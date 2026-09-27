@@ -27,6 +27,7 @@
 #include "friendly_names.h"
 #include "azoth_protocol.h"
 #include "hyperx_ram.h"
+#include "hw_sensors.h"
 #include "lightfx_state.h"
 
 using namespace luma;
@@ -797,9 +798,31 @@ static void TestHyperXRam() {
     // Everything else stays off limits.
     int allowed = 0;
     for (int r = 0; r < 256; ++r) allowed += IsAllowed(static_cast<uint8_t>(r));
-    CHECK(allowed == 2 + kSlots * kLedsPerStick * 4);
-    CHECK(!IsAllowed(0x00) && !IsAllowed(0x20) && !IsAllowed(0xE3) && !IsAllowed(0xE4) && !IsAllowed(0xFF));
+    CHECK(allowed == 5 + kSlots * kLedsPerStick * 4);
+    CHECK(!IsAllowed(0x00) && !IsAllowed(0x20) && !IsAllowed(0xE4) && !IsAllowed(0xE5 + 1) && !IsAllowed(0xFF));
+    const auto rainbow = OwnRainbow();  // letting go: the sticks' own rainbow
+    CHECK(rainbow.size() == 6 && rainbow[1].reg == 0xE3 && rainbow[1].value == 0x05);
+    CHECK(rainbow[2].value == 0x07 && rainbow[3].value == 0xD0 && rainbow.back().value == 0x03);
+    for (const auto& x : rainbow) CHECK(IsAllowed(x.reg));
     CHECK(Frame(0, colors).size() == 3);  // no sticks: nothing but the update / apply
+}
+
+static void TestHwSensors() {
+    using namespace luma::app::hw;
+    // Tctl: 0x2D0 eighths = 90.0 C; with range select, 49 C lower.
+    CHECK(std::fabs(TctlCelsius(0x2D0u << 21) - 90.0) < 1e-9);
+    CHECK(std::fabs(TctlCelsius((0x2D0u << 21) | 0x80000u) - 41.0) < 1e-9);
+    CHECK(std::fabs(TctlCelsius((0x2D0u << 21) | 0x30000u) - 41.0) < 1e-9);
+    CHECK(std::fabs(TctlCelsius((0x2D0u << 21) | 0x10000u) - 90.0) < 1e-9);  // one TJ_SEL bit: no shift
+    // Fans: count 1350 = 1000 RPM; the idle / missing readings are 0.
+    CHECK(std::fabs(FanRpm(1350 >> 5, 1350 & 0x1F) - 1000.0) < 1e-9);
+    CHECK(FanRpm(0xFF, 0x1F) == 0);   // max count: stopped
+    CHECK(FanRpm(0, 0x10) == 0);      // below the minimum count
+    double t = 0;
+    CHECK(TemperatureValid(42, &t) && t == 42);
+    CHECK(!TemperatureValid(0x7F, &t) && !TemperatureValid(0x80, &t));  // 127 / -128: no sensor
+    CHECK(std::string(NuvotonChip(0xD4, 0x2B)) == "NCT6798D");
+    CHECK(NuvotonChip(0xD4, 0x99) == nullptr && NuvotonChip(0x87, 0x12) == nullptr);
 }
 
 static void TestIpc() {
@@ -842,6 +865,7 @@ int main() {
     TestFriendlyNames();
     TestAzoth();
     TestHyperXRam();
+    TestHwSensors();
     TestIpc();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

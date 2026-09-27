@@ -180,6 +180,12 @@ uint64_t FileTimeValue(const FILETIME& f) { return (static_cast<uint64_t>(f.dwHi
 
 }  // namespace
 
+void SystemMonitor::SetBuiltInSensors(std::vector<Sensor> sensors, std::string chip) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    builtIn_ = std::move(sensors);
+    builtInChip_ = std::move(chip);
+}
+
 void SystemMonitor::Start(int lhmPort) {
     if (thread_.joinable()) return;
     lhmPort_ = lhmPort > 0 && lhmPort < 65536 ? lhmPort : 8085;
@@ -254,8 +260,16 @@ void SystemMonitor::Run() {
         }
         s.nvml = haveNvml;
         if (haveNvml) nvml.Read(&s.gpus);
-        // LibreHardwareMonitor: every second while it answers, every 10 s while it doesn't.
-        if (http && now >= nextLhm) {
+        std::vector<Sensor> builtIn;
+        std::string chip;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            builtIn = builtIn_;
+            chip = builtInChip_;
+        }
+        // LibreHardwareMonitor (only while the helper has no sensors): every second while it
+        // answers, every 10 s while it doesn't.
+        if (http && builtIn.empty() && now >= nextLhm) {
             const bool was = lhmOk;
             lhmOk = ReadLhm(http, lhmPort_, &lhm);
             if (!lhmOk) lhm.clear();
@@ -263,8 +277,15 @@ void SystemMonitor::Run() {
                 LUMA_INFO("dashboard: LibreHardwareMonitor %s on port %d", lhmOk ? "connected" : "not answering", lhmPort_);
             nextLhm = now + (lhmOk ? 1000 : 10000);
         }
-        s.lhmConnected = lhmOk;
-        s.lhm = lhm;
+        if (!builtIn.empty()) {
+            s.lhmConnected = true;
+            s.lhm = std::move(builtIn);
+            s.sensorSource = chip.empty() ? "LumaBridge" : "LumaBridge (Nuvoton " + chip + ")";
+        } else {
+            s.lhmConnected = lhmOk;
+            s.lhm = lhmOk ? lhm : std::vector<Sensor>();
+            s.sensorSource = lhmOk ? "LibreHardwareMonitor" : "";
+        }
         s.ready = true;
         s.updatedAt = now;
         std::lock_guard<std::mutex> lock(mutex_);

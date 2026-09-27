@@ -62,27 +62,60 @@ sticks, 5 LEDs each). The protocol is the one OpenRGB documents
 | `base + 0x10 + 3*led` | Brightness of an LED, 0-100 (LumaBridge sends 100 and dims the color itself) |
 | `E1 = 02`, `E1 = 03` | Apply |
 
-**How it runs.** Only administrators can reach the SMBus, through the signed
-[PawnIO](https://pawnio.eu) driver and its `SmbusPIIX4` module (AMD chipsets). So the app
-(running as you) doesn't touch it; `LumaBridge-RAM.exe` does, as a scheduled task that runs
-as SYSTEM. `scripts/Install-RamTask.ps1` sets it up once (Devices → Memory → Set up the
-helper): it copies the helper and `SmbusPIIX4.bin` into `%ProgramFiles%\LumaBridge` (so
-nobody without administrator rights can swap the file the task runs), registers the task and
-lets your account start it. The app starts the helper when it lights the RAM, renders its
-effect across each stick's 5 LEDs and passes the colors through shared memory
-(`Global\LumaBridgeRam`). The helper exits when the app exits.
+**How it runs.** Only administrators can reach the SMBus. LumaBridge reaches it through
+[PawnIO](https://pawnio.eu), a small signed driver made for this, which runs only small
+signed modules (here `SmbusPIIX4`, AMD chipsets). PawnIO's installer and modules come with
+LumaBridge, unmodified ([third_party/pawnio](../third_party/pawnio/README.md)). The app
+(running as you) doesn't touch the hardware. **`LumaBridge-Helper.exe`** does, as a scheduled
+task that runs as SYSTEM. It talks to the PawnIO driver directly through its device interface,
+so it needs no PawnIO library.
+
+`scripts/Install-Helper.ps1` sets everything up in one step: Devices → **Hardware access**
+→ Set up, with one administrator prompt. Switching on **Light the RAM** also runs it.
+1. It installs PawnIO silently (`PawnIO_setup.exe -install -silent`) unless PawnIO 2 or
+   later is already installed.
+2. It copies the helper and its modules into `%ProgramFiles%\LumaBridge`, so nobody without
+   administrator rights can swap the file the task runs.
+3. It registers the task and lets your account start it.
+
+The app starts the helper whenever it runs. It renders its effect across each stick's 5 LEDs
+and passes the colors through shared memory (`Global\LumaBridgeHelper`). The helper exits
+when the app exits.
 
 **Safety.**
 - Finding the sticks only reads: "receive byte" from `0x27` and from the SPD chips
   `0x50`-`0x53`, and the memory-type byte (DDR4 = `0x0C`) of each SPD. The firmware's
-  memory list must name Kingston / HyperX.
+  memory list must name Kingston / HyperX. None of this happens until RAM lighting is
+  switched on.
 - Writes go only to `0x27`, and only to the registers above: every write passes
   `ram::IsAllowed()` (tested), whatever the app asks. The SPD chips are never written.
 - Each frame holds the system-wide SMBus lock (`Access_SMBUS.HTP.Method`) that Armoury
   Crate, HWiNFO and others use.
-- After 5 failed frames in a row the helper stops. Log: `%ProgramData%\LumaBridge\ram.log`.
+- After 5 failed frames in a row the helper stops. Log: `%ProgramData%\LumaBridge\helper.log`.
 
 **Not yet:** Intel chipsets (PawnIO's `SmbusI801` module), Kingston FURY DDR5 (a different
 controller) and handing the RAM back to Armoury Crate (the sticks keep the last color until
 Armoury Crate sets them again or the PC restarts). If the sticks flicker, Armoury Crate is
 lighting them too: switch the RAM off in Armoury Crate.
+
+## Sensors without LibreHardwareMonitor
+
+The same helper reads the dashboard's fan speeds and CPU / board temperatures
+([`src/app/peripherals/hw_sensors.h`](../src/app/peripherals/hw_sensors.h), tested):
+
+- **CPU temperature (AMD Ryzen):** `THM_TCON_CUR_TMP` (SMN `0x59800`) through PawnIO's
+  `AMDFamily17` module. Bits 31:21 are the temperature in 1/8 °C, and 49 °C is subtracted
+  when the range-select bit is set. That's Tctl, the value Ryzen Master and LibreHardwareMonitor
+  show.
+- **Board (Nuvoton NCT6796D / 6797D / 6798D / 6799D, on most ASUS AMD boards):** found on
+  the Super I/O ports `0x2E` / `0x4E` through PawnIO's `LpcIO` module. It enters
+  configuration mode, reads the chip id, and reads the hardware monitor's base address
+  (logical device `0x0B`). The chip's I/O space lock is cleared, as the Linux driver does.
+  Then the helper only reads the banked registers:
+  - fan counts at `0x4B0`-`0x4BA`, `0x4CC`, converted as RPM = 1 350 000 / count;
+  - temperatures: `0x490` Motherboard (SYSTIN) and `0x491` CPU Socket (CPUTIN).
+
+  Fan names follow the usual ASUS wiring of these chips (Chassis 1, CPU, Chassis 2 and 3,
+  CPU optional, AIO pump); check them against your BIOS.
+- Each read holds the shared ISA-bus or PCI lock. Other monitoring chips aren't supported yet;
+  LibreHardwareMonitor's web server still works as a fallback.

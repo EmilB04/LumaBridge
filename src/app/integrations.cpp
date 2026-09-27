@@ -2,13 +2,14 @@
 
 #include "armoury_crate.h"
 #include "config.h"
-#include "ram_output.h"
+#include "hardware_helper.h"
 
 #include <objbase.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 
+#include <algorithm>
 #include <cstring>
 #include <iterator>
 
@@ -232,15 +233,16 @@ void Integrations::Refresh(bool gsRunning, int gsPort, bool gsOk, bool foundGG, 
     }
 
     {
-        Integration it{"ram", "RAM lighting helper",
-                       "Lets LumaBridge light HyperX / Kingston FURY RGB memory (experimental). Needs the PawnIO "
-                       "driver and its SmbusPIIX4.bin module (AMD chipsets). Switch it on under Devices > Memory.",
+        Integration it{"helper", "Hardware access",
+                       "Lets LumaBridge light HyperX / Kingston FURY RGB memory and read fan speeds and CPU / board "
+                       "temperatures itself (no LibreHardwareMonitor). Installs the bundled, signed PawnIO driver "
+                       "and LumaBridge's helper.",
                        IntegrationState::NotInstalled, ""};
-        if (RamTaskInstalled()) {
+        if (HelperTaskInstalled()) {
             DWORD version = 0, size = sizeof version;
-            RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\LumaBridge", L"RamTaskVersion", RRF_RT_REG_DWORD, nullptr,
+            RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\LumaBridge", L"HelperTaskVersion", RRF_RT_REG_DWORD, nullptr,
                          &version, &size);
-            if (version >= kRamTaskVersion) {
+            if (version >= kHelperTaskVersion) {
                 it.state = IntegrationState::Active;
                 it.detail = "Set up";
             } else {
@@ -248,7 +250,7 @@ void Integrations::Refresh(bool gsRunning, int gsPort, bool gsOk, bool foundGG, 
                 it.detail = "Set up by an older LumaBridge - click Update (administrator, once)";
             }
         } else {
-            it.detail = "Needs administrator approval once, PawnIO (pawnio.eu) and SmbusPIIX4.bin next to LumaBridge.exe.";
+            it.detail = "One click, one administrator approval. Everything it needs comes with LumaBridge.";
         }
         items_.push_back(it);
     }
@@ -262,8 +264,8 @@ void Integrations::Install(const std::string& id, const std::wstring& gameDir, b
         Run(id, "Logitech LIGHTSYNC set up", L"Install-LogiLedProxy.ps1", L"", false);
     } else if (id == "handback") {
         Run(id, "Silent hand-back set up", L"Install-HandbackTask.ps1", L"", true);
-    } else if (id == "ram") {
-        Run(id, "RAM lighting set up", L"Install-RamTask.ps1", L"", true);
+    } else if (id == "helper") {
+        Run(id, "Hardware access set up", L"Install-Helper.ps1", L"", true);
     } else if (id == "gamesense") {
         Run(id, "GameSense folder repaired", L"Install-SdkEmulators.ps1", L"-Sdk GameSense", true);
     } else {
@@ -285,8 +287,8 @@ void Integrations::Remove(const std::string& id, const std::wstring& gameDir) {
         Run(id, "Silent hand-back removed", L"Install-HandbackTask.ps1", L"-Uninstall", true);
         return;
     }
-    if (id == "ram") {
-        Run(id, "RAM lighting removed", L"Install-RamTask.ps1", L"-Uninstall", true);
+    if (id == "helper") {
+        Run(id, "Hardware access removed", L"Install-Helper.ps1", L"-Uninstall", true);
         return;
     }
     std::wstring sdk = id == "chroma" ? L"Chroma" : id == "lightfx" ? L"LightFX" : L"Corsair";
@@ -358,6 +360,32 @@ void Integrations::WriteGameFileElevated(const std::string& id, const std::strin
     Run(id, what, L"Write-GameFile.ps1", args, true);
 }
 
+namespace {
+
+// The message of the last "ERROR: " line in setup.log (UTF-8, possibly with a BOM per line).
+std::string LastSetupError(const std::wstring& path) {
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return "";
+    LARGE_INTEGER size{};
+    GetFileSizeEx(f, &size);
+    const LONGLONG tail = std::min<LONGLONG>(size.QuadPart, 16384);
+    LARGE_INTEGER at;
+    at.QuadPart = size.QuadPart - tail;
+    SetFilePointerEx(f, at, nullptr, FILE_BEGIN);
+    std::string text(static_cast<size_t>(tail), '\0');
+    DWORD read = 0;
+    ReadFile(f, text.data(), static_cast<DWORD>(text.size()), &read, nullptr);
+    CloseHandle(f);
+    text.resize(read);
+    const size_t pos = text.rfind("ERROR: ");
+    if (pos == std::string::npos) return "";
+    std::string line = text.substr(pos + 7);
+    line = line.substr(0, line.find_first_of("\r\n"));
+    return line.size() > 300 ? line.substr(0, 300) + "..." : line;
+}
+
+}  // namespace
+
 void Integrations::Run(const std::string& id, const std::string& what, const std::wstring& script,
                        const std::wstring& args, bool elevated) {
     if (busy_) return;
@@ -376,7 +404,8 @@ void Integrations::Run(const std::string& id, const std::string& what, const std
         L"'==== ' + (Get-Date -Format s) + ' ' + " + Quote(script + L" " + args) + L" | Out-File -Append -Encoding utf8 " + Quote(log) + L"; "
         L"try { & " + Quote(appDir_ + L"\\scripts\\" + script) + L" " + args +
         L" *>&1 | Out-File -Append -Encoding utf8 " + Quote(log) + L"; exit $LASTEXITCODE } "
-        L"catch { $_ | Out-String | Out-File -Append -Encoding utf8 " + Quote(log) + L"; exit 1 }";
+        L"catch { $_ | Out-String | Out-File -Append -Encoding utf8 " + Quote(log) + L"; "
+        L"'ERROR: ' + $_.Exception.Message | Out-File -Append -Encoding utf8 " + Quote(log) + L"; exit 1 }";
     std::wstring params = L"-NoProfile -ExecutionPolicy Bypass -EncodedCommand " + Base64Utf16(command);
     const HWND owner = owner_;
     worker_ = std::thread([this, what, params, elevated, owner] {
@@ -398,8 +427,14 @@ void Integrations::Run(const std::string& id, const std::string& what, const std
             DWORD code = 1;
             GetExitCodeProcess(sei.hProcess, &code);
             CloseHandle(sei.hProcess);
-            msg = code == 0 ? "Done: " + what
-                            : "Failed (exit code " + std::to_string(code) + ") - details in setup.log (Settings > Open log folder)";
+            if (code == 0) {
+                msg = "Done: " + what;
+            } else {
+                // The script's own reason (its last "ERROR: " line in setup.log), if it gave one.
+                const std::string reason = LastSetupError(LocalAppDataDir() + L"\\setup.log");
+                msg = "Failed (exit code " + std::to_string(code) + ")" +
+                      (reason.empty() ? " - details in setup.log (Settings > Open log folder)" : ": " + reason);
+            }
         }
         CoUninitialize();
         {

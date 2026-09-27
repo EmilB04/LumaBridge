@@ -29,7 +29,7 @@
 #include "system_monitor.h"
 #include "logitech_output.h"
 #include "azoth_output.h"
-#include "ram_output.h"
+#include "hardware_helper.h"
 #include "gamesense_server.h"
 #include "ipc.h"
 #include "source_tracker.h"
@@ -131,7 +131,9 @@ public:
     const AzothOutput& azoth() const { return azoth_; }
     void SetAzothEnabled(bool on);
     // HyperX / Kingston FURY RGB memory, through the elevated RAM helper.
-    const RamOutput& ram() const { return ram_; }
+    // The hardware helper: RAM lighting and the built-in sensors.
+    HardwareHelper& hardware() { return hardware_; }
+    const HardwareHelper& hardware() const { return hardware_; }
     void SetRamEnabled(bool on);
 
     // Dashboard data (CPU, GPU, memory, sensors, component names).
@@ -183,7 +185,8 @@ private:
     sensors::SystemMonitor monitor_;
     LogitechOutput logitech_;
     AzothOutput azoth_;
-    RamOutput ram_;
+    HardwareHelper hardware_;
+    uint64_t sensorsPushedAt_ = 0;
     std::string logitechNote_;
     void UpdateLogitech();
     bool feedActive_[3] = {};
