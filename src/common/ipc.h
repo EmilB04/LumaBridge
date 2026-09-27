@@ -3,7 +3,8 @@
 // When the LumaBridge app is running it is the only process that talks to Aura: the SDK
 // front-ends inside games (LogiLed proxy, Chroma/Corsair/LightFX emulators) send it their
 // current color with WM_COPYDATA instead, so manual colors, several games and GameSense
-// never fight over Aura. Without the app, each front-end drives Aura itself.
+// never fight over Aura. Without the app, front-ends leave Aura alone unless
+// [Aura] DirectFromGames=1 (see Config::auraDirectFromGames).
 //
 // Frames are small fixed-size POD structs; the layout is versioned so an older DLL left in a
 // game folder can't confuse a newer app.

@@ -228,6 +228,7 @@ void AuraMirror::Run() {
     uint32_t lastPushed = 0;
     uint64_t appliedSettings = ~0ull;
     bool wasRouted = false;
+    bool toldNoApp = false;
     HWND app = nullptr;
 
     auto publish = [&] {
@@ -272,6 +273,17 @@ void AuraMirror::Run() {
                 lastPushAt = GetTickCount64();
             }
             PumpingWait(wake_, animating ? static_cast<DWORD>(framePeriodMs) : kIdleWaitMs);
+            continue;
+        }
+        if (routeToApp_ && !cfg_.auraDirectFromGames) {
+            // Game DLL without the app: stay away from Aura (see Config::auraDirectFromGames).
+            if (wasRouted || !toldNoApp) {
+                LUMA_INFO("Aura mirror: LumaBridge app not running - start it to light Aura "
+                          "(or set [Aura] DirectFromGames=1)");
+                toldNoApp = true;
+                wasRouted = false;
+            }
+            PumpingWait(wake_, kIdleWaitMs);
             continue;
         }
         if (wasRouted) {

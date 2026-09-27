@@ -70,4 +70,7 @@ from official Logitech documentation. Check them in `regedit` on your machine.
   call; the Aura worker starts in `LogiLedInit`.
 - Aura writes run on a dedicated worker thread (its own single-threaded COM apartment), coalesced to ≤ `MaxUpdateHz`.
   The game thread only takes a mutex and stores the new color.
-- If G HUB isn't running or installed, the proxy still returns success and drives Aura alone.
+- If G HUB isn't running or installed, the proxy still returns success and lights Aura
+  through the app on its own.
+- Without the LumaBridge app the proxy only passes calls through to G HUB. It never loads
+  the Aura SDK inside the game unless `[Aura] DirectFromGames=1` is set.

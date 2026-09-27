@@ -34,8 +34,9 @@ Details and limits for each one are in [docs/sdk-emulators.md](docs/sdk-emulator
  game ─HTTP────────────────────────────────────── GameSense ──────┘
 ```
 
-When the app isn't running, each DLL drives Aura by itself, so game lighting still works
-without the UI.
+Game lighting needs the app running. The DLLs inside games never load ASUS's Aura library
+themselves by default, because a crash in it would take the game down with it
+(`[Aura] DirectFromGames=1` allows it).
 
 ## Status
 

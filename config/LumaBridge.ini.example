@@ -23,6 +23,9 @@ DeviceTypes=all
 ExcludeNames=
 ; Devices switched off on the app's Devices page (exact names, '|' separated).
 DisabledDevices=
+; Let game DLLs load the Aura SDK themselves when the LumaBridge app isn't running.
+; Off by default: a crash inside ASUS's Aura library would take the game down with it.
+DirectFromGames=0
 ; Hand lighting back to Armoury Crate when the game shuts the SDK down.
 ReleaseControlOnShutdown=1
 

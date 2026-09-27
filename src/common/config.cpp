@@ -150,6 +150,7 @@ Config LoadConfig(const std::wstring& moduleDir) {
         if (ParseAuraDeviceType(t, &type)) cfg.auraDeviceTypes.push_back(type);
     }
     cfg.auraExcludeNames = SplitList(ReadString(ini, L"Aura", L"ExcludeNames", L""));
+    cfg.auraDirectFromGames = ReadBool(ini, L"Aura", L"DirectFromGames", cfg.auraDirectFromGames);
     cfg.auraDisabledDevices = SplitList(ReadString(ini, L"Aura", L"DisabledDevices", L""), L'|');
     cfg.releaseControlOnShutdown =
         ReadBool(ini, L"Aura", L"ReleaseControlOnShutdown", cfg.releaseControlOnShutdown);

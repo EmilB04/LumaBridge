@@ -15,8 +15,10 @@ sends the colors to Aura.
 All of them feed the same place. While the LumaBridge app runs, the DLLs inside games
 send their colors to the app (`WM_COPYDATA`, [`src/common/ipc.h`](../src/common/ipc.h)).
 The app is then the only thing talking to Aura, and it decides what to show (Auto mode:
-most recently active game; Manual mode: your color). Without the app, each DLL drives Aura
-itself, so everything still works, just without the UI.
+most recently active game; Manual mode: your color). Without the app, the DLLs leave Aura
+alone. ASUS's Aura library runs inside whichever process calls it, and a crash in one of
+its device plug-ins (seen with the Azoth's `AacKbHal_x64.dll`) would kill the game.
+`[Aura] DirectFromGames=1` restores the old stand-alone behaviour.
 
 ## Can a game think an Azoth is a Razer (or Corsair) keyboard?
 

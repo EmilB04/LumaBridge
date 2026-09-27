@@ -23,6 +23,10 @@ struct Config {
     // Case-insensitive substrings; a device whose name contains one is skipped.
     std::vector<std::wstring> auraExcludeNames;
     bool releaseControlOnShutdown = true;
+    // Let game DLLs talk to Aura themselves when the LumaBridge app isn't running. Off by
+    // default: the Aura SDK runs inside the calling process, and if it crashes it takes the
+    // game down with it. With it off, games only light Aura through the app.
+    bool auraDirectFromGames = false;
     // Exact Aura device names switched off in the app ('|' separated in the ini).
     std::vector<std::wstring> auraDisabledDevices;
 
