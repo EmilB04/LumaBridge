@@ -1,8 +1,7 @@
-// ASUS ROG Azoth by cable or through its ROG Omni receiver (see azoth_protocol.h). By cable
-// every key shows its own color (the per-key command, keys in azoth_layout.h); wirelessly the
-// whole keyboard one color, with Armoury Crate's static-color command. Never its save
+// ASUS ROG Azoth by cable or through its ROG Omni receiver (see azoth_protocol.h): every key
+// its own color (the per-key command, keys in azoth_layout.h). Never Armoury Crate's save
 // command, so nothing is written to the keyboard's flash. Opt-in (experimental). Own thread;
-// at most ~25 updates per second, only the keys that changed.
+// only the keys that changed, at most ~25 updates per second by cable and ~10 wirelessly.
 #pragma once
 
 #include <windows.h>
@@ -29,8 +28,6 @@ public:
     State state() const { return state_; }
     // How it was last found (meaningful while Active).
     bool wireless() const { return link_ == azoth::Link::Wireless; }
-    // Whether every key shows its own color (by cable), else the whole keyboard one color.
-    bool perKey() const { return perKey_; }
 
 private:
     void Run();
@@ -39,7 +36,6 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<State> state_{State::Off};
     std::atomic<azoth::Link> link_{azoth::Link::Wired};
-    std::atomic<bool> perKey_{false};
     std::mutex mutex_;
     fx::Params effect_;
     double brightness_ = 1.0;

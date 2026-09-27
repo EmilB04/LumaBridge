@@ -1855,11 +1855,11 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
             DrawBoard(dl, a, it.size, boardLeds, hw, slots, ramOn, LiveParams(ctl, device::kRam), t, LiveLevel(ctl, device::kRam));
         else if (it.device == device::kMouse) DrawMouse(dl, a, it.size, mouseLeds);
         else if (it.device == device::kKeyboard) {
-            // Key by key by cable; one color over the Omni receiver (as the keyboard shows it).
+            // Key by key, as the keyboard shows it.
             const fx::Params* kp = LiveParams(ctl, device::kKeyboard);
             const double level = LiveLevel(ctl, device::kKeyboard);
             std::vector<Rgb> keys;
-            if (kp && !ctl.azoth().wireless()) keys = azoth::RenderKeys(*kp, t, level);
+            if (kp) keys = azoth::RenderKeys(*kp, t, level);
             else keys.assign(azoth::IsoKeys().size(), LiveAt(kp, t, 0, 1, level));
             DrawKeyboard(dl, a, it.size, keys);
         }
@@ -1960,7 +1960,7 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
             ctl.Changed();
         }
         if (ui.lightTarget == device::kKeyboard)
-            Muted("By cable the Azoth shows the effect key by key; through its Omni receiver, one color.");
+            Muted("The Azoth shows the effect key by key, by cable or through its Omni receiver.");
         else if (ui.lightTarget == device::kMouse)
             Muted("A G502 X Plus shows the effect LED by LED; other Logitech mice show one color.");
         else if (!d.own)
@@ -2036,7 +2036,7 @@ DeviceStatus AzothStatus(Controller& ctl) {
     using A_ = AzothOutput::State;
     if (!ctl.prefs().azothKeyboard) return {"Off", kMuted};
     switch (az.state()) {
-    case A_::Active: return {az.wireless() ? "Following LumaBridge (wireless, one color)" : "Following LumaBridge, every key", kGreen};
+    case A_::Active: return {az.wireless() ? "Following LumaBridge, every key (wireless)" : "Following LumaBridge, every key", kGreen};
     case A_::NotFound: return {"Not connected", kAmber};
     default: return {"Armoury Crate's lighting", kMuted};
     }
@@ -2062,9 +2062,9 @@ void LogitechCard(Controller& ctl, const Fonts& f) {
 void AzothCard(Controller& ctl, const Fonts& f) {
     BeginCard("azoth");
     CardTitle(f, "Settings", Icon::Gear);
-    Muted("By cable every key shows LumaBridge's effect on its own, so waves and gradients run across the keyboard. "
-          "Through its ROG Omni receiver the whole keyboard shows one color. LumaBridge never sends Armoury Crate's "
-          "save command, so your saved Armoury Crate lighting stays in the keyboard. When LumaBridge lets go, the "
+    Muted("Every key shows LumaBridge's effect on its own, so waves and gradients run across the keyboard, by cable "
+          "or through its ROG Omni receiver (a little slower there, to spare the battery). LumaBridge never sends "
+          "Armoury Crate's save command, so your saved Armoury Crate lighting stays in the keyboard. When LumaBridge lets go, the "
           "keyboard keeps the last colors until it restarts or Armoury Crate sets it again.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
     bool enabled = ctl.prefs().azothKeyboard;

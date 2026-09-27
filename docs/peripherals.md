@@ -144,9 +144,9 @@ recording the key you press. On an ISO / Nordic Azoth the LED number is **column
 row 0 is the F-row and row 5 the bottom row, columns left to right. 82 keys; the tall Enter
 is 107. The table is [`azoth_layout.h`](../src/app/peripherals/azoth_layout.h).
 
-By cable LumaBridge draws every effect across the keys, sending only the keys that changed,
-up to about 25 times a second. Through the Omni receiver it still sends one color, until the
-per-key command is tested wirelessly.
+LumaBridge draws every effect across the keys, sending only the keys that changed: up to
+about 25 times a second by cable, and about 10 through the Omni receiver (report ID 2, as for
+the effects), to spare the 2.4 GHz link and the battery.
 
 ### Wireless (ROG Omni receiver `0B05:1ACE`)
 

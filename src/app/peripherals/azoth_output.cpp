@@ -17,7 +17,8 @@ namespace luma::app {
 namespace {
 
 constexpr DWORD kFrameMs = 40;           // ~25 updates per second at most (only changed keys are sent)
-constexpr uint64_t kRefreshMs = 5000;    // re-send the same color now and then
+constexpr uint64_t kWirelessFrameMs = 100;  // through the Omni receiver: ~10 updates per second
+constexpr uint64_t kRefreshMs = 5000;    // re-send every key now and then (a keyboard waking up)
 
 // Opens the Azoth's lighting interface for writing: the keyboard's own (0B05:1A83) or the
 // Omni receiver's (0B05:1ACE), usage page 0xFF00 with the link's output report size.
@@ -84,8 +85,7 @@ void AzothOutput::Run() {
     HANDLE dev = INVALID_HANDLE_VALUE;
     azoth::Link link = azoth::Link::Wired;
     uint64_t nextFind = 0, lastSent = 0;
-    Rgb last{1, 2, 3};
-    std::vector<Rgb> lastKeys;  // per key, as last sent (wired)
+    std::vector<Rgb> lastKeys;  // per key, as last sent
     bool loggedMissing = false;
     while (!stop_) {
         Sleep(kFrameMs);
@@ -136,50 +136,33 @@ void AzothOutput::Run() {
             state_ = State::NotFound;
             lastKeys.clear();
         };
-        if (link == azoth::Link::Wired) {
-            // Every key its own color (tested by cable; wireless shows one color for now).
-            const std::vector<Rgb> keys = azoth::RenderKeys(effect, t, brightness);
-            if (keys == lastKeys && now - lastSent < kRefreshMs) {
-                state_ = State::Active;
-                continue;
-            }
-            std::vector<azoth::KeyColor> kc;
-            const auto& layout = azoth::IsoKeys();
-            for (size_t i = 0; i < layout.size(); ++i)
-                if (lastKeys.empty() || keys[i] != lastKeys[i] || now - lastSent >= kRefreshMs)
-                    kc.push_back({static_cast<uint8_t>(layout[i].led), keys[i]});
-            bool ok = true;
-            for (const azoth::Report& r : azoth::KeyColors(kc, link)) {
-                DWORD written = 0;
-                if (azoth::IsSave(r) || !WriteFile(dev, r.data(), static_cast<DWORD>(azoth::ReportSize(link)), &written, nullptr)) {
-                    ok = false;
-                    break;
-                }
-            }
-            if (!ok) {
-                lost();
-                continue;
-            }
-            lastKeys = keys;
-            lastSent = now;
-            perKey_ = true;
+        // Every key its own color, by cable or through the Omni receiver. Over the receiver at
+        // most 10 updates a second, sparing the 2.4 GHz link and the keyboard's battery.
+        if (link == azoth::Link::Wireless && lastSent && now - lastSent < kWirelessFrameMs) continue;
+        const std::vector<Rgb> keys = azoth::RenderKeys(effect, t, brightness);
+        const bool refresh = now - lastSent >= kRefreshMs;  // everything again now and then
+        if (keys == lastKeys && !refresh) {
             state_ = State::Active;
             continue;
         }
-        perKey_ = false;
-        const Rgb c = Scale(fx::Render(effect, t, 0, 1), brightness);
-        if (c == last && lastSent && now - lastSent < kRefreshMs) {
-            state_ = State::Active;
-            continue;
+        std::vector<azoth::KeyColor> kc;
+        const auto& layout = azoth::IsoKeys();
+        for (size_t i = 0; i < layout.size(); ++i)
+            if (lastKeys.empty() || refresh || keys[i] != lastKeys[i])
+                kc.push_back({static_cast<uint8_t>(layout[i].led), keys[i]});
+        bool ok = true;
+        for (const azoth::Report& r : azoth::KeyColors(kc, link)) {
+            DWORD written = 0;
+            if (azoth::IsSave(r) || !WriteFile(dev, r.data(), static_cast<DWORD>(azoth::ReportSize(link)), &written, nullptr)) {
+                ok = false;
+                break;
+            }
         }
-        const azoth::Report r = azoth::StaticColor(c, link);
-        if (azoth::IsSave(r)) continue;  // never write the keyboard's flash
-        DWORD written = 0;
-        if (!WriteFile(dev, r.data(), static_cast<DWORD>(azoth::ReportSize(link)), &written, nullptr)) {
+        if (!ok) {
             lost();
             continue;
         }
-        last = c;
+        lastKeys = keys;
         lastSent = now;
         state_ = State::Active;
     }
