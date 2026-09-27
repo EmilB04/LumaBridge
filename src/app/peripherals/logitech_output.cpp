@@ -71,6 +71,13 @@ public:
     }
 
     bool Set(const hidpp::Effect& e) { return Send(hidpp::SetEffect(device_, feature_, layout_, e), nullptr); }
+    bool StartPerKey() { return Send(hidpp::StartPerKey(device_, feature_, layout_), nullptr); }
+    // One frame: a color per LED along the strip (layout().strip.size() colors).
+    bool Frame(const Rgb* colors) {
+        for (const hidpp::Report& r : hidpp::PerKeyFrame(device_, layout_, colors))
+            if (!Send(r, nullptr, 500)) return false;
+        return true;
+    }
 
     void Close() {
         if (open()) CloseHandle(h_);
@@ -103,10 +110,21 @@ private:
                 if (id == hidpp::kIdBreathing) layout_.breathing = e;
                 if (id == hidpp::kIdCycle) layout_.cycle = e;
             }
-            // The whole-mouse color wave is only confirmed on the G502 X Plus so far.
-            layout_.colorWave = name_ == "G502 X PLUS";
-            LUMA_INFO("Logitech %s: its own effects over HID++ (device %u, fixed %d, breathing %d, cycle %d, wave %s)",
-                      name_.c_str(), dev, layout_.fixed, layout_.breathing, layout_.cycle, layout_.colorWave ? "yes" : "no");
+            // The whole-mouse color wave and the LED order are only known for the G502 X Plus.
+            const bool g502x = name_ == "G502 X PLUS";
+            layout_.colorWave = g502x;
+            if (g502x && Send(hidpp::Request(dev, 0x00, 0, {hidpp::kPerKeyLighting >> 8, hidpp::kPerKeyLighting & 0xFF}), &r) && r[4]) {
+                layout_.perKeyFeature = r[4];
+                for (uint8_t e = 0; e < 16; ++e) {
+                    if (!Send(hidpp::Request(dev, feature_, 0, {0xFF, e}), &r)) break;
+                    if ((r[6] << 8 | r[7]) == hidpp::kIdPerKey) layout_.perKeyEffect = e;
+                }
+                layout_.strip.assign(hidpp::kG502XPlusStrip.begin(), hidpp::kG502XPlusStrip.end());
+            }
+            LUMA_INFO("Logitech %s: its own effects over HID++ (device %u, fixed %d, breathing %d, cycle %d, wave %s, "
+                      "every LED %s)",
+                      name_.c_str(), dev, layout_.fixed, layout_.breathing, layout_.cycle, layout_.colorWave ? "yes" : "no",
+                      layout_.perKey() ? "yes" : "no");
             return true;
         }
         return false;
@@ -199,6 +217,9 @@ void LogitechOutput::Run() {
     HidppMouse mouse;
     uint64_t nextMouseFind = 0, lastEffectSent = 0;
     std::optional<hidpp::Effect> onMouse;  // the mouse's own effect LumaBridge set, if any
+    bool perKeyOn = false;                  // the mouse shows LumaBridge's frames, LED by LED
+    std::vector<Rgb> lastFrame;
+    uint64_t lastFrameSent = 0;
     while (!stop_) {
         Sleep(kFrameMs);
         fx::Params effect;
@@ -218,6 +239,7 @@ void LogitechOutput::Run() {
                 LUMA_INFO("Logitech devices: handed back to G HUB");
             }
             onMouse.reset();
+            perKeyOn = false;
             mouseEffect_ = false;
             state_ = State::Released;
             continue;
@@ -237,15 +259,22 @@ void LogitechOutput::Run() {
             last[0] = last[1] = last[2] = -1;
         }
 
-        // Effects the mouse can run itself go to it directly (smooth, every LED); the SDK
-        // stays connected meanwhile, so G HUB doesn't put its own lighting back.
-        if (effect.kind == fx::Kind::Breathing || effect.kind == fx::Kind::ColorCycle ||
-            effect.kind == fx::Kind::RainbowWave) {
-            if (!mouse.open() && now >= nextMouseFind) {
-                nextMouseFind = now + 30000;
-                if (!mouse.Find()) LUMA_INFO("Logitech devices: no mouse with its own effects found (HID++)");
-            }
+        // A Logitech mouse LumaBridge can reach directly (HID++) shows the effect itself: the
+        // mouse's own effect when it has a matching one (smooth, no traffic), otherwise every
+        // LED its own color, frame by frame. The SDK stays connected meanwhile, so G HUB
+        // doesn't put its own lighting back.
+        if (!mouse.open() && now >= nextMouseFind) {
+            nextMouseFind = now + 30000;
+            if (!mouse.Find()) LUMA_INFO("Logitech devices: no mouse to light directly found (HID++)");
         }
+        auto lostMouse = [&](const char* what) {
+            LUMA_WARN("Logitech %s: %s - back to one color through G HUB", mouse.name().c_str(), what);
+            mouse.Close();
+            nextMouseFind = now + 30000;
+            onMouse.reset();
+            perKeyOn = false;
+            last[0] = last[1] = last[2] = -1;
+        };
         const std::optional<hidpp::Effect> want = mouse.open() ? hidpp::ForEffect(effect, mouse.layout()) : std::nullopt;
         if (want) {
             // Slider drags change the speed many times a second: at most 4 sends a second.
@@ -253,17 +282,45 @@ void LogitechOutput::Run() {
                 lastEffectSent = now;
                 if (mouse.Set(*want)) {
                     onMouse = want;
+                    perKeyOn = false;
                 } else {
-                    LUMA_WARN("Logitech %s: the mouse didn't take its effect - back to one color", mouse.name().c_str());
-                    mouse.Close();
-                    nextMouseFind = now + 30000;
-                    onMouse.reset();
+                    lostMouse("the mouse didn't take its effect");
                 }
             }
             if (onMouse) {
                 state_ = State::Active;
                 mouseEffect_ = true;
                 continue;
+            }
+        } else if (mouse.open() && mouse.layout().perKey()) {
+            if (!perKeyOn) {
+                if (mouse.StartPerKey()) {
+                    perKeyOn = true;
+                    onMouse.reset();
+                    lastFrameSent = 0;
+                } else {
+                    lostMouse("the mouse didn't switch to per-LED colors");
+                }
+            }
+            if (perKeyOn) {
+                const double t = static_cast<double>(now - since) / 1000.0;
+                const size_t n = mouse.layout().strip.size();
+                std::vector<Rgb> frame(n);
+                for (size_t i = 0; i < n; ++i) frame[i] = fx::Render(effect, t, static_cast<int>(i), static_cast<int>(n));
+                // Changes right away; the same frame again now and then (the mouse may have slept).
+                if (frame != lastFrame || now - lastFrameSent > 5000) {
+                    if (mouse.Frame(frame.data())) {
+                        lastFrame = frame;
+                        lastFrameSent = now;
+                    } else {
+                        lostMouse("the mouse stopped taking colors");
+                    }
+                }
+                if (perKeyOn) {
+                    state_ = State::Active;
+                    mouseEffect_ = true;
+                    continue;
+                }
             }
         }
         mouseEffect_ = false;

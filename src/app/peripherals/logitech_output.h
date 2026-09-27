@@ -2,9 +2,10 @@
 // G HUB's SDK DLL in its own process and sets the color; G HUB does the device I/O and
 // takes its profile back when LumaBridge lets go (LogiLedShutdown). Nothing goes into a game.
 //
-// Logitech devices show one color: the effect's first LED, animated. Except that for
-// breathing, color cycle and the rainbow wave, a mouse that runs those effects itself
-// (G502 X Plus) gets its own effect over HID++ (logitech_hidpp.h), across all its LEDs.
+// Logitech devices show one color: the effect's first LED, animated. A mouse LumaBridge
+// reaches directly over HID++ (logitech_hidpp.h) shows the whole effect instead: its own
+// breathing, color cycle or color wave when those match, otherwise every LED its own color,
+// frame by frame (the G502 X Plus, whose LED order is known).
 // Runs on its own thread (~20 updates per second) so a slow G HUB never stalls the UI.
 #pragma once
 
@@ -33,7 +34,8 @@ public:
     void Set(const fx::Params& effect, bool own);
 
     State state() const { return state_; }
-    // Whether the mouse is running its own effect right now (not one color through G HUB).
+    // Whether the mouse shows the whole effect right now (its own effect or LED by LED),
+    // not one color through G HUB.
     bool mouseEffect() const { return mouseEffect_; }
     std::wstring dllPath() const;
 

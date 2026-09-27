@@ -10,12 +10,18 @@
 //   <cluster> <effect index> <10 effect parameters> 01
 // The effect index is the effect's place in the cluster's list (GetInfo, function 0), not
 // its ID. With a last byte of 00 the mouse answers but doesn't change.
+//
+// Every LED its own color (per-key lighting, feature 0x8081), for the effects the mouse
+// can't run itself: switch the mouse to its whole-mouse effect with ID 0x0013 (cluster FF),
+// then per frame function 1 with up to four "<zone> R G B" (a report naming a zone the
+// mouse lacks is refused whole), then function 7 to show the frame.
 #pragma once
 
 #include <array>
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
+#include <vector>
 
 #include "color.h"
 #include "effects.h"
@@ -31,6 +37,13 @@ constexpr uint16_t kFeatureName = 0x0005;
 constexpr uint16_t kRgbEffects = 0x8071;
 // Effect IDs in GetInfo's answers.
 constexpr uint16_t kIdFixed = 0x0001, kIdCycle = 0x0003, kIdBreathing = 0x000A;
+constexpr uint16_t kPerKeyLighting = 0x8081;
+constexpr uint16_t kIdPerKey = 0x0013;  // the whole-mouse effect that shows per-key frames
+
+// The G502 X Plus's zones along its light strip, in order: the six LEDs along the bottom
+// from the thumb side, then the two up the right side (mapped with hidpp-probe --map).
+// Zone 0 lights nothing.
+constexpr std::array<uint8_t, 8> kG502XPlusStrip = {3, 4, 8, 7, 6, 5, 2, 1};
 
 using Report = std::array<uint8_t, 20>;
 
@@ -69,6 +82,12 @@ struct Effect {
 struct Layout {
     int fixed = -1, breathing = -1, cycle = -1;
     bool colorWave = false;
+    // Per-key: the effect index (cluster FF) that shows per-key frames, the per-key feature's
+    // index, and the zones along the strip (empty: not known for this mouse).
+    int perKeyEffect = -1;
+    uint8_t perKeyFeature = 0;
+    std::vector<uint8_t> strip;
+    bool perKey() const { return perKeyEffect >= 0 && perKeyFeature && !strip.empty(); }
     bool Has(Kind k) const {
         switch (k) {
         case Kind::Fixed: return fixed >= 0;
@@ -96,6 +115,31 @@ inline Report SetEffect(uint8_t device, uint8_t feature, const Layout& l, const 
         return Request(device, feature, 1, {0xFF, 0x00, 0, 0, 0, 0, 0, 0, lo, 0x01, in, hi, 0x01});
     }
     return Report{};
+}
+
+// Switches the mouse to showing per-key frames.
+inline Report StartPerKey(uint8_t device, uint8_t feature, const Layout& l) {
+    return Request(device, feature, 1, {0xFF, static_cast<uint8_t>(l.perKeyEffect), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01});
+}
+
+// One frame: `colors[i]` for the strip's LED i (l.strip.size() colors). The reports to send
+// in order, the last one showing the frame.
+inline std::vector<Report> PerKeyFrame(uint8_t device, const Layout& l, const Rgb* colors) {
+    std::vector<Report> out;
+    const size_t n = l.strip.size();
+    for (size_t i = 0; i < n; i += 4) {
+        Report r = Request(device, l.perKeyFeature, 1, {});
+        for (size_t k = 0; k < 4; ++k) {
+            const size_t j = i + k < n ? i + k : i;  // pad with the report's first LED again
+            r[4 + k * 4] = l.strip[j];
+            r[5 + k * 4] = colors[j].r;
+            r[6 + k * 4] = colors[j].g;
+            r[7 + k * 4] = colors[j].b;
+        }
+        out.push_back(r);
+    }
+    out.push_back(Request(device, l.perKeyFeature, 7, {0, 0, 0, 0}));
+    return out;
 }
 
 // Period of one cycle for an effect speed (cycles per second), kept to what the mouse runs.

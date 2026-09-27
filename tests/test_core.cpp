@@ -879,6 +879,26 @@ static void TestLogitechHidpp() {
     p.kind = luma::fx::Kind::RainbowWave;
     l.colorWave = false;  // not known to work on this mouse
     CHECK(!ForEffect(p, l));
+
+    // Per-key: effect 4 of cluster FF (ID 0013) on, then frames of zone R G B.
+    CHECK(!l.perKey());
+    l.perKeyEffect = 4;
+    l.perKeyFeature = 0x0A;
+    l.strip.assign(kG502XPlusStrip.begin(), kG502XPlusStrip.end());
+    CHECK(l.perKey());
+    CHECK(same(StartPerKey(1, 9, l), {0xFF, 0x04, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01}));
+    luma::Rgb c[8];
+    for (int i = 0; i < 8; ++i) c[i] = luma::Rgb{static_cast<uint8_t>(i), 0x10, 0x20};
+    const auto f = PerKeyFrame(1, l, c);
+    CHECK(f.size() == 3);
+    const uint8_t first[] = {0x11, 0x01, 0x0A, 0x1A, 3, 0, 0x10, 0x20, 4, 1, 0x10, 0x20, 8, 2, 0x10, 0x20, 7, 3, 0x10, 0x20};
+    CHECK(std::memcmp(f[0].data(), first, 20) == 0);
+    CHECK(f[1][4] == 6 && f[1][8] == 5 && f[1][12] == 2 && f[1][16] == 1 && f[1][17] == 7);
+    CHECK(f[2][2] == 0x0A && f[2][3] == 0x7A && f[2][4] == 0);
+    // Six LEDs: the second report is padded with its first LED again.
+    l.strip.resize(6);
+    const auto g = PerKeyFrame(1, l, c);
+    CHECK(g.size() == 3 && g[1][4] == 6 && g[1][8] == 5 && g[1][12] == 6 && g[1][16] == 6 && g[1][17] == 4);
 }
 
 static void TestHyperXRam() {

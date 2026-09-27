@@ -64,12 +64,22 @@ byte `00` instead of `01`, the commands are answered but the mouse doesn't chang
 `tools\hidpp-probe.exe` lists a mouse's HID++ features and effects; `--test` plays wave,
 breathing, cycle and fixed with G HUB's exact bytes.
 
+**Every LED its own color (per-key lighting, `0x8081`).** Switching the mouse to its
+whole-mouse effect with ID `0013` (cluster `FF`, effect 4 on the G502 X Plus) makes it
+show per-key frames: function 1 with up to four `<zone> R G B` entries, then function 7
+(`00 00 00 00`) to show the frame. Its info `00 00 FF 01` lists zones 0–8; a report that
+names any other zone is refused whole. Mapped with `hidpp-probe --map`, the zones along the
+strip are `3 4 8 7 6 5 2 1`: the six LEDs along the bottom from the thumb side, then the
+two up the right side. Zone 0 lights nothing.
+
 **In LumaBridge:** for breathing, color cycle and the rainbow wave (the full, vivid rainbow),
 LumaBridge finds the mouse over HID++ and sets its own effect, with the period taken from
 the effect's speed (1–20 s). It finds the effects in cluster 0 by their IDs; the whole-mouse
 color wave is used only on the G502 X Plus, where it's confirmed. G HUB's LED SDK stays
-connected meanwhile, so G HUB doesn't put its own lighting back. For every other effect,
-and for games, the mouse gets one color through the SDK as before; handing the lights back
+connected meanwhile, so G HUB doesn't put its own lighting back. Every other effect
+(the other rainbows, gradients, comets, twinkle, static colors and games) is drawn LED by
+LED along the G502 X Plus's strip, up to about 20 frames a second. Other Logitech mice get
+one color through the SDK as before; handing the lights back
 to G HUB brings G HUB's lighting back. Code:
 [`logitech_hidpp.h`](../src/app/peripherals/logitech_hidpp.h) (packets, tested against the
 capture) and [`logitech_output.cpp`](../src/app/peripherals/logitech_output.cpp).
