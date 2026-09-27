@@ -303,33 +303,70 @@ void BrightnessCard(Controller& ctl, const Fonts& f) {
 }
 
 void AutoPage(Controller& ctl, const Fonts& f) {
-    const auto& out = ctl.output();
     BeginCard("now");
     CardTitle(f, "Dynamic lighting");
     Muted("Games drive your lights. When several are running, the one that changed color most recently wins.");
     ImGui::Dummy(ImVec2(0, 8 * S()));
 
-    const auto& sources = ctl.sources();
-    if (sources.empty()) {
-        Pill("Waiting for a game", kMuted);
+    const auto& running = ctl.games();
+    const auto others = ctl.unmatchedSources();
+    if (running.empty() && others.empty()) {
+        Pill("No game running", kMuted);
         ImGui::Dummy(ImVec2(0, 4 * S()));
-        Muted("Start a game with Logitech, Razer, SteelSeries, Corsair or Alienware lighting. "
-              "Make sure it is set up on the Games page.");
-    } else {
-        const uint64_t now = GetTickCount64();
-        for (const auto& s : sources) {
-            ImGui::PushID(static_cast<int>(s.pid) ^ static_cast<int>(std::hash<std::string>{}(s.sdk)));
-            Swatch("c", s.color, 28 * S(), out.label == s.game + " - " + s.sdk);
-            ImGui::SameLine();
-            ImGui::BeginGroup();
-            ImGui::PushFont(f.bold);
-            ImGui::TextUnformatted(s.game.c_str());
-            ImGui::PopFont();
-            Muted("%s  -  %s  -  updated %llus ago", s.sdk.c_str(), ToHex(s.color).c_str(),
-                  static_cast<unsigned long long>((now - s.lastChange) / 1000));
-            ImGui::EndGroup();
-            ImGui::PopID();
+        Muted("Games from Steam, Epic, EA, Ubisoft, GOG, Xbox, Riot and the ones Windows knows about "
+              "show up here when they start. Those with Logitech, Razer, SteelSeries, Corsair or "
+              "Alienware lighting drive your lights; set them up on the Games page.");
+    }
+    const uint64_t now = GetTickCount64();
+    int row = 0;
+    auto gameRow = [&](const std::string& name, Rgb color, bool lit, const std::string& detail, const char* pill,
+                       unsigned pillColor) {
+        ImGui::PushID(row++);
+        Swatch("c", lit ? color : Rgb{46, 50, 60}, 28 * S(), lit && ctl.output().label.rfind(name, 0) == 0);
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+        ImGui::PushFont(f.bold);
+        ImGui::TextUnformatted(name.c_str());
+        ImGui::PopFont();
+        ImGui::SameLine(0, 10 * S());
+        Pill(pill, pillColor);
+        Muted("%s", detail.c_str());
+        ImGui::EndGroup();
+        ImGui::PopID();
+    };
+    for (const auto& g : running) {
+        using games::Support;
+        std::string detail = g.game.store;
+        const char* pill = "No dynamic lighting";
+        unsigned pillColor = kMuted;
+        switch (g.support) {
+        case Support::Active:
+            pill = "Dynamic lighting";
+            pillColor = kGreen;
+            detail += "  -  " + g.sdk + "  -  " + ToHex(g.color);
+            break;
+        case Support::Known:
+        case Support::SdkLoaded:
+            pill = "Supports dynamic lighting";
+            pillColor = kAmber;
+            detail += "  -  " + (g.sdk.empty() ? std::string("has used lighting before") : g.sdk) +
+                      "  -  waiting for its colors (usually once you're in a match)";
+            break;
+        case Support::Unknown:
+            detail += "  -  no lighting so far. LumaBridge doesn't look inside games with anti-cheat, so it "
+                      "switches over as soon as the game sends colors";
+            break;
+        default:
+            detail += "  -  doesn't use a lighting SDK LumaBridge understands";
+            break;
         }
+        gameRow(g.game.name, g.color, g.support == Support::Active, detail, pill, pillColor);
+    }
+    for (const auto& s : others) {
+        char detail[160];
+        snprintf(detail, sizeof detail, "%s  -  %s  -  updated %llus ago", s.sdk.c_str(), ToHex(s.color).c_str(),
+                 static_cast<unsigned long long>((now - s.lastChange) / 1000));
+        gameRow(s.game, s.color, true, detail, "Dynamic lighting", kGreen);
     }
     EndCard();
 

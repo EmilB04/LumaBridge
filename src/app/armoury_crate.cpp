@@ -5,7 +5,10 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 
+#include <cstdio>
 #include <cwctype>
+#include <string>
+#include <thread>
 
 #include "log.h"
 
@@ -78,6 +81,43 @@ std::wstring Schtasks(const wchar_t* verb) {
     return L"\"" + std::wstring(sys) + L"\\schtasks.exe\" " + verb + L" /tn \"" + kHandbackTask + L"\"";
 }
 
+std::wstring HandbackLogPath() {
+    wchar_t dir[MAX_PATH];
+    const DWORD n = GetEnvironmentVariableW(L"ProgramData", dir, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return L"";
+    return std::wstring(dir) + L"\\LumaBridge\\handback.log";
+}
+
+long long FileSize(const std::wstring& path) {
+    WIN32_FILE_ATTRIBUTE_DATA a;
+    if (path.empty() || !GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &a)) return 0;
+    return (static_cast<long long>(a.nFileSizeHigh) << 32) | a.nFileSizeLow;
+}
+
+// Copies what the hand-back task wrote (from `offset` on) into the app log once it has had
+// time to run, so one log shows whether the controller restart worked.
+void LogHandbackResult(std::wstring path, long long offset) {
+    std::thread([path, offset] {
+        Sleep(8000);
+        FILE* f = _wfopen(path.c_str(), L"rb");
+        if (!f) {
+            LUMA_WARN("hand-back: the task wrote no log (did it run?)");
+            return;
+        }
+        _fseeki64(f, offset, SEEK_SET);
+        char line[512];
+        int lines = 0;
+        while (fgets(line, sizeof line, f)) {
+            std::string s(line);
+            while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+            if (!s.empty()) LUMA_INFO("hand-back task: %s", s.c_str());
+            ++lines;
+        }
+        fclose(f);
+        if (!lines) LUMA_WARN("hand-back: the task logged nothing within 8 s");
+    }).detach();
+}
+
 }  // namespace
 
 bool LaunchArmouryCrate() {
@@ -101,9 +141,12 @@ bool LaunchArmouryCrate() {
 bool HandbackTaskInstalled() { return RunHidden(Schtasks(L"/query"), 10000) == 0; }
 
 void HandBackLighting() {
+    const std::wstring log = HandbackLogPath();
+    const long long before = FileSize(log);
     const int code = RunHidden(Schtasks(L"/run"), 10000);
     if (code == 0) {
         LUMA_INFO("hand-back: started the hand-back task (details in %%ProgramData%%\\LumaBridge\\handback.log)");
+        LogHandbackResult(log, before);
         return;
     }
     LUMA_INFO("hand-back: couldn't start the hand-back task (schtasks exit %d; not set up?) - opening Armoury "

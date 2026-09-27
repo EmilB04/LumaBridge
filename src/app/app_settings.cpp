@@ -91,6 +91,14 @@ Prefs LoadPrefs(const std::wstring& ini) {
         if (comma == std::string::npos) break;
         pos = comma + 1;
     }
+    std::string games = Narrow(Read(ini, L"App", L"LightingGames"));
+    for (size_t pos = 0; pos < games.size();) {
+        size_t bar = games.find('|', pos);
+        std::string g = games.substr(pos, bar - pos);
+        if (!g.empty()) p.lightingGames.push_back(g);
+        if (bar == std::string::npos) break;
+        pos = bar + 1;
+    }
     return p;
 }
 
@@ -111,6 +119,9 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     std::string recent;
     for (size_t i = 0; i < p.recentColors.size(); ++i) recent += (i ? "," : "") + ToHex(p.recentColors[i]);
     WriteConfigValue(ini, L"App", L"RecentColors", Widen(recent));
+    std::string games;
+    for (size_t i = 0; i < p.lightingGames.size(); ++i) games += (i ? "|" : "") + p.lightingGames[i];
+    WriteConfigValue(ini, L"App", L"LightingGames", Widen(games));
 
     WriteConfigValue(ini, L"Color", L"Brightness", Num(cfg.auraCorrection.brightness * 100.0));
     WriteConfigValue(ini, L"Color", L"GainR", Num(cfg.auraCorrection.gainR * 100.0));

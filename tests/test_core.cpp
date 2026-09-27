@@ -16,6 +16,7 @@
 #include "ipc.h"
 #include "json.h"
 #include "source_tracker.h"
+#include "game_catalog.h"
 #include "lightfx_state.h"
 
 using namespace luma;
@@ -456,6 +457,41 @@ static void TestSources() {
     CHECK(!t.Active());
 }
 
+static void TestGameCatalog() {
+    using namespace luma::app::games;
+    PathInfo p = ClassifyPath(L"D:\\SteamLibrary\\steamapps\\common\\Rocket League\\Binaries\\Win64\\RocketLeague.exe");
+    CHECK(p.inLibrary && p.store == L"Steam" && p.folder == L"Rocket League");
+    p = ClassifyPath(L"C:/Program Files/Epic Games/rocketleague/Binaries/Win64/RocketLeague.exe");
+    CHECK(p.inLibrary && p.store == L"Epic Games" && p.folder == L"rocketleague");
+    CHECK(ClassifyPath(L"C:\\XboxGames\\Forza Horizon 5\\Content\\ForzaHorizon5.exe").folder == L"Forza Horizon 5");
+    CHECK(!ClassifyPath(L"C:\\Program Files (x86)\\Epic Games\\Launcher\\Portal\\EpicGamesLauncher.exe").inLibrary);
+    CHECK(!ClassifyPath(L"C:\\Program Files\\Mozilla Firefox\\firefox.exe").inLibrary);
+    CHECK(!ClassifyPath(L"D:\\SteamLibrary\\steamapps\\common\\x.exe").inLibrary);
+
+    CHECK(IsHelperExe(L"UnityCrashHandler64.exe") && IsHelperExe(L"EasyAntiCheat_EOS.exe") &&
+          IsHelperExe(L"RiotClientServices_Launcher.exe"));
+    CHECK(!IsHelperExe(L"RocketLeague.exe") && !IsHelperExe(L"bf1.exe"));
+    CHECK(IsAntiCheatName(L"EasyAntiCheat_EOS.exe") && IsAntiCheatName(L"BEService_x64.exe") &&
+          IsAntiCheatName(L"vgc.exe") && IsAntiCheatName(L"BattlEye"));
+    CHECK(!IsAntiCheatName(L"RocketLeague.exe") && !IsAntiCheatName(L"bf1.exe"));
+
+    CHECK(std::strcmp(LightingSdkForModule(L"RzChromaSDK64.dll"), "Razer Chroma") == 0);
+    CHECK(std::strcmp(LightingSdkForModule(L"LogitechLed.dll"), "Logitech LIGHTSYNC") == 0);
+    CHECK(std::strcmp(LightingSdkForModule(L"LumaBridge_x64.dll"), "Logitech LIGHTSYNC") == 0);
+    CHECK(std::strcmp(LightingSdkForModule(L"CUESDK.x64_2019.dll"), "Corsair iCUE") == 0);
+    CHECK(LightingSdkForModule(L"d3d11.dll") == nullptr);
+
+    CHECK(Normalize("Rocket League") == Normalize("ROCKETLEAGUE"));
+    CHECK(IsGenericProductName(L"Unreal Engine") && IsGenericProductName(L"") && !IsGenericProductName(L"Rocket League"));
+
+    CHECK(ClassifySupport(true, false, false, false) == Support::Active);
+    CHECK(ClassifySupport(false, true, false, true) == Support::Known);
+    CHECK(ClassifySupport(false, false, true, true) == Support::SdkLoaded);
+    CHECK(ClassifySupport(false, false, false, true) == Support::None);
+    CHECK(ClassifySupport(false, false, false, false) == Support::Unknown);
+    CHECK(SupportsLighting(Support::SdkLoaded) && !SupportsLighting(Support::Unknown));
+}
+
 static void TestIpc() {
     using namespace luma::ipc;
     Frame f = MakeFrame(FrameKind::Color, 42, 1, 2, 3, "A very long source name that must be truncated");
@@ -485,6 +521,7 @@ int main() {
     TestCorsairDevices();
     TestLightFx();
     TestSources();
+    TestGameCatalog();
     TestIpc();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

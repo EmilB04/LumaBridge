@@ -43,8 +43,11 @@ if ($Uninstall) {
     exit 0
 }
 
-# What the task runs: restart the USB device that the "AURA LED Controller" interface
-# belongs to (its parent, e.g. USB\VID_0B05&PID_1939\...), which is what worked by hand.
+# What the task runs: restart the Aura motherboard controller's USB device (e.g.
+# USB\VID_0B05&PID_1939\9876543210), the same thing `pnputil /restart-device` did by hand.
+# It is matched by its USB id, not by name: depending on the driver, "AURA LED Controller"
+# is the USB device itself or its HID child. Only whole USB devices of ASUS's Aura
+# motherboard controllers match (not interfaces, not other ASUS gear like keyboards).
 # Everything it does is logged to %ProgramData%\LumaBridge\handback.log.
 $command = @'
 $log = Join-Path $env:ProgramData 'LumaBridge\handback.log'
@@ -53,17 +56,17 @@ function Write-Log($text) { Add-Content -Path $log -Value ("{0} {1}" -f (Get-Dat
 $me = [Security.Principal.WindowsIdentity]::GetCurrent()
 $admin = ([Security.Principal.WindowsPrincipal] $me).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 Write-Log "hand-back started as $($me.Name), elevated=$admin"
+$pattern = '^USB\\VID_0B05&PID_(1867|1872|18A3|18A5|1939|19AF|1AA6)\\[^\\]+$'
 $controllers = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
-    Where-Object { $_.FriendlyName -eq 'AURA LED Controller' })
-if (-not $controllers.Count) { Write-Log 'no "AURA LED Controller" device found' }
+    Where-Object { $_.InstanceId -match $pattern })
+if (-not $controllers.Count) {
+    Write-Log 'no Aura motherboard controller (USB 0B05:1939 or similar) found'
+    Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like 'USB\VID_0B05*' } |
+        ForEach-Object { Write-Log "  ASUS USB device: $($_.InstanceId) ($($_.FriendlyName))" }
+}
 foreach ($c in $controllers) {
-    $parent = (Get-PnpDeviceProperty -InstanceId $c.InstanceId -KeyName 'DEVPKEY_Device_Parent').Data
-    if ($parent -match '^USB\\VID_0B05&PID_[0-9A-F]{4}\\') {
-        $out = & pnputil.exe /restart-device "$parent" 2>&1 | Out-String
-        Write-Log ("pnputil /restart-device {0} -> exit {1}: {2}" -f $parent, $LASTEXITCODE, $out.Trim())
-    } else {
-        Write-Log "skipped $($c.InstanceId): parent '$parent' is not an ASUS USB device"
-    }
+    $out = & pnputil.exe /restart-device "$($c.InstanceId)" 2>&1 | Out-String
+    Write-Log ("pnputil /restart-device {0} ({1}) -> exit {2}: {3}" -f $c.InstanceId, $c.FriendlyName, $LASTEXITCODE, $out.Trim())
 }
 '@
 $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))

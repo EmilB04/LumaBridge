@@ -19,6 +19,8 @@
 #include "app_settings.h"
 #include "aura_mirror.h"
 #include "config.h"
+#include "game_catalog.h"
+#include "game_detector.h"
 #include "gamesense_server.h"
 #include "ipc.h"
 #include "source_tracker.h"
@@ -75,6 +77,17 @@ public:
     // Devices seen most recently (live while controlling, else the last probe).
     const std::vector<AuraDeviceInfo>& devices();
 
+    // A running game and whether it does dynamic lighting.
+    struct GameStatus {
+        RunningGame game;
+        games::Support support = games::Support::None;
+        std::string sdk;   // the SDK it uses, when known
+        Rgb color{};       // its current color while Active
+    };
+    const std::vector<GameStatus>& games() const { return games_; }
+    // Sources that don't belong to any detected game (e.g. a game outside the known libraries).
+    std::vector<Source> unmatchedSources() const;
+
     const Output& output() const { return output_; }
     const std::vector<Source>& sources() const { return tracker_.All(); }
     AuraMirror::Status auraStatus() const { return mirror_.GetStatus(); }
@@ -84,6 +97,8 @@ public:
 
 private:
     Output Decide() const;
+    void UpdateGames(uint64_t now);
+    bool SourceBelongsTo(const Source& s, const RunningGame& g) const;
     void Apply(const Output& out);
     std::string ProcessName(uint32_t pid);
 
@@ -106,6 +121,8 @@ private:
     uint64_t dirtySince_ = 0;
     std::map<uint32_t, std::string> processNames_;
     std::vector<AuraDeviceInfo> knownDevices_;
+    GameDetector detector_;
+    std::vector<GameStatus> games_;
 };
 
 }  // namespace luma::app

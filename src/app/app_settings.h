@@ -32,6 +32,9 @@ struct Prefs {
     bool lightingStopped = false;
     bool startMinimized = true;
     std::vector<Rgb> recentColors;  // most recent first, max kMaxRecent
+    // Exe names (lower case) of games that have sent lighting before: shown as supporting
+    // dynamic lighting even before they start sending.
+    std::vector<std::string> lightingGames;
     static constexpr size_t kMaxRecent = 8;
 };
 

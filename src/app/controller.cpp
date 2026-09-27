@@ -1,6 +1,7 @@
 #include "controller.h"
 
 #include <algorithm>
+#include <cctype>
 #include <iterator>
 
 #include "armoury_crate.h"
@@ -173,32 +174,43 @@ Controller::Output Controller::Decide() const {
         if (prefs_.mode == Mode::Manual) return manual("Manual color");
 
         if (auto s = tracker_.Active()) {
-            Output g = lit((s->game + " - " + s->sdk).c_str());
+            std::string name = s->game;
+            for (const GameStatus& gs : games_)
+                if (SourceBelongsTo(*s, gs.game)) name = gs.game.name;
+            Output g = lit((name + " - " + s->sdk).c_str());
             g.fx.kind = s->flashHz > 0 ? fx::Kind::Strobe : fx::Kind::Static;
             g.fx.color1 = s->color;
             g.fx.speed = s->flashHz;
             return g;
         }
+        // A game without (or not yet sending) dynamic lighting is running: say so.
+        std::string idle = "No game running";
+        if (!games_.empty()) {
+            const GameStatus& gs = games_.front();
+            idle = gs.game.name + (games::SupportsLighting(gs.support) ? " - waiting for its lighting"
+                                                                       : " - no dynamic lighting");
+        }
+        auto withIdle = [&](const char* what) { return idle + " - " + what; };
         switch (prefs_.idle) {
         case IdleBehavior::Rainbow: {
-            Output r = lit("No game running - rainbow");
+            Output r = lit(withIdle("rainbow").c_str());
             r.fx.kind = fx::Kind::RainbowWave;
             r.fx.color1 = Rgb{170, 60, 255};  // icon tint; the effect itself is every hue
             r.fx.speed = 0.1;                 // one slow turn every 10 s
             return r;
         }
         case IdleBehavior::Off: {
-            Output off = lit("No game running - lights off");
+            Output off = lit(withIdle("lights off").c_str());
             off.fx.color1 = Rgb{};
             return off;
         }
         case IdleBehavior::ArmouryCrate: {
             Output ac;  // stopped: hand back
-            ac.label = "No game running - Armoury Crate";
+            ac.label = withIdle("Armoury Crate");
             return ac;
         }
         default:
-            return manual("No game running - your color");
+            return manual(withIdle("your color").c_str());
         }
     }();
     if (fanTest_) {
@@ -208,6 +220,55 @@ Controller::Output Controller::Decide() const {
         o.label = "Fan layout test";
     }
     return o;
+}
+
+bool Controller::SourceBelongsTo(const Source& s, const RunningGame& g) const {
+    if (s.pid != 0) return s.pid == g.pid;
+    // GameSense (in-process server, no pid): match its game name ("ROCKETLEAGUE").
+    const std::string n = games::Normalize(s.game);
+    if (n.empty()) return false;
+    std::string stem = g.exe.substr(0, g.exe.find_last_of('.'));
+    return n == games::Normalize(g.name) || n == games::Normalize(stem) || n == games::Normalize(g.folder);
+}
+
+std::vector<Source> Controller::unmatchedSources() const {
+    std::vector<Source> out;
+    for (const Source& s : tracker_.All()) {
+        bool matched = false;
+        for (const GameStatus& g : games_) matched |= SourceBelongsTo(s, g.game);
+        if (!matched) out.push_back(s);
+    }
+    return out;
+}
+
+void Controller::UpdateGames(uint64_t now) {
+    detector_.Poll(now);
+    std::vector<GameStatus> next;
+    for (const RunningGame& g : detector_.Games()) {
+        GameStatus st;
+        st.game = g;
+        st.sdk = g.sdk;
+        const Source* sending = nullptr;
+        for (const Source& s : tracker_.All())
+            if (SourceBelongsTo(s, g) && (!sending || s.lastChange > sending->lastChange)) sending = &s;
+        if (sending) {
+            st.sdk = sending->sdk;
+            st.color = sending->color;
+        }
+        std::string exe = g.exe;
+        for (auto& c : exe) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        auto& known = prefs_.lightingGames;
+        const bool seen = std::find(known.begin(), known.end(), exe) != known.end();
+        if (sending && !seen && !exe.empty()) {
+            known.push_back(exe);
+            LUMA_INFO("games: %s supports dynamic lighting (%s) - remembered", g.name.c_str(), sending->sdk.c_str());
+            dirty_ = true;
+            dirtySince_ = now;
+        }
+        st.support = games::ClassifySupport(sending != nullptr, seen, !g.sdk.empty(), g.modulesReadable);
+        next.push_back(std::move(st));
+    }
+    games_ = std::move(next);
 }
 
 void Controller::Apply(const Output& out) {
@@ -247,6 +308,7 @@ void Controller::Tick() {
         }
     }
     tracker_.Prune(now, [](const Source&) { return false; });
+    UpdateGames(now);
 
     Output next = Decide();
     if (!outputApplied_ || !next.SameLighting(output_)) {
