@@ -92,7 +92,8 @@ void Controller::UpdateLogitech() {
                 logitechNote_ = g.game.name + " lights them through G HUB";
                 break;
             }
-    logitech_.Set(output_.For(device::kMouse), own);
+    logitech_.Set(output_.For(device::kMouse), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse),
+                  own);
 }
 
 std::wstring Controller::GameDir(const char* profileKey) const {
@@ -434,6 +435,7 @@ void Controller::Apply(const Output& out) {
     }
     const fx::Params& board = out.For(device::kBoard);
     mirror_.SetPattern(out.For(device::kFans), cfg_.argbFans, out.fanTest, &board);
+    mirror_.SetLevels(DeviceBrightness(prefs_, device::kFans), DeviceBrightness(prefs_, device::kBoard));
 }
 
 void Controller::UpdateFeeds(uint64_t now) {
@@ -520,8 +522,8 @@ void Controller::Tick() {
     }
     output_ = next;
     UpdateLogitech();
-    azoth_.Set(output_.For(device::kKeyboard), cfg_.auraCorrection.brightness, prefs_.azothKeyboard && !output_.stopped);
-    hardware_.SetRam(output_.For(device::kRam), cfg_.auraCorrection.brightness, prefs_.ramLighting, !output_.stopped, prefs_.ramRelease);
+    azoth_.Set(output_.For(device::kKeyboard), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kKeyboard), prefs_.azothKeyboard && !output_.stopped);
+    hardware_.SetRam(output_.For(device::kRam), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kRam), prefs_.ramLighting, !output_.stopped, prefs_.ramRelease);
     if (now - sensorsPushedAt_ >= 500) {
         sensorsPushedAt_ = now;
         monitor_.SetBuiltInSensors(hardware_.Sensors(), hardware_.chip());

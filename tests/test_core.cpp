@@ -915,10 +915,14 @@ static void TestDeviceLighting() {
     d.look.saturation = 0.45f;
     d.look.spread = 2;
     d.look.reverse = true;
+    d.brightness = 0.4f;
     const std::string enc = EncodeDevice(d);
-    CHECK(enc == "1|5|FF1A00|0080FF|0.25|170|90|0.45|2|1");
+    CHECK(enc == "1|5|FF1A00|0080FF|0.25|170|90|0.45|2|1|0.4");
     DeviceLighting back;
-    CHECK(DecodeDevice(enc, &back) && back.own && back.look == d.look);
+    CHECK(DecodeDevice(enc, &back) && back.own && back.look == d.look && back.brightness == 0.4f);
+    // 0.7.0 wrote no brightness: full.
+    CHECK(DecodeDevice("1|5|FF1A00|0080FF|0.25|170|90|0.45|2|1", &back) && back.look == d.look && back.brightness == 1.f);
+    CHECK(DecodeDevice("1|5|FF1A00|0080FF|0.25|170|90|0.45|2|1|7", &back) && back.brightness == 1.f);  // out of range
     CHECK(!DecodeDevice("", &back) && !DecodeDevice("1|5|FF1A00", &back));
     CHECK(!DecodeDevice("1|99|FF1A00|0080FF|0.25|170|90|0.45|2|1", &back));  // no such effect
     CHECK(!DecodeDevice("1|5|FF1A0|0080FF|0.25|170|90|0.45|2|1", &back));    // bad color

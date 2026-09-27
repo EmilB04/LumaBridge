@@ -174,6 +174,17 @@ void AuraMirror::SetPattern(const fx::Params& params, const fx::FanLayout& fans,
     Wake();
 }
 
+void AuraMirror::SetLevels(double fans, double board) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (pattern_.fansLevel == fans && pattern_.boardLevel == board) return;
+        pattern_.fansLevel = fans;
+        pattern_.boardLevel = board;
+        ++pattern_.version;
+    }
+    Wake();
+}
+
 void AuraMirror::StopEffects() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -399,7 +410,8 @@ void AuraMirror::Run() {
                     else if (fans) fx::RenderFans(pattern.params, t, pattern.fans, &f, devs[i].lightCount);
                     else if (pattern.fanTest) f.assign(static_cast<size_t>(devs[i].lightCount), Rgb{});
                     else fx::RenderStrip(pattern.board, t, devs[i].lightCount, &f);
-                    for (auto& c : f) c = ApplyCorrection(cc, c);
+                    const double level = pattern.fanTest ? 1.0 : fans ? pattern.fansLevel : pattern.boardLevel;
+                    for (auto& c : f) c = ApplyCorrection(cc, level < 1.0 ? Scale(c, level) : c);
                 }
                 if (aura.SetFrames(frames)) {
                     havePushed = true;

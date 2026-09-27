@@ -106,6 +106,11 @@ inline Look DeviceLook(const Prefs& p, const std::string& id) {
     auto it = p.deviceLighting.find(id);
     return it != p.deviceLighting.end() && it->second.own ? it->second.look : MainLook(p);
 }
+// A device's own brightness (0..1), on top of the overall one.
+inline float DeviceBrightness(const Prefs& p, const std::string& id) {
+    auto it = p.deviceLighting.find(id);
+    return it != p.deviceLighting.end() ? it->second.brightness : 1.f;
+}
 inline Spot SetupSpot(const Prefs& p, const std::string& item) {
     auto it = p.setupSpots.find(item);
     return it != p.setupSpots.end() ? it->second : DefaultSpot(item);

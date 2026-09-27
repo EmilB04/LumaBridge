@@ -186,8 +186,9 @@ void LogitechOutput::Stop() {
     state_ = State::Off;
 }
 
-void LogitechOutput::Set(const fx::Params& effect, bool own) {
+void LogitechOutput::Set(const fx::Params& effect, double brightness, bool own) {
     std::lock_guard<std::mutex> lock(mutex_);
+    brightness_ = brightness < 0 ? 0 : brightness > 1 ? 1 : brightness;
     const bool changed = effect.kind != effect_.kind || effect.speed != effect_.speed;
     effect_ = effect;
     own_ = own;
@@ -223,11 +224,13 @@ void LogitechOutput::Run() {
     while (!stop_) {
         Sleep(kFrameMs);
         fx::Params effect;
+        double level;
         bool own;
         uint64_t since;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             effect = effect_;
+            level = brightness_;
             own = own_;
             since = effectSince_;
         }
@@ -275,7 +278,8 @@ void LogitechOutput::Run() {
             perKeyOn = false;
             last[0] = last[1] = last[2] = -1;
         };
-        const std::optional<hidpp::Effect> want = mouse.open() ? hidpp::ForEffect(effect, mouse.layout()) : std::nullopt;
+        std::optional<hidpp::Effect> want = mouse.open() ? hidpp::ForEffect(effect, mouse.layout()) : std::nullopt;
+        if (want) want->intensity = static_cast<uint8_t>(level * 100 + 0.5);
         if (want) {
             // Slider drags change the speed many times a second: at most 4 sends a second.
             if ((!onMouse || *onMouse != *want) && now - lastEffectSent >= 250) {
@@ -306,7 +310,8 @@ void LogitechOutput::Run() {
                 const double t = static_cast<double>(now - since) / 1000.0;
                 const size_t n = mouse.layout().strip.size();
                 std::vector<Rgb> frame(n);
-                for (size_t i = 0; i < n; ++i) frame[i] = fx::Render(effect, t, static_cast<int>(i), static_cast<int>(n));
+                for (size_t i = 0; i < n; ++i)
+                    frame[i] = Scale(fx::Render(effect, t, static_cast<int>(i), static_cast<int>(n)), level);
                 // Changes right away; the same frame again now and then (the mouse may have slept).
                 if (frame != lastFrame || now - lastFrameSent > 5000) {
                     if (mouse.Frame(frame.data())) {
@@ -324,7 +329,7 @@ void LogitechOutput::Run() {
             }
         }
         mouseEffect_ = false;
-        const Rgb c = fx::Render(effect, static_cast<double>(now - since) / 1000.0, 0, 1);
+        const Rgb c = Scale(fx::Render(effect, static_cast<double>(now - since) / 1000.0, 0, 1), level);
         if (onMouse) {
             // Back from the mouse's own effect: a plain color on it, then the SDK's colors again.
             onMouse.reset();

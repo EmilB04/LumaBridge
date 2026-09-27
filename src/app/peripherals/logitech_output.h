@@ -31,7 +31,8 @@ public:
 
     // What Logitech devices should show; `own = false` hands them back to G HUB (a game is
     // lighting them itself, or LumaBridge isn't controlling the lights).
-    void Set(const fx::Params& effect, bool own);
+    // `brightness` 0..1.
+    void Set(const fx::Params& effect, double brightness, bool own);
 
     State state() const { return state_; }
     // Whether the mouse shows the whole effect right now (its own effect or LED by LED),
@@ -49,6 +50,7 @@ private:
     std::atomic<bool> mouseEffect_{false};
     mutable std::mutex mutex_;
     fx::Params effect_;
+    double brightness_ = 1.0;
     bool own_ = false;
     uint64_t effectSince_ = 0;
     std::wstring dll_;

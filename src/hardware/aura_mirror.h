@@ -53,6 +53,9 @@ public:
     // Any of the single-color calls above switches back to single-color mode.
     void SetPattern(const fx::Params& params, const fx::FanLayout& fans, bool fanTest = false,
                     const fx::Params* board = nullptr);
+    // Brightness (0..1) of the ARGB headers and of the other devices, on top of the
+    // calibration's (app only; per-device brightness).
+    void SetLevels(double fans, double board);
     void Save();
     void Restore();
 
@@ -86,6 +89,7 @@ private:
         bool active = false;
         fx::Params params;
         fx::Params board;  // the devices other than ARGB headers
+        double fansLevel = 1, boardLevel = 1;
         fx::FanLayout fans;
         bool fanTest = false;
         uint64_t startedAt = 0;  // effect time 0 (GetTickCount64)

@@ -992,16 +992,31 @@ void DashboardPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
 
 // ---- Pages ---------------------------------------------------------------------------
 
-void BrightnessCard(Controller& ctl, const Fonts& f) {
+// The overall brightness, or with `device` set, that device's own on top of it.
+void BrightnessCard(Controller& ctl, const Fonts& f, const std::string& device = "") {
     BeginCard("brightness");
-    CardTitle(f, "Brightness", Icon::Lighting);
-    float b = static_cast<float>(ctl.config().auraCorrection.brightness * 100.0);
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderFloat("##brightness", &b, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
-        ctl.config().auraCorrection.brightness = b / 100.0;
-        ctl.Changed();
+    if (device.empty()) {
+        CardTitle(f, "Brightness", Icon::Lighting);
+        float b = static_cast<float>(ctl.config().auraCorrection.brightness * 100.0);
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::SliderFloat("##brightness", &b, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
+            ctl.config().auraCorrection.brightness = b / 100.0;
+            ctl.Changed();
+        }
+        Muted("Every device, in both Auto and Manual mode. Pick a device above to dim it on its own.");
+    } else {
+        const std::string title = std::string(device::Name(device)) + " brightness";
+        CardTitle(f, title.c_str(), Icon::Lighting);
+        float& level = ctl.prefs().deviceLighting[device].brightness;
+        float b = level * 100.f;
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::SliderFloat("##devbrightness", &b, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
+            level = b / 100.f;
+            ctl.Changed();
+        }
+        Muted("Only this device, games included, on top of the overall brightness (%.0f%%, under All devices).",
+              ctl.config().auraCorrection.brightness * 100.0);
     }
-    Muted("Applies to every Aura device, in both Auto and Manual mode.");
     EndCard();
 }
 
@@ -1531,8 +1546,13 @@ const fx::Params* LiveParams(const Controller& ctl, const char* id) {
     return ctl.output().stopped ? nullptr : &ctl.output().For(id);
 }
 
-Rgb LiveAt(const fx::Params* p, double t, int i, int n) {
-    return p ? fx::Render(*p, t, i, n) : Rgb{50, 54, 64};
+// Also dimmed like the device: the overall brightness times the device's own.
+Rgb LiveAt(const fx::Params* p, double t, int i, int n, double level = 1.0) {
+    return p ? Scale(fx::Render(*p, t, i, n), level) : Rgb{50, 54, 64};
+}
+
+double LiveLevel(Controller& ctl, const char* id) {
+    return ctl.config().auraCorrection.brightness * DeviceBrightness(ctl.prefs(), id);
 }
 
 void Glow(ImDrawList* dl, ImVec2 c, float r, Rgb col) {
@@ -1581,7 +1601,7 @@ void DrawBoard(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& le
     }
 }
 
-void DrawRam(ImDrawList* dl, ImVec2 a, ImVec2 size, int sticks, const fx::Params* p, double t) {
+void DrawRam(ImDrawList* dl, ImVec2 a, ImVec2 size, int sticks, const fx::Params* p, double t, double level) {
     const float gap = 6 * S();
     const float w = (size.x - gap * (sticks - 1)) / sticks;
     for (int s = 0; s < sticks; ++s) {
@@ -1590,7 +1610,7 @@ void DrawRam(ImDrawList* dl, ImVec2 a, ImVec2 size, int sticks, const fx::Params
         dl->AddRect(sa, sb, Hex(0x2A3142), 3 * S());
         // The light bar on top: 5 LEDs.
         for (int i = 0; i < 5; ++i) {
-            const Rgb c = LiveAt(p, t, i, 5);
+            const Rgb c = LiveAt(p, t, i, 5, level);
             const float y0 = sa.y + 4 * S() + i * (size.y * 0.32f / 5);
             dl->AddRectFilled(ImVec2(sa.x + 2 * S(), y0), ImVec2(sb.x - 2 * S(), y0 + size.y * 0.32f / 5 - 1 * S()), Col(c));
             dl->AddRectFilled(ImVec2(sa.x - 3 * S(), y0 - 2 * S()), ImVec2(sb.x + 3 * S(), y0 + size.y * 0.32f / 5 + 1 * S()),
@@ -1665,15 +1685,23 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
     const double t = ImGui::GetTime();
     std::vector<Rgb> fanLeds, boardLeds, mouseLeds(8);
     const fx::Params* fanP = LiveParams(ctl, device::kFans);
-    if (fanP) fx::RenderFans(*fanP, t, layout, &fanLeds);
-    else fanLeds.assign(static_cast<size_t>(layout.TotalLeds()), Rgb{50, 54, 64});
+    if (fanP) {
+        fx::RenderFans(*fanP, t, layout, &fanLeds);
+        const double level = LiveLevel(ctl, device::kFans);
+        for (Rgb& c : fanLeds) c = Scale(c, level);
+    } else {
+        fanLeds.assign(static_cast<size_t>(layout.TotalLeds()), Rgb{50, 54, 64});
+    }
     const fx::Params* boardP = LiveParams(ctl, device::kBoard);
     const int nBoard = BoardLedCount(ctl);
     boardLeds.resize(static_cast<size_t>(nBoard));
-    for (int i = 0; i < nBoard; ++i) boardLeds[static_cast<size_t>(i)] = LiveAt(boardP, t, i, nBoard);
+    for (int i = 0; i < nBoard; ++i)
+        boardLeds[static_cast<size_t>(i)] = LiveAt(boardP, t, i, nBoard, LiveLevel(ctl, device::kBoard));
     const fx::Params* mouseP = LiveParams(ctl, device::kMouse);
     const bool perLed = ctl.logitech().mouseEffect();  // else the mouse shows one color
-    for (int i = 0; i < 8; ++i) mouseLeds[static_cast<size_t>(i)] = perLed ? LiveAt(mouseP, t, i, 8) : LiveAt(mouseP, t, 0, 1);
+    const double mouseLevel = LiveLevel(ctl, device::kMouse);
+    for (int i = 0; i < 8; ++i)
+        mouseLeds[static_cast<size_t>(i)] = perLed ? LiveAt(mouseP, t, i, 8, mouseLevel) : LiveAt(mouseP, t, 0, 1, mouseLevel);
 
     // Where: the saved spot, kept inside the canvas.
     auto rectOf = [&](const SetupItem& it) {
@@ -1715,9 +1743,9 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
         const ImVec2 b(a.x + it.size.x, a.y + it.size.y);
         if (it.device == device::kFans) DrawFan(dl, a, it.size, fanLeds, it.fan, layout.LedsPerFan());
         else if (it.device == device::kBoard) DrawBoard(dl, a, it.size, boardLeds);
-        else if (it.device == device::kRam) DrawRam(dl, a, it.size, sticks, LiveParams(ctl, device::kRam), t);
+        else if (it.device == device::kRam) DrawRam(dl, a, it.size, sticks, LiveParams(ctl, device::kRam), t, LiveLevel(ctl, device::kRam));
         else if (it.device == device::kMouse) DrawMouse(dl, a, it.size, mouseLeds);
-        else if (it.device == device::kKeyboard) DrawKeyboard(dl, a, it.size, LiveAt(LiveParams(ctl, device::kKeyboard), t, 0, 1));
+        else if (it.device == device::kKeyboard) DrawKeyboard(dl, a, it.size, LiveAt(LiveParams(ctl, device::kKeyboard), t, 0, 1, LiveLevel(ctl, device::kKeyboard)));
 
         const bool selected = selectable && ui.lightTarget == it.device;
         if (selected || hovered)
@@ -1808,7 +1836,7 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
         EndCard();
         if (d.own && LookEditor(ctl, ui, f, d.look)) ctl.Changed();
     }
-    BrightnessCard(ctl, f);
+    BrightnessCard(ctl, f, ui.lightTarget);
 }
 
 void FansCard(Controller& ctl, const Fonts& f) {
