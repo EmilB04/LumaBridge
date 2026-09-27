@@ -65,6 +65,9 @@ been run against real hardware yet.** Start with the checks under
    click; Chroma and AlienFX ask for admin once; Corsair is per game).
 4. Start a game. It appears on the **Lighting** page, and your Aura devices follow it.
 
+Hardware check: run `powershell -ExecutionPolicy Bypass -File .\Run-HardwareTest.ps1` from
+the LumaBridge folder. It tests your lighting step by step and produces one report to share.
+
 Troubleshooting: **Settings → Open log folder** (`%LOCALAPPDATA%\LumaBridge`). Each piece
 writes its own log (`lumabridge-app.log`, `lumabridge.log` for the Logitech proxy,
 `lumabridge-chroma.log`, …).

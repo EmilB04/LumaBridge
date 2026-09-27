@@ -169,4 +169,5 @@ endif()
 install(TARGETS lumabridge_proxy chroma_emu corsair_emu lightfx_emu aura-test aura-usb-test logiled-harness
         RUNTIME DESTINATION .)
 install(FILES config/LumaBridge.ini.example DESTINATION .)
-install(FILES scripts/Install-LogiLedProxy.ps1 scripts/Install-SdkEmulators.ps1 DESTINATION .)
+install(FILES scripts/Install-LogiLedProxy.ps1 scripts/Install-SdkEmulators.ps1 scripts/Run-HardwareTest.ps1
+        DESTINATION .)
