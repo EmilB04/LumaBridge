@@ -25,6 +25,13 @@ enum class IdleBehavior { ManualColor, Rainbow, Off, ArmouryCrate };
 // Per-game choice on the Games List page.
 enum class GameMode { Default, Screen, Idle };
 
+// Dashboard cards, in display order (ids; see ui.cpp). Cards not listed are hidden.
+inline const std::vector<std::string>& DefaultDashboard() {
+    static const std::vector<std::string> kDefault{"lighting", "game", "cpu", "gpu", "memory",
+                                                   "fans",     "temps", "devices", "connections", "system"};
+    return kDefault;
+}
+
 struct Prefs {
     Mode mode = Mode::Auto;
     Rgb manualColor{0, 140, 255};
@@ -45,6 +52,8 @@ struct Prefs {
     bool screenForUnsupported = false;
     // Per game (key: games::Normalize(name)): what it shows when it has no lighting of its own.
     std::map<std::string, GameMode> gameModes;
+    std::vector<std::string> dashboard = DefaultDashboard();
+    int lhmPort = 8085;  // LibreHardwareMonitor's web server
     static constexpr size_t kMaxRecent = 8;
 };
 

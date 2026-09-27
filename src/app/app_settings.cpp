@@ -113,6 +113,19 @@ Prefs LoadPrefs(const std::wstring& ini) {
         if (bar == std::string::npos) break;
         pos = bar + 1;
     }
+    const std::string dash = Narrow(Read(ini, L"App", L"Dashboard"));
+    if (!dash.empty()) {
+        p.dashboard.clear();
+        for (size_t pos = 0; pos <= dash.size();) {
+            size_t comma = dash.find(',', pos);
+            if (comma == std::string::npos) comma = dash.size();
+            const std::string id = dash.substr(pos, comma - pos);
+            if (!id.empty() && id != "-") p.dashboard.push_back(id);
+            pos = comma + 1;
+        }
+    }
+    v = Read(ini, L"Dashboard", L"LhmPort");
+    if (!v.empty()) p.lhmPort = _wtoi(v.c_str());
     const std::wstring manual = Read(ini, L"App", L"ManualGames");
     for (size_t pos = 0; pos < manual.size();) {
         size_t bar = manual.find(L'|', pos);
@@ -154,6 +167,10 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
         modes += (modes.empty() ? "" : "|") + key + (mode == GameMode::Screen ? "=screen" : "=idle");
     }
     WriteConfigValue(ini, L"App", L"GameModes", Widen(modes));
+    std::string dash;
+    for (size_t i = 0; i < p.dashboard.size(); ++i) dash += (i ? "," : "") + p.dashboard[i];
+    WriteConfigValue(ini, L"App", L"Dashboard", Widen(dash.empty() ? "-" : dash));  // "-": all hidden
+    WriteConfigValue(ini, L"Dashboard", L"LhmPort", Num(p.lhmPort));
 
     WriteConfigValue(ini, L"Color", L"Brightness", Num(cfg.auraCorrection.brightness * 100.0));
     WriteConfigValue(ini, L"Color", L"GainR", Num(cfg.auraCorrection.gainR * 100.0));

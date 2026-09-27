@@ -6,6 +6,9 @@ OpenRGB, Artemis or other middleware.
 
 ![LumaBridge, Lighting page in Auto mode](docs/images/app-auto.png)
 
+- **Dashboard:** lighting, the running game, CPU / GPU load and temperatures, memory, fan
+  speeds, Aura devices and connections at a glance. Cards can be hidden and reordered. Fan
+  speeds and board temperatures come from LibreHardwareMonitor when it runs.
 - **Auto mode:** games drive your lights. LumaBridge answers the game's lighting SDK as
   if that brand's software were installed, and follows the game that's currently active.
   Every running game is listed, with whether it supports dynamic lighting. Counter-Strike 2,

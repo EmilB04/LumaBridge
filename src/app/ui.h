@@ -20,11 +20,12 @@ struct Fonts {
 };
 
 // Sidebar order.
-enum class Page { Lighting, GamesList, Devices, Integrations, Settings };
+enum class Page { Dashboard, Lighting, GamesList, Devices, Integrations, Settings };
 
 struct UiState {
-    Page page = Page::Lighting;
-    Page lastPage = Page::Lighting;
+    Page page = Page::Dashboard;
+    Page lastPage = Page::Dashboard;
+    bool dashEdit = false;  // dashboard "Customize" mode
     char hex[16] = "";
     bool hexEditing = false;
     char gameFilter[64] = "";

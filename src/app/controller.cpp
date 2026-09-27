@@ -44,6 +44,7 @@ bool Controller::Init() {
     detector_.SetExtraGames(prefs_.manualGames);
     RescanLibrary();
     feeds_.Start();
+    monitor_.Start(prefs_.lhmPort);
     return true;
 }
 
@@ -133,6 +134,7 @@ void Controller::Shutdown(bool handBack) {
     gameSense_.Stop();
     feeds_.Stop();
     screen_.Stop();
+    monitor_.Stop();
     const bool wasControlling = mirror_.IsRunning();
     mirror_.Stop();
     // Exiting LumaBridge gives the lights back to Armoury Crate (not during a Windows

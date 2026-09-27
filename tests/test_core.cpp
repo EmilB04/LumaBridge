@@ -22,6 +22,9 @@
 #include "rocket_league_lighting.h"
 #include "war_thunder_lighting.h"
 #include "screen_colors.h"
+#include "smbios.h"
+#include "lhm.h"
+#include "friendly_names.h"
 #include "lightfx_state.h"
 
 using namespace luma;
@@ -637,6 +640,94 @@ static void TestScreenColors() {
     CHECK(c.left.IsBlack() && c.right.IsBlack());
 }
 
+static void TestSmbios() {
+    using namespace luma::app::sensors;
+    std::vector<uint8_t> t;
+    auto add = [&](std::vector<uint8_t> formatted, std::vector<std::string> strings) {
+        t.insert(t.end(), formatted.begin(), formatted.end());
+        if (strings.empty()) t.insert(t.end(), {0, 0});
+        for (const auto& str : strings) {
+            t.insert(t.end(), str.begin(), str.end());
+            t.push_back(0);
+        }
+        if (!strings.empty()) t.push_back(0);
+    };
+    // Type 0 BIOS: vendor=1, version=2, date=3 (length 0x12).
+    std::vector<uint8_t> bios(0x12, 0);
+    bios[0] = 0; bios[1] = 0x12; bios[4] = 1; bios[5] = 2; bios[8] = 3;
+    add(bios, {"American Megatrends Inc.", "3405", "02/01/2024"});
+    // Type 2 baseboard: maker=1, product=2.
+    std::vector<uint8_t> board(0x08, 0);
+    board[0] = 2; board[1] = 0x08; board[4] = 1; board[5] = 2;
+    add(board, {"ASUSTeK COMPUTER INC.", "ROG STRIX B550-F GAMING (WI-FI)  "});
+    // Type 4 processor: version string index at 0x10.
+    std::vector<uint8_t> cpu(0x1A, 0);
+    cpu[0] = 4; cpu[1] = 0x1A; cpu[0x10] = 1;
+    add(cpu, {"AMD Ryzen 7 5800X 8-Core Processor"});
+    // Type 17 memory: size 8192 MB, locator=1, speed 3600, maker=2, part=3, configured 3600.
+    std::vector<uint8_t> mem(0x28, 0);
+    mem[0] = 17; mem[1] = 0x28; mem[0x0C] = 0x00; mem[0x0D] = 0x20; mem[0x10] = 1;
+    mem[0x15] = 0x10; mem[0x16] = 0x0E; mem[0x17] = 2; mem[0x1A] = 3; mem[0x20] = 0x10; mem[0x21] = 0x0E;
+    add(mem, {"DIMM_A2", "Kingston", "KF3600C17D4/8GX"});
+    // An empty slot (size 0), a structure without strings, then end-of-table.
+    std::vector<uint8_t> empty(0x28, 0);
+    empty[0] = 17; empty[1] = 0x28;
+    add(empty, {});
+    add({127, 4, 0, 0}, {});
+    std::vector<uint8_t> raw{0, 3, 3, 0, 0, 0, 0, 0};
+    const uint32_t len = static_cast<uint32_t>(t.size());
+    raw[4] = len & 0xFF; raw[5] = (len >> 8) & 0xFF;
+    raw.insert(raw.end(), t.begin(), t.end());
+    const SmbiosInfo info = ParseSmbios(raw);
+    CHECK(info.biosVersion == "3405" && info.biosVendor == "American Megatrends Inc.");
+    CHECK(info.boardName == "ROG STRIX B550-F GAMING (WI-FI)" && info.boardMaker == "ASUSTeK COMPUTER INC.");
+    CHECK(info.cpu == "AMD Ryzen 7 5800X 8-Core Processor");
+    CHECK(info.memory.size() == 1);
+    CHECK(info.memory[0].sizeMb == 8192 && info.memory[0].speedMts == 3600 && info.memory[0].part == "KF3600C17D4/8GX");
+    CHECK(ParseSmbios({1, 2, 3}).boardName.empty());  // garbage in, nothing out
+}
+
+static void TestLhm() {
+    using namespace luma::app::sensors;
+    const char* text = R"json({"id":0,"Text":"Sensor","Children":[{"id":1,"Text":"PC","ImageURL":"images_icon/computer.png","Children":[
+      {"id":2,"Text":"ASUS ROG STRIX B550-F GAMING","ImageURL":"images_icon/mainboard.png","Children":[
+        {"id":3,"Text":"Nuvoton NCT6798D","ImageURL":"images_icon/chip.png","Children":[
+          {"id":4,"Text":"Temperatures","ImageURL":"images_icon/temperature.png","Children":[
+            {"id":5,"Text":"Motherboard","Value":"34,0 °C","Type":"Temperature","Children":[]}]},
+          {"id":6,"Text":"Fans","ImageURL":"images_icon/fan.png","Children":[
+            {"id":7,"Text":"CPU Fan","Value":"1180 RPM","Children":[]},
+            {"id":8,"Text":"Chassis Fan #1","Value":"845 RPM","Type":"Fan","Children":[]}]}]}]},
+      {"id":9,"Text":"AMD Ryzen 7 5800X","ImageURL":"images_icon/cpu.png","Children":[
+        {"id":10,"Text":"Temperatures","ImageURL":"images_icon/temperature.png","Children":[
+          {"id":11,"Text":"Core (Tctl/Tdie)","Value":"55.3 °C","Type":"Temperature","Children":[]}]},
+        {"id":12,"Text":"Load","ImageURL":"images_icon/load.png","Children":[
+          {"id":13,"Text":"CPU Total","Value":"12.5 %","Type":"Load","Children":[]}]}]}]}]})json";
+    luma::Json j;
+    CHECK(luma::Json::Parse(text, &j));
+    const auto s = ParseLhm(j);
+    CHECK(s.size() == 5);
+    CHECK(s[0].kind == HardwareKind::Board && s[0].type == SensorType::Temperature && s[0].value == 34.0);
+    CHECK(s[1].type == SensorType::Fan && s[1].value == 1180 && s[1].unit == "RPM" && s[1].hardware == "Nuvoton NCT6798D");
+    CHECK(s[3].kind == HardwareKind::Cpu && s[3].name == "Core (Tctl/Tdie)" && s[3].value > 55.2 && s[3].value < 55.4);
+    CHECK(s[4].type == SensorType::Load && s[4].value == 12.5);
+    CHECK(PickSensor(s, HardwareKind::Cpu, SensorType::Temperature, {"Tctl", "Package"})->value > 55);
+    CHECK(PickSensor(s, HardwareKind::Board, SensorType::Fan, {"Chassis"})->value == 845);
+    CHECK(PickSensor(s, HardwareKind::Gpu, SensorType::Temperature, {}) == nullptr);
+}
+
+static void TestFriendlyNames() {
+    using namespace luma::app::sensors;
+    CHECK(FriendlyBoard("ASUSTeK COMPUTER INC.", "ROG STRIX B550-F GAMING") == "ASUS ROG STRIX B550-F GAMING");
+    CHECK(FriendlyBoard("", "B550 AORUS") == "B550 AORUS");
+    CHECK(FriendlyMemory("Kingston", "HX436C17FB3/8") == "HyperX FURY");
+    CHECK(FriendlyMemory("Kingston", "KF3600C17D4/8GX") == "Kingston FURY");
+    CHECK(FriendlyMemory("Corsair", "CMW16GX4M2C3200C16") == "Corsair Vengeance RGB");
+    CHECK(FriendlyMemory("Samsung", "M378A1K43CB2-CTD") == "Samsung M378A1K43CB2-CTD");
+    CHECK(FriendlyCpu("AMD Ryzen 7 5800X 8-Core Processor") == "AMD Ryzen 7 5800X");
+    CHECK(FriendlyCpu("Intel(R) Core(TM) i7-12700K CPU @ 3.60GHz") == "Intel Core i7-12700K");
+    CHECK(FriendlyGpu("NVIDIA GeForce RTX 3080") == "NVIDIA GeForce RTX 3080");
+}
+
 static void TestIpc() {
     using namespace luma::ipc;
     Frame f = MakeFrame(FrameKind::Color, 42, 1, 2, 3, "A very long source name that must be truncated");
@@ -672,6 +763,9 @@ int main() {
     TestRocketLeague();
     TestWarThunder();
     TestScreenColors();
+    TestSmbios();
+    TestLhm();
+    TestFriendlyNames();
     TestIpc();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

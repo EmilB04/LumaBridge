@@ -16,6 +16,8 @@
 #include "controller.h"
 #include "game_feeds.h"
 #include "game_profiles.h"
+#include "friendly_names.h"
+#include "system_monitor.h"
 #include "effects.h"
 #include "imgui.h"
 #include "integrations.h"
@@ -293,6 +295,558 @@ void PreviewCard(Controller& ctl, const Fonts& f) {
     LightsPreview(ctl.output(), ctl.config().argbFans, BoardLedCount(ctl));
     Muted("Fans on the ARGB header, as set up on the Devices page.");
     EndCard();
+}
+
+// ---- Icons (drawn with lines and shapes, so no icon font is needed) ------------------
+
+enum class Icon { Lighting, Game, Cpu, Gpu, Memory, Fan, Temp, Board, Leds, Plug, Info };
+
+ImVec2 At(ImVec2 c, float dx, float dy) { return ImVec2(c.x + dx, c.y + dy); }
+
+// `s`: icon size in pixels; `spin`: rotation for the fan icon (radians).
+void DrawIcon(Icon icon, ImVec2 c, float s, ImU32 col, float spin = 0) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float r = s * 0.5f, t = std::max(1.2f, s * 0.085f);
+    switch (icon) {
+    case Icon::Lighting:
+        dl->AddCircle(At(c, 0, -r * 0.18f), r * 0.55f, col, 24, t);
+        dl->AddLine(At(c, -r * 0.24f, r * 0.52f), At(c, r * 0.24f, r * 0.52f), col, t);
+        dl->AddLine(At(c, -r * 0.16f, r * 0.76f), At(c, r * 0.16f, r * 0.76f), col, t);
+        break;
+    case Icon::Game:
+        dl->AddRect(At(c, -r * 0.92f, -r * 0.5f), At(c, r * 0.92f, r * 0.5f), col, r * 0.45f, 0, t);
+        dl->AddLine(At(c, -r * 0.62f, 0), At(c, -r * 0.22f, 0), col, t);
+        dl->AddLine(At(c, -r * 0.42f, -r * 0.2f), At(c, -r * 0.42f, r * 0.2f), col, t);
+        dl->AddCircleFilled(At(c, r * 0.3f, r * 0.08f), r * 0.1f, col);
+        dl->AddCircleFilled(At(c, r * 0.55f, -r * 0.12f), r * 0.1f, col);
+        break;
+    case Icon::Cpu: {
+        const float h = r * 0.55f;
+        dl->AddRect(At(c, -h, -h), At(c, h, h), col, r * 0.1f, 0, t);
+        dl->AddRectFilled(At(c, -h * 0.45f, -h * 0.45f), At(c, h * 0.45f, h * 0.45f), col, r * 0.05f);
+        for (int i = -1; i <= 1; ++i) {
+            const float o = i * h * 0.55f;
+            dl->AddLine(At(c, o, -h), At(c, o, -r * 0.9f), col, t);
+            dl->AddLine(At(c, o, h), At(c, o, r * 0.9f), col, t);
+            dl->AddLine(At(c, -h, o), At(c, -r * 0.9f, o), col, t);
+            dl->AddLine(At(c, h, o), At(c, r * 0.9f, o), col, t);
+        }
+        break;
+    }
+    case Icon::Gpu:
+        dl->AddRect(At(c, -r * 0.8f, -r * 0.5f), At(c, r * 0.95f, r * 0.5f), col, r * 0.1f, 0, t);
+        dl->AddCircle(At(c, r * 0.25f, 0), r * 0.3f, col, 20, t);
+        dl->AddLine(At(c, -r * 0.8f, -r * 0.5f), At(c, -r * 0.8f, r * 0.85f), col, t);
+        dl->AddLine(At(c, -r * 0.45f, r * 0.5f), At(c, -r * 0.45f, r * 0.72f), col, t);
+        dl->AddLine(At(c, r * 0.6f, r * 0.5f), At(c, r * 0.6f, r * 0.72f), col, t);
+        break;
+    case Icon::Memory:
+        dl->AddRect(At(c, -r * 0.95f, -r * 0.42f), At(c, r * 0.95f, r * 0.3f), col, r * 0.06f, 0, t);
+        for (int i = 0; i < 4; ++i) {
+            const float x = -r * 0.72f + i * r * 0.44f;
+            dl->AddRectFilled(At(c, x, -r * 0.24f), At(c, x + r * 0.26f, r * 0.12f), col);
+        }
+        for (int i = 0; i < 7; ++i) {
+            const float x = -r * 0.8f + i * r * 0.27f;
+            dl->AddLine(At(c, x, r * 0.3f), At(c, x, r * 0.5f), col, t * 0.8f);
+        }
+        break;
+    case Icon::Fan:
+        dl->AddCircle(c, r * 0.92f, col, 28, t);
+        for (int i = 0; i < 3; ++i) {
+            const float a = spin + i * 2.0943951f;
+            const ImVec2 p1 = At(c, std::cos(a) * r * 0.75f, std::sin(a) * r * 0.75f);
+            const ImVec2 p2 = At(c, std::cos(a + 0.9f) * r * 0.55f, std::sin(a + 0.9f) * r * 0.55f);
+            dl->AddTriangleFilled(c, p1, p2, col);
+        }
+        dl->AddCircleFilled(c, r * 0.18f, Hex(kCard));
+        dl->AddCircle(c, r * 0.18f, col, 12, t);
+        break;
+    case Icon::Temp:
+        dl->AddRect(At(c, -r * 0.18f, -r * 0.9f), At(c, r * 0.18f, r * 0.35f), col, r * 0.18f, 0, t);
+        dl->AddCircleFilled(At(c, 0, r * 0.55f), r * 0.32f, col);
+        dl->AddLine(At(c, 0, -r * 0.45f), At(c, 0, r * 0.4f), col, t * 1.4f);
+        break;
+    case Icon::Board:
+        dl->AddRect(At(c, -r * 0.9f, -r * 0.9f), At(c, r * 0.9f, r * 0.9f), col, r * 0.12f, 0, t);
+        dl->AddRectFilled(At(c, -r * 0.55f, -r * 0.55f), At(c, -r * 0.05f, -r * 0.05f), col);
+        dl->AddLine(At(c, r * 0.15f, -r * 0.5f), At(c, r * 0.6f, -r * 0.5f), col, t);
+        dl->AddLine(At(c, r * 0.15f, -r * 0.2f), At(c, r * 0.6f, -r * 0.2f), col, t);
+        dl->AddLine(At(c, -r * 0.55f, r * 0.3f), At(c, r * 0.6f, r * 0.3f), col, t);
+        dl->AddLine(At(c, -r * 0.55f, r * 0.58f), At(c, r * 0.2f, r * 0.58f), col, t);
+        break;
+    case Icon::Leds:
+        for (int i = -1; i <= 1; ++i) dl->AddCircleFilled(At(c, i * r * 0.6f, 0), r * 0.22f, col);
+        dl->AddLine(At(c, -r * 0.95f, r * 0.45f), At(c, r * 0.95f, r * 0.45f), col, t);
+        break;
+    case Icon::Plug:
+        dl->AddRect(At(c, -r * 0.45f, -r * 0.25f), At(c, r * 0.45f, r * 0.35f), col, r * 0.12f, 0, t);
+        dl->AddLine(At(c, -r * 0.2f, -r * 0.25f), At(c, -r * 0.2f, -r * 0.7f), col, t);
+        dl->AddLine(At(c, r * 0.2f, -r * 0.25f), At(c, r * 0.2f, -r * 0.7f), col, t);
+        dl->AddLine(At(c, 0, r * 0.35f), At(c, 0, r * 0.85f), col, t);
+        break;
+    case Icon::Info:
+        dl->AddCircle(c, r * 0.88f, col, 24, t);
+        dl->AddCircleFilled(At(c, 0, -r * 0.4f), r * 0.1f, col);
+        dl->AddLine(At(c, 0, -r * 0.12f), At(c, 0, r * 0.5f), col, t * 1.2f);
+        break;
+    }
+}
+
+// An icon inline with text (advances the cursor like an item).
+void IconItem(Icon icon, float size, ImU32 col, float spin = 0) {
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float h = std::max(size, ImGui::GetTextLineHeight());
+    DrawIcon(icon, ImVec2(p.x + size / 2, p.y + h / 2), size, col, spin);
+    ImGui::Dummy(ImVec2(size, h));
+}
+
+// ---- Dashboard ------------------------------------------------------------------------
+
+struct DashCtx {
+    HWND hwnd;
+    Controller& ctl;
+    Integrations& in;
+    UiState& ui;
+    const Fonts& f;
+    const sensors::SystemSnapshot& snap;
+};
+
+unsigned TempColor(double c) { return c < 60 ? kGreen : c < 80 ? kAmber : kRed; }
+unsigned LoadColor(double pct) { return pct < 70 ? kAccent : pct < 90 ? kAmber : kRed; }
+
+void Bar(double fraction, unsigned color) {
+    const float f = static_cast<float>(std::clamp(fraction, 0.0, 1.0));
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, V4(color));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, V4(kCardHover));
+    ImGui::ProgressBar(f, ImVec2(-1, 6 * S()), "");
+    ImGui::PopStyleColor(2);
+}
+
+// A big number with a small unit, e.g. "42 %".
+void Metric(const Fonts& f, const char* value, const char* unit, unsigned color = kText) {
+    ImGui::PushFont(f.title);
+    ImGui::PushStyleColor(ImGuiCol_Text, V4(color));
+    ImGui::TextUnformatted(value);
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+    if (unit && *unit) {
+        ImGui::SameLine(0, 4 * S());
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + ImGui::GetFontSize() * 0.35f);
+        Muted("%s", unit);
+    }
+}
+
+std::string Gb(uint64_t bytes) {
+    char b[32];
+    snprintf(b, sizeof b, "%.1f GB", bytes / 1073741824.0);
+    return b;
+}
+
+void LhmHint() {
+    Muted("Fan speeds and CPU / board temperatures come from LibreHardwareMonitor (free): run it, then "
+          "Options > Remote Web Server > Run (port 8085).");
+    if (ImGui::SmallButton("Get LibreHardwareMonitor"))
+        ShellExecuteW(nullptr, L"open", L"https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases",
+                      nullptr, nullptr, SW_SHOWNORMAL);
+}
+
+// Friendly name and icon for an Aura device.
+std::string DeviceLabel(const AuraDeviceInfo& d, const sensors::SystemSnapshot& snap, const fx::FanLayout& fans,
+                        Icon* icon) {
+    if (d.type == 0x00010000) {
+        *icon = Icon::Board;
+        const std::string board = sensors::FriendlyBoard(snap.smbios.boardMaker, snap.smbios.boardName);
+        return (board.empty() ? std::string("Motherboard") : board) + " lighting";
+    }
+    if (d.type == 0x00011000) {
+        *icon = Icon::Fan;
+        char b[96];
+        snprintf(b, sizeof b, "Fans (%d x %d LEDs)", fans.Fans(), fans.LedsPerFan());
+        return d.name.find(L"header ") != std::wstring::npos ? Utf8(d.name) + " - " + b : std::string(b);
+    }
+    *icon = Icon::Leds;
+    return Utf8(d.name);
+}
+
+void WLighting(DashCtx& c) {
+    const auto& out = c.ctl.output();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float orb = 18 * S();
+    Orb(ImVec2(p.x + orb + 2 * S(), p.y + orb + 2 * S()), orb, PreviewColor(out));
+    ImGui::Dummy(ImVec2(orb * 2 + 12 * S(), orb * 2 + 4 * S()));
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    ImGui::PushFont(c.f.bold);
+    ImGui::TextUnformatted(out.stopped ? "Armoury Crate" : c.ctl.prefs().mode == Mode::Auto ? "Auto" : "Manual");
+    ImGui::PopFont();
+    if (const uint64_t left = c.ctl.handbackMsLeft())
+        Muted("Handing back... %d s", static_cast<int>((left + 999) / 1000));
+    else
+        Muted("%s", out.label.c_str());
+    if (!out.stopped) Muted("Effect: %s", kEffects[static_cast<int>(out.fx.kind)].name);
+    ImGui::EndGroup();
+}
+
+void WGame(DashCtx& c) {
+    const auto& games = c.ctl.games();
+    if (games.empty()) {
+        Muted("No game running.");
+        return;
+    }
+    for (const auto& g : games) {
+        ImGui::PushFont(c.f.bold);
+        ImGui::TextUnformatted(g.game.name.c_str());
+        ImGui::PopFont();
+        const bool active = g.support == games::Support::Active;
+        const bool builtIn = g.profile && g.profile->kind == games::ProfileKind::BuiltIn;
+        if (active) Pill(("Dynamic lighting - " + g.sdk).c_str(), kGreen);
+        else if (c.ctl.screenColorsActive() && g.mode != GameMode::Idle && !builtIn) Pill("Screen colors", kAccent);
+        else if (builtIn || games::SupportsLighting(g.support)) Pill("Waiting for its lighting", kAmber);
+        else Pill("No dynamic lighting", kMuted);
+    }
+}
+
+void WCpu(DashCtx& c) {
+    const auto& s = c.snap;
+    Muted("%s", sensors::FriendlyCpu(s.cpuName).c_str());
+    char v[16] = "--";
+    if (s.cpuLoad >= 0) snprintf(v, sizeof v, "%.0f", s.cpuLoad);
+    Metric(c.f, v, "% load", s.cpuLoad >= 0 ? LoadColor(s.cpuLoad) : kMuted);
+    Bar(s.cpuLoad / 100.0, LoadColor(s.cpuLoad));
+    if (const auto* t = sensors::PickSensor(s.lhm, sensors::HardwareKind::Cpu, sensors::SensorType::Temperature,
+                                            {"Tctl", "Package", "Core (Tdie)", "CPU"})) {
+        ImGui::PushStyleColor(ImGuiCol_Text, V4(TempColor(t->value)));
+        ImGui::Text("%.0f \xC2\xB0" "C", t->value);
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        Muted("%s", t->name.c_str());
+    } else if (!s.lhmConnected) {
+        Muted("Temperature: needs LibreHardwareMonitor (see Fans).");
+    }
+    if (s.cpuThreads) Muted("%d threads", s.cpuThreads);
+}
+
+void WGpu(DashCtx& c) {
+    const auto& s = c.snap;
+    if (s.gpus.empty()) {
+        Muted("No graphics card found.");
+        return;
+    }
+    for (const auto& g : s.gpus) {
+        ImGui::PushFont(c.f.bold);
+        ImGui::TextUnformatted(sensors::FriendlyGpu(g.name).c_str());
+        ImGui::PopFont();
+        double load = g.load, temp = g.temp;
+        if (load < 0)
+            if (const auto* x = sensors::PickSensor(s.lhm, sensors::HardwareKind::Gpu, sensors::SensorType::Load, {"Core"}))
+                load = x->value;
+        if (temp < 0)
+            if (const auto* x = sensors::PickSensor(s.lhm, sensors::HardwareKind::Gpu, sensors::SensorType::Temperature,
+                                                    {"Core", "GPU"}))
+                temp = x->value;
+        if (load >= 0) {
+            char v[16];
+            snprintf(v, sizeof v, "%.0f", load);
+            Metric(c.f, v, "% load", LoadColor(load));
+            Bar(load / 100.0, LoadColor(load));
+        }
+        std::string line;
+        char b[64];
+        if (temp >= 0) {
+            snprintf(b, sizeof b, "%.0f \xC2\xB0" "C", temp);
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(TempColor(temp)));
+            ImGui::TextUnformatted(b);
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+        }
+        if (g.fanPct >= 0) {
+            snprintf(b, sizeof b, "fan %.0f %%  ", g.fanPct);
+            line += b;
+        }
+        if (g.powerW >= 0) {
+            snprintf(b, sizeof b, "%.0f W  ", g.powerW);
+            line += b;
+        }
+        if (g.vramTotal) line += (g.vramUsed ? Gb(g.vramUsed) + " / " : std::string()) + Gb(g.vramTotal) + " VRAM";
+        Muted("%s", line.c_str());
+        if (load < 0 && temp < 0) Muted("Live stats: NVIDIA cards work out of the box; others need LibreHardwareMonitor.");
+    }
+}
+
+void WMemory(DashCtx& c) {
+    const auto& s = c.snap;
+    if (s.memTotal) {
+        const double used = static_cast<double>(s.memUsed) / static_cast<double>(s.memTotal);
+        char v[16];
+        snprintf(v, sizeof v, "%.0f", used * 100);
+        Metric(c.f, v, "% used", LoadColor(used * 100));
+        Bar(used, LoadColor(used * 100));
+        Muted("%s of %s", Gb(s.memUsed).c_str(), Gb(s.memTotal).c_str());
+    }
+    // Group identical sticks: "2 x 8 GB HyperX FURY @ 3600 MT/s".
+    std::vector<std::pair<std::string, int>> groups;
+    for (const auto& m : s.smbios.memory) {
+        char b[160];
+        snprintf(b, sizeof b, "%u GB %s @ %u MT/s", m.sizeMb / 1024, sensors::FriendlyMemory(m.manufacturer, m.part).c_str(),
+                 m.speedMts);
+        bool found = false;
+        for (auto& gr : groups)
+            if (gr.first == b) found = ++gr.second > 0;
+        if (!found) groups.push_back({b, 1});
+    }
+    for (const auto& gr : groups) Muted("%d x %s", gr.second, gr.first.c_str());
+}
+
+void WFans(DashCtx& c) {
+    const auto& s = c.snap;
+    int shown = 0, idle = 0;
+    const float t = static_cast<float>(ImGui::GetTime());
+    for (const auto& x : s.lhm) {
+        if (x.type != sensors::SensorType::Fan) continue;
+        if (x.value < 1) {
+            ++idle;
+            continue;
+        }
+        ImGui::PushID(shown++);
+        IconItem(Icon::Fan, 18 * S(), Hex(kAccent), t * static_cast<float>(x.value) / 60.f * 0.35f);
+        ImGui::SameLine();
+        ImGui::Text("%.0f RPM", x.value);
+        ImGui::SameLine();
+        Muted("%s", x.name.c_str());
+        ImGui::PopID();
+    }
+    for (const auto& g : s.gpus)
+        if (g.fanPct >= 0) {
+            IconItem(Icon::Fan, 18 * S(), Hex(kAccent), t * static_cast<float>(g.fanPct) * 0.05f);
+            ImGui::SameLine();
+            ImGui::Text("%.0f %%", g.fanPct);
+            ImGui::SameLine();
+            Muted("%s fan", sensors::FriendlyGpu(g.name).c_str());
+            ++shown;
+        }
+    if (idle) Muted("%d header(s) with nothing connected / stopped", idle);
+    if (!s.lhmConnected) LhmHint();
+    else if (!shown && !idle) Muted("LibreHardwareMonitor reports no fans.");
+}
+
+void WTemps(DashCtx& c) {
+    const auto& s = c.snap;
+    int shown = 0;
+    auto row = [&](const char* label, double v) {
+        ImGui::PushStyleColor(ImGuiCol_Text, V4(TempColor(v)));
+        ImGui::Text("%5.0f \xC2\xB0" "C", v);
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        Muted("%s", label);
+        ++shown;
+    };
+    if (const auto* x = sensors::PickSensor(s.lhm, sensors::HardwareKind::Cpu, sensors::SensorType::Temperature,
+                                            {"Tctl", "Package", "CPU"}))
+        row("CPU", x->value);
+    for (const auto& g : s.gpus)
+        if (g.temp >= 0) row(sensors::FriendlyGpu(g.name).c_str(), g.temp);
+    for (const auto& x : s.lhm)
+        if (x.type == sensors::SensorType::Temperature && x.value > 0 && x.value < 150 &&
+            (x.kind == sensors::HardwareKind::Board || x.kind == sensors::HardwareKind::Storage ||
+             x.kind == sensors::HardwareKind::Memory) && shown < 10)
+            row((x.hardware.empty() ? x.name : x.name + " (" + x.hardware + ")").c_str(), x.value);
+    if (!s.lhmConnected) LhmHint();
+    else if (!shown) Muted("No temperatures reported.");
+}
+
+void WDevices(DashCtx& c) {
+    const auto& devices = c.ctl.devices();
+    if (devices.empty()) {
+        Muted("No Aura devices found (Devices > Rescan).");
+        return;
+    }
+    const auto& disabled = c.ctl.config().auraDisabledDevices;
+    for (const auto& d : devices) {
+        Icon icon;
+        const std::string label = DeviceLabel(d, c.snap, c.ctl.config().argbFans, &icon);
+        bool off = false;
+        for (const auto& n : disabled) off |= _wcsicmp(n.c_str(), d.name.c_str()) == 0;
+        IconItem(icon, 18 * S(), off ? Hex(kMuted) : Hex(kAccent));
+        ImGui::SameLine();
+        ImGui::TextUnformatted(label.c_str());
+        ImGui::SameLine();
+        Muted("%d LEDs%s", d.lightCount, off ? " - off" : "");
+    }
+    Muted("AURA LED Controller (USB 0B05:1939)");
+}
+
+void EnsureIntegrations(Controller& ctl, Integrations& in, UiState& ui) {
+    const auto& gs = ctl.gameSense();
+    if (!ui.integrationsLoaded || in.TakeFinished()) {
+        in.Refresh(gs.IsRunning(), gs.Port(), gs.CorePropsWritten(), gs.FoundSteelSeriesGG(), gs.ForwardPort(),
+                   gs.ForwardOk());
+        ui.integrationsLoaded = true;
+    }
+}
+
+void WConnections(DashCtx& c) {
+    EnsureIntegrations(c.ctl, c.in, c.ui);
+    for (const auto& it : c.in.list()) {
+        const bool on = it.state == IntegrationState::Active || it.state == IntegrationState::PerGame;
+        const unsigned col = it.state == IntegrationState::Problem ? kRed : on ? kGreen : kMuted;
+        ImGui::GetWindowDrawList()->AddCircleFilled(
+            ImVec2(ImGui::GetCursorScreenPos().x + 5 * S(), ImGui::GetCursorScreenPos().y + ImGui::GetTextLineHeight() / 2),
+            4 * S(), Hex(col));
+        ImGui::Dummy(ImVec2(12 * S(), ImGui::GetTextLineHeight()));
+        ImGui::SameLine();
+        ImGui::TextUnformatted(it.name.c_str());
+    }
+    const auto& feeds = c.ctl.feeds();
+    const struct {
+        const char* name;
+        bool on;
+    } built[] = {{"Counter-Strike 2 feed", feeds.Cs2Seen()},
+                 {"Rocket League feed", feeds.RocketLeagueConnected()},
+                 {"War Thunder feed", feeds.WarThunderSeen()}};
+    for (const auto& b : built) {
+        ImGui::GetWindowDrawList()->AddCircleFilled(
+            ImVec2(ImGui::GetCursorScreenPos().x + 5 * S(), ImGui::GetCursorScreenPos().y + ImGui::GetTextLineHeight() / 2),
+            4 * S(), Hex(b.on ? kGreen : kMuted));
+        ImGui::Dummy(ImVec2(12 * S(), ImGui::GetTextLineHeight()));
+        ImGui::SameLine();
+        ImGui::TextUnformatted(b.name);
+        if (!b.on) {
+            ImGui::SameLine();
+            Muted("idle");
+        }
+    }
+}
+
+void WSystem(DashCtx& c) {
+    const auto& s = c.snap;
+    const auto& b = s.smbios;
+    auto line = [](const char* label, const std::string& v) {
+        if (v.empty()) return;
+        Muted("%s", label);
+        ImGui::SameLine(90 * S());
+        ImGui::TextUnformatted(v.c_str());
+    };
+    line("Board", sensors::FriendlyBoard(b.boardMaker, b.boardName));
+    line("BIOS", b.biosVersion.empty() ? std::string() : b.biosVersion + (b.biosDate.empty() ? "" : " (" + b.biosDate + ")"));
+    line("CPU", sensors::FriendlyCpu(s.cpuName));
+    for (const auto& g : s.gpus) line("GPU", sensors::FriendlyGpu(g.name));
+    if (s.memTotal) line("Memory", Gb(s.memTotal));
+    line("LumaBridge", kVersionText);
+}
+
+struct DashWidget {
+    const char* id;
+    const char* title;
+    Icon icon;
+    void (*draw)(DashCtx&);
+};
+
+const DashWidget kWidgets[] = {
+    {"lighting", "Lighting", Icon::Lighting, WLighting},     {"game", "Game", Icon::Game, WGame},
+    {"cpu", "Processor", Icon::Cpu, WCpu},                   {"gpu", "Graphics", Icon::Gpu, WGpu},
+    {"memory", "Memory", Icon::Memory, WMemory},             {"fans", "Fans", Icon::Fan, WFans},
+    {"temps", "Temperatures", Icon::Temp, WTemps},           {"devices", "Aura devices", Icon::Leds, WDevices},
+    {"connections", "Connections", Icon::Plug, WConnections}, {"system", "System", Icon::Info, WSystem},
+};
+
+const DashWidget* FindWidget(const std::string& id) {
+    for (const auto& w : kWidgets)
+        if (id == w.id) return &w;
+    return nullptr;
+}
+
+void DashboardCustomize(Controller& ctl, UiState& ui, const Fonts& f) {
+    BeginCard("dash-edit");
+    CardTitle(f, "Customize the dashboard");
+    Muted("Tick the cards to show, and use the arrows to change their order.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    auto& order = ctl.prefs().dashboard;
+    // Visible cards in their order, then the hidden ones.
+    std::vector<std::string> all = order;
+    for (const auto& w : kWidgets)
+        if (std::find(all.begin(), all.end(), w.id) == all.end()) all.push_back(w.id);
+    bool changed = false;
+    for (size_t i = 0; i < all.size(); ++i) {
+        const DashWidget* w = FindWidget(all[i]);
+        if (!w) continue;
+        ImGui::PushID(w->id);
+        auto pos = std::find(order.begin(), order.end(), all[i]);
+        bool shown = pos != order.end();
+        if (ImGui::Checkbox("##on", &shown)) {
+            if (shown) order.push_back(all[i]);
+            else order.erase(pos);
+            changed = true;
+        }
+        ImGui::SameLine();
+        IconItem(w->icon, 16 * S(), shown ? Hex(kAccent) : Hex(kMuted));
+        ImGui::SameLine();
+        ImGui::TextUnformatted(w->title);
+        if (pos != order.end() && !changed) {
+            const size_t k = static_cast<size_t>(pos - order.begin());
+            ImGui::SameLine(260 * S());
+            ImGui::BeginDisabled(k == 0);
+            if (ImGui::ArrowButton("up", ImGuiDir_Up)) {
+                std::swap(order[k], order[k - 1]);
+                changed = true;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::BeginDisabled(k + 1 >= order.size());
+            if (!changed && ImGui::ArrowButton("down", ImGuiDir_Down)) {
+                std::swap(order[k], order[k + 1]);
+                changed = true;
+            }
+            ImGui::EndDisabled();
+        }
+        ImGui::PopID();
+        if (changed) break;  // the list changed under us; redraw next frame
+    }
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    if (ImGui::Button("Reset to default")) {
+        order = DefaultDashboard();
+        changed = true;
+    }
+    ImGui::SameLine();
+    if (PrimaryButton("Done")) ui.dashEdit = false;
+    if (changed) ctl.Changed();
+    EndCard();
+}
+
+void DashboardPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
+    const sensors::SystemSnapshot snap = ctl.monitor().Snapshot();
+    Muted("The essentials at a glance. Cards can be hidden and reordered.");
+    ImGui::SameLine(ImGui::GetContentRegionMax().x - 100 * S());
+    if (ImGui::Button(ui.dashEdit ? "Close" : "Customize", ImVec2(100 * S(), 0))) ui.dashEdit = !ui.dashEdit;
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    if (ui.dashEdit) DashboardCustomize(ctl, ui, f);
+
+    const auto& order = ctl.prefs().dashboard;
+    if (order.empty()) {
+        Muted("All cards are hidden. Click Customize to show some.");
+        return;
+    }
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const int cols = avail > 1000 * S() ? 3 : avail > 600 * S() ? 2 : 1;
+    DashCtx c{hwnd, ctl, in, ui, f, snap};
+    if (!ImGui::BeginTable("dash", cols, ImGuiTableFlags_SizingStretchSame)) return;
+    for (const auto& id : order) {
+        const DashWidget* w = FindWidget(id);
+        if (!w) continue;
+        ImGui::TableNextColumn();
+        ImGui::PushID(w->id);
+        BeginCard(w->id);
+        IconItem(w->icon, 20 * S(), Hex(kAccent));
+        ImGui::SameLine(0, 8 * S());
+        ImGui::PushFont(f.bold);
+        ImGui::TextUnformatted(w->title);
+        ImGui::PopFont();
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+        w->draw(c);
+        EndCard();
+        ImGui::PopID();
+    }
+    ImGui::EndTable();
 }
 
 // ---- Pages ---------------------------------------------------------------------------
@@ -578,6 +1132,7 @@ void FansCard(Controller& ctl, const Fonts& f) {
 }
 
 void DevicesPage(Controller& ctl, const Fonts& f) {
+    const sensors::SystemSnapshot snap = ctl.monitor().Snapshot();  // board name for the labels
     auto st = ctl.auraStatus();
     const auto& lastDevices = ctl.devices();
 
@@ -629,7 +1184,12 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
             ImGui::TableNextColumn();
             char name[256];
             WideCharToMultiByte(CP_UTF8, 0, d.name.c_str(), -1, name, sizeof name, nullptr, nullptr);
-            ImGui::TextUnformatted(name);
+            Icon icon;
+            const std::string label = DeviceLabel(d, snap, ctl.config().argbFans, &icon);
+            IconItem(icon, 16 * S(), on ? Hex(kAccent) : Hex(kMuted));
+            ImGui::SameLine();
+            ImGui::TextUnformatted(label.c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", name);
             ImGui::TableNextColumn();
             char type[64];
             WideCharToMultiByte(CP_UTF8, 0, AuraDeviceTypeName(d.type), -1, type, sizeof type, nullptr, nullptr);
@@ -1142,7 +1702,8 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width) {
     const struct {
         Page page;
         const char* label;
-    } items[] = {{Page::Lighting, "Lighting"},         {Page::GamesList, "Games List"},
+    } items[] = {{Page::Dashboard, "Dashboard"},       {Page::Lighting, "Lighting"},
+                 {Page::GamesList, "Games List"},
                  {Page::Devices, "Devices"},           {Page::Integrations, "Integrations"},
                  {Page::Settings, "Settings"}};
     ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.f, 0.5f));
@@ -1258,7 +1819,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
     ImGui::BeginChild("main", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding);
 
     // Header: page title + global mode switch.
-    const char* titles[] = {"Lighting", "Games List", "Devices", "Integrations", "Settings"};  // Page order
+    const char* titles[] = {"Dashboard", "Lighting", "Games List", "Devices", "Integrations", "Settings"};  // Page order
     ImGui::PushFont(f.title);
     ImGui::TextUnformatted(titles[static_cast<int>(ui.page)]);
     ImGui::PopFont();
@@ -1303,6 +1864,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
         else ManualPage(ctl, ui, f);
         break;
     case Page::Devices: DevicesPage(ctl, f); break;
+    case Page::Dashboard: DashboardPage(hwnd, ctl, integrations, ui, f); break;
     case Page::GamesList: GamesListPage(hwnd, ctl, ui, f); break;
     case Page::Integrations: IntegrationsPage(hwnd, ctl, integrations, ui, f); break;
     case Page::Settings: SettingsPage(ctl, ui, f); break;
