@@ -91,9 +91,9 @@ void Controller::UpdateLogitech() {
         }
     if (own && !tracker_.Active())
         for (const GameStatus& g : games_)
-            if (g.profile && g.profile->kind == games::ProfileKind::VendorSdk && !g.profile->blocked &&
+            if (g.profile && g.profile->kind == games::ProfileKind::VendorSdk &&
                 std::string(g.profile->how).find("Logitech") != std::string::npos) {
-                own = false;  // e.g. Battlefield 1 talks to G HUB directly
+                own = false;  // e.g. Battlefield 2042 lights them through G HUB (LIGHTSYNC)
                 logitechNote_ = g.game.name + " lights them through G HUB";
                 break;
             }

@@ -2752,8 +2752,8 @@ void GameDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts&
             "The lights show this game's own color while it runs.",
         };
         if (mode == 0 && profile && profile->blocked)
-            Muted("The screen's colors on every device: EA's anti-cheat keeps the game's own lighting away from "
-                  "LumaBridge (it only reaches the vendors' software).");
+            Muted("Your Logitech gear shows the game's own lighting (LIGHTSYNC, through G HUB); every other device "
+                  "the screen's colors, since EA's anti-cheat keeps the game's lighting away from LumaBridge.");
         else
             Muted("%s", kHelp[mode]);
         if (mode == static_cast<int>(GameMode::Color)) {
