@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(LumaBridge LANGUAGES CXX VERSION 0.2.2)
+project(LumaBridge LANGUAGES CXX VERSION 0.2.3)
 
 if(NOT WIN32)
     message(STATUS "Non-Windows host: only the portable core tests will be built.")
@@ -29,7 +29,7 @@ endif()
 enable_testing()
 add_executable(test_core tests/test_core.cpp)
 target_include_directories(test_core PRIVATE
-    src/common src/chroma-emu src/corsair-emu src/lightfx-emu src/gamesense src/app)
+    src/common src/chroma-emu src/corsair-emu src/lightfx-emu src/gamesense src/app src/aura-usb)
 add_test(NAME test_core COMMAND test_core)
 
 if(NOT WIN32)
@@ -150,13 +150,23 @@ target_link_libraries(aura-test PRIVATE aura_bridge)
 
 add_executable(logiled-harness tools/logiled-harness/main.cpp)
 
+# Direct USB access to the motherboard's Aura controller (replacement for the Aura SDK,
+# which reports no devices on current Armoury Crate versions).
+add_library(aura_usb STATIC src/aura-usb/aura_usb.cpp)
+target_include_directories(aura_usb PUBLIC src/aura-usb)
+target_link_libraries(aura_usb PUBLIC luma_common hid setupapi)
+
+add_executable(aura-usb-test tools/aura-usb-test/main.cpp)
+target_link_libraries(aura-usb-test PRIVATE aura_usb)
+
 if(MINGW)
     # wmain entry points
     target_link_options(aura-test PRIVATE -municode)
     target_link_options(logiled-harness PRIVATE -municode)
+    target_link_options(aura-usb-test PRIVATE -municode)
 endif()
 
-install(TARGETS lumabridge_proxy chroma_emu corsair_emu lightfx_emu aura-test logiled-harness
+install(TARGETS lumabridge_proxy chroma_emu corsair_emu lightfx_emu aura-test aura-usb-test logiled-harness
         RUNTIME DESTINATION .)
 install(FILES config/LumaBridge.ini.example DESTINATION .)
 install(FILES scripts/Install-LogiLedProxy.ps1 scripts/Install-SdkEmulators.ps1 DESTINATION .)

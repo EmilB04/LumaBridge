@@ -7,6 +7,7 @@
 #include "color.h"
 #include "lighting_state.h"
 #include "chroma_translate.h"
+#include "aura_usb_protocol.h"
 #include "core_props.h"
 #include "fake_devices.h"
 #include "gamesense_engine.h"
@@ -242,6 +243,35 @@ static void TestGameSense() {
     CHECK(post("/game_event", "not json", 0) == 400);
 }
 
+static void TestAuraUsb() {
+    using namespace luma::aurausb;
+    CHECK(FirmwareRequest()[0] == 0xEC && FirmwareRequest()[1] == 0x82);
+    Report m = SetModeRequest(2, kModeDirect);
+    CHECK(m[1] == 0x35 && m[2] == 2 && m[5] == 0xFF);
+
+    std::vector<Rgb> leds(45, Rgb{1, 2, 3});
+    leds[44] = Rgb{9, 8, 7};
+    auto pk = DirectColorRequests(1, leds);
+    CHECK(pk.size() == 3);
+    CHECK(pk[0][1] == 0x40 && pk[0][2] == 0x01 && pk[0][3] == 0 && pk[0][4] == 20);
+    CHECK(pk[1][2] == 0x01 && pk[1][3] == 20 && pk[1][4] == 20);
+    CHECK(pk[2][2] == 0x81 && pk[2][3] == 40 && pk[2][4] == 5);  // apply flag on the last
+    CHECK(pk[2][5 + 4 * 3] == 9 && pk[2][6 + 4 * 3] == 8 && pk[2][7 + 4 * 3] == 7);
+    CHECK(DirectColorRequests(0, {}).empty());
+
+    Report fw{};
+    fw[0] = 0xEC; fw[1] = 0x02;
+    const char* name = "AUMA0-E6K5-0106";
+    for (size_t i = 0; name[i]; ++i) fw[2 + i] = static_cast<uint8_t>(name[i]);
+    std::string parsed;
+    CHECK(ParseFirmware(fw, &parsed) && parsed == "AUMA0-E6K5-0106");
+    Report cfgResp{};
+    cfgResp[0] = 0xEC; cfgResp[1] = 0x30; cfgResp[4 + 0x02] = 2; cfgResp[4 + 0x1B] = 5; cfgResp[4 + 0x1D] = 1;
+    ConfigTable cfg;
+    CHECK(ParseConfig(cfgResp, &cfg) && cfg.ArgbHeaders() == 2 && cfg.MainboardLeds() == 5 && cfg.RgbHeaders() == 1);
+    CHECK(!ParseConfig(fw, &cfg));
+}
+
 static void TestCoreProps() {
     using namespace luma::gamesense;
     CoreProps gg = ParseCoreProps(R"({"address":"127.0.0.1:51248","encrypted_address":"127.0.0.1:51249"})");
@@ -331,6 +361,7 @@ int main() {
     TestJson();
     TestHttp();
     TestGameSense();
+    TestAuraUsb();
     TestCoreProps();
     TestCorsairDevices();
     TestLightFx();
