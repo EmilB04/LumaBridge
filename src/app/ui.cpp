@@ -669,6 +669,16 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
     }
     ImGui::Dummy(ImVec2(0, 8 * S()));
 
+    if (ctl.auraPaused()) {
+        BeginCard("paused");
+        Pill("Lighting control paused", kAmber);
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+        Muted("LumaBridge closed unexpectedly the last time it controlled your lights, so it is "
+              "leaving them to Armoury Crate for now. Details are in the log folder (Settings).");
+        if (PrimaryButton("Resume lighting control")) ctl.ResumeAura();
+        EndCard();
+    }
+
     switch (ui.page) {
     case Page::Lighting:
         if (ctl.prefs().mode == Mode::Auto) AutoPage(ctl, f);

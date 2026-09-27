@@ -22,6 +22,24 @@ bool ContainsNoCase(const std::wstring& hay, const std::wstring& needle) {
     return it != hay.end();
 }
 
+// Waits on `h` while pumping messages: a single-threaded COM apartment must keep its
+// message queue moving or COM calls into it (and its own outgoing calls) can stall.
+DWORD PumpingWait(HANDLE h, DWORD ms) {
+    const uint64_t deadline = GetTickCount64() + ms;
+    for (;;) {
+        const uint64_t now = GetTickCount64();
+        const DWORD left = now >= deadline ? 0 : static_cast<DWORD>(deadline - now);
+        DWORD r = MsgWaitForMultipleObjectsEx(1, &h, left, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        if (r != WAIT_OBJECT_0 + 1) return r;
+        MSG m;
+        while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
+        if (left == 0) return WAIT_TIMEOUT;
+    }
+}
+
 HWND FindApp() { return FindWindowExW(HWND_MESSAGE, nullptr, ipc::kAppWindowClass, nullptr); }
 
 bool SendToApp(HWND app, const ipc::Frame& f) {
@@ -190,8 +208,11 @@ DWORD WINAPI AuraMirror::ThreadMain(LPVOID param) {
 }
 
 void AuraMirror::Run() {
-    // Our own MTA: never touches the game's COM apartment choices.
-    HRESULT hrInit = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    // A single-threaded apartment of our own (never the game's thread). The Aura SDK objects
+    // are apartment-threaded; calling them from an MTA goes through cross-apartment
+    // marshaling, the prime suspect for a crash seen on real hardware during Connect().
+    // ASUS's samples all use an STA.
+    HRESULT hrInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(hrInit)) {
         LUMA_ERROR("Aura mirror: CoInitializeEx failed (hr=0x%08lX)",
                    static_cast<unsigned long>(hrInit));
@@ -250,7 +271,7 @@ void AuraMirror::Run() {
                 lastPushed = raw;
                 lastPushAt = GetTickCount64();
             }
-            WaitForSingleObject(wake_, animating ? static_cast<DWORD>(framePeriodMs) : kIdleWaitMs);
+            PumpingWait(wake_, animating ? static_cast<DWORD>(framePeriodMs) : kIdleWaitMs);
             continue;
         }
         if (wasRouted) {
@@ -316,7 +337,7 @@ void AuraMirror::Run() {
 
         // Animations need a steady tick; otherwise sleep until something changes
         // (or periodically, to retry a failed Aura connection / notice the app).
-        WaitForSingleObject(wake_, animating ? static_cast<DWORD>(framePeriodMs) : kIdleWaitMs);
+        PumpingWait(wake_, animating ? static_cast<DWORD>(framePeriodMs) : kIdleWaitMs);
     }
 
     if (wasRouted && app)

@@ -4,15 +4,19 @@
 //   LumaBridge.exe --minimized  start in the tray (used by "Start with Windows")
 #include <windows.h>
 #include <d3d11.h>
+#include <dbghelp.h>
 #include <dwmapi.h>
 #include <objbase.h>
 #include <shellapi.h>
 
+#include <csignal>
 #include <cmath>
+#include <exception>
 #include <cwchar>
 #include <iterator>
 
 #include "controller.h"
+#include "log.h"
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
 #include "imgui_impl_win32.h"
@@ -53,6 +57,44 @@ ID3D11RenderTargetView* g_rtv = nullptr;
 UINT g_resizeW = 0, g_resizeH = 0;
 float g_dpiScale = 1.f;
 bool g_rebuildFonts = false;
+
+// ---- Crash reporting ----------------------------------------------------------------
+
+// Logs where the crash happened and writes a minidump next to the log, then lets Windows
+// terminate the process as usual.
+LONG WINAPI OnCrash(EXCEPTION_POINTERS* ep) {
+    static volatile LONG entered = 0;
+    if (InterlockedExchange(&entered, 1)) return EXCEPTION_CONTINUE_SEARCH;
+
+    const EXCEPTION_RECORD* er = ep->ExceptionRecord;
+    HMODULE mod = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(er->ExceptionAddress), &mod);
+    char modPath[MAX_PATH] = "?";
+    if (mod) GetModuleFileNameA(mod, modPath, MAX_PATH);
+    LUMA_ERROR("CRASH: exception 0x%08lX at %p in %s (+0x%llX), thread %lu",
+               static_cast<unsigned long>(er->ExceptionCode), er->ExceptionAddress, modPath,
+               static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(er->ExceptionAddress) -
+                                               reinterpret_cast<uintptr_t>(mod)),
+               GetCurrentThreadId());
+
+    std::wstring dump = g_ctl.logPath();
+    dump = dump.substr(0, dump.find_last_of(L"\\/") + 1) + L"LumaBridge-crash.dmp";
+    HANDLE f = CreateFileW(dump.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f != INVALID_HANDLE_VALUE) {
+        MINIDUMP_EXCEPTION_INFORMATION mei{GetCurrentThreadId(), ep, FALSE};
+        MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), f,
+                          static_cast<MINIDUMP_TYPE>(MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory),
+                          &mei, nullptr, nullptr);
+        CloseHandle(f);
+        LUMA_ERROR("crash dump written to LumaBridge-crash.dmp");
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+void OnAbort(int) {
+    LUMA_ERROR("CRASH: abort() called (thread %lu)", GetCurrentThreadId());
+}
 
 // ---- Direct3D ------------------------------------------------------------------------
 
@@ -305,6 +347,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
         return 0;
     }
 
+    SetUnhandledExceptionFilter(OnCrash);
+    std::signal(SIGABRT, OnAbort);
+    std::set_terminate([] {
+        LUMA_ERROR("CRASH: std::terminate (unhandled C++ exception?), thread %lu", GetCurrentThreadId());
+        std::abort();
+    });
     ImGui_ImplWin32_EnableDpiAwareness();
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);  // file dialogs
     g_ctl.Init();

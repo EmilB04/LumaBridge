@@ -68,6 +68,6 @@ from official Logitech documentation. Check them in `regedit` on your machine.
 
 - Nothing runs in `DllMain`. Config, log and real-DLL loading happen on the first exported
   call; the Aura worker starts in `LogiLedInit`.
-- Aura writes run on a dedicated worker thread (own COM MTA), coalesced to ≤ `MaxUpdateHz`.
+- Aura writes run on a dedicated worker thread (its own single-threaded COM apartment), coalesced to ≤ `MaxUpdateHz`.
   The game thread only takes a mutex and stores the new color.
 - If G HUB isn't running or installed, the proxy still returns success and drives Aura alone.

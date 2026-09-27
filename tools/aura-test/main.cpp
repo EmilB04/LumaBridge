@@ -46,7 +46,7 @@ int wmain(int argc, wchar_t** argv) {
     log::Init(L"", log::Level::Info);  // no file, console only
     log::SetConsoleEcho(true);
 
-    if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {
+    if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) {
         std::fwprintf(stderr, L"CoInitializeEx failed\n");
         return 1;
     }

@@ -52,6 +52,12 @@ public:
     void RememberManualColor();  // push the current manual color onto the recents list
 
     void SetGameSenseEnabled(bool enabled);
+
+    // True when the previous run ended without a clean exit while LumaBridge controlled
+    // Aura: lighting control stays off until the user resumes it, so a crash in the Aura
+    // SDK can't turn into a crash loop.
+    bool auraPaused() const { return auraPaused_; }
+    void ResumeAura();
     void RescanDevices() { mirror_.Rescan(); }
 
     const Output& output() const { return output_; }
@@ -76,6 +82,7 @@ private:
     uint64_t gameSenseVersion_ = ~0ull;
 
     int mirrorHz_ = 0;
+    bool auraPaused_ = false;
     Output output_;
     bool outputApplied_ = false;
     bool dirty_ = false;

@@ -187,6 +187,7 @@ const std::vector<AuraDeviceInfo>& AuraBridge::Devices() const { return impl_->i
 bool AuraBridge::Connect(const DeviceFilter& filter) {
     Disconnect(false);
 
+    LUMA_INFO("Aura: connecting (looking up aura.sdk.1)");
     CLSID clsid;
     HRESULT hr = CLSIDFromProgID(L"aura.sdk.1", &clsid);
     if (FAILED(hr)) {
@@ -195,6 +196,7 @@ bool AuraBridge::Connect(const DeviceFilter& filter) {
                   static_cast<unsigned long>(hr));
         return false;
     }
+    LUMA_INFO("Aura: creating SDK object");
     hr = CoCreateInstance(clsid, nullptr, CLSCTX_ALL, IID_IDispatch,
                           reinterpret_cast<void**>(impl_->sdk.out()));
     if (FAILED(hr)) {
@@ -203,6 +205,7 @@ bool AuraBridge::Connect(const DeviceFilter& filter) {
         return false;
     }
 
+    LUMA_INFO("Aura: SwitchMode (taking control from Armoury Crate)");
     hr = Invoke(impl_->sdk.get(), L"SwitchMode", DISPATCH_METHOD, {}, nullptr);
     if (FAILED(hr)) {
         LUMA_WARN("Aura: SwitchMode failed (hr=0x%08lX)", static_cast<unsigned long>(hr));
@@ -210,6 +213,7 @@ bool AuraBridge::Connect(const DeviceFilter& filter) {
         return false;
     }
 
+    LUMA_INFO("Aura: enumerating devices");
     Disp collection;
     hr = GetDispObject(impl_->sdk.get(), L"Enumerate", {MakeUI4(0)}, &collection);  // 0 = all types
     if (FAILED(hr)) {

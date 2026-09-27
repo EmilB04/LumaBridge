@@ -25,15 +25,31 @@ bool Controller::Init() {
     log::Init(cfg_.logFile, cfg_.logLevel);
     LUMA_INFO("==== LumaBridge app started (pid %lu) ====", GetCurrentProcessId());
 
+    // Crash-loop guard: [App] Running is 1 while the app runs and 0 after a clean exit.
+    wchar_t running[8] = {};
+    GetPrivateProfileStringW(L"App", L"Running", L"0", running, 8, iniPath_.c_str());
+    if (running[0] == L'1') {
+        auraPaused_ = true;
+        LUMA_WARN("previous run did not exit cleanly - Aura control paused until resumed");
+    }
+    WriteConfigValue(iniPath_, L"App", L"Running", L"1");
+
     if (cfg_.gameSenseEnabled)
         gameSense_.Start(cfg_, [] { /* picked up by the next Tick */ });
     return true;
+}
+
+void Controller::ResumeAura() {
+    LUMA_INFO("Aura control resumed by the user");
+    auraPaused_ = false;
+    outputApplied_ = false;
 }
 
 void Controller::Shutdown() {
     if (dirty_) SaveAll(iniPath_, prefs_, cfg_);
     gameSense_.Stop();
     mirror_.Stop();  // hands Aura back to Armoury Crate
+    WriteConfigValue(iniPath_, L"App", L"Running", L"0");
     LUMA_INFO("LumaBridge app exiting");
 }
 
@@ -106,6 +122,11 @@ Controller::Output Controller::Decide() const {
         return o;
     };
 
+    if (auraPaused_) {
+        Output o;
+        o.label = "Paused after an unexpected exit";
+        return o;
+    }
     if (prefs_.mode == Mode::Manual) return manual("Manual color");
 
     if (auto s = tracker_.Active()) {

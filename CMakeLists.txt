@@ -134,7 +134,7 @@ if(LUMA_ARCH STREQUAL "x64")
         src/app/integrations.cpp
         src/app/res/app.rc)
     target_include_directories(lumabridge_app PRIVATE src/app)
-    target_link_libraries(lumabridge_app PRIVATE imgui aura_bridge gamesense luma_common shell32 ole32 advapi32)
+    target_link_libraries(lumabridge_app PRIVATE imgui aura_bridge gamesense luma_common shell32 ole32 advapi32 dbghelp)
     set_target_properties(lumabridge_app PROPERTIES OUTPUT_NAME "LumaBridge")
     if(MSVC)
         target_link_options(lumabridge_app PRIVATE /MANIFEST:NO)  # app.rc embeds our manifest
