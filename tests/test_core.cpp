@@ -7,6 +7,7 @@
 #include "color.h"
 #include "lighting_state.h"
 #include "chroma_translate.h"
+#include "core_props.h"
 #include "fake_devices.h"
 #include "gamesense_engine.h"
 #include "http_parser.h"
@@ -241,6 +242,19 @@ static void TestGameSense() {
     CHECK(post("/game_event", "not json", 0) == 400);
 }
 
+static void TestCoreProps() {
+    using namespace luma::gamesense;
+    CoreProps gg = ParseCoreProps(R"({"address":"127.0.0.1:51248","encrypted_address":"127.0.0.1:51249"})");
+    CHECK(gg.valid && !gg.ours && gg.host == "127.0.0.1" && gg.port == 51248);
+    CoreProps ours = ParseCoreProps(R"({"address":"127.0.0.1:49713","lumabridge":true})");
+    CHECK(ours.valid && ours.ours && ours.port == 49713);
+    CHECK(!ParseCoreProps("").valid);
+    CHECK(!ParseCoreProps(R"({"address":"127.0.0.1"})").valid);
+    CHECK(!ParseCoreProps(R"({"address":"127.0.0.1:99999"})").valid);
+    CHECK(!ParseCoreProps(R"({"address":"127.0.0.1:12ab"})").valid);
+    CHECK(IsLoopbackHost("127.0.0.1") && IsLoopbackHost("localhost") && !IsLoopbackHost("10.0.0.5"));
+}
+
 static void TestCorsairDevices() {
     using namespace luma::corsair;
     auto devs = BuildFakeDevices();
@@ -317,6 +331,7 @@ int main() {
     TestJson();
     TestHttp();
     TestGameSense();
+    TestCoreProps();
     TestCorsairDevices();
     TestLightFx();
     TestSources();

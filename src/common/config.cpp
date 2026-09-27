@@ -173,6 +173,7 @@ Config LoadConfig(const std::wstring& moduleDir) {
     cfg.gameSensePort = static_cast<int>(ReadNumber(ini, L"GameSense", L"Port", cfg.gameSensePort));
     if (cfg.gameSensePort < 0 || cfg.gameSensePort > 65535) cfg.gameSensePort = 49713;
     cfg.gameSenseCoreProps = Trim(ReadString(ini, L"GameSense", L"CorePropsPath", L""));
+    cfg.gameSenseForwardToGG = ReadBool(ini, L"GameSense", L"ForwardToGG", cfg.gameSenseForwardToGG);
 
     std::wstring logFile = Trim(ReadString(ini, L"Log", L"File", L""));
     if (!logFile.empty()) cfg.logFile = logFile;

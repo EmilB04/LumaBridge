@@ -56,6 +56,9 @@ Enabled=1
 Port=49713
 ; Empty = %ProgramData%\SteelSeries\SteelSeries Engine 3\coreProps.json
 CorePropsPath=
+; With SteelSeries GG installed, pass every GameSense request on to GG as well, so GG
+; (SteelSeries devices, Moments auto-clips) keeps working.
+ForwardToGG=1
 
 [App]
 ; auto (games drive the lights) | manual

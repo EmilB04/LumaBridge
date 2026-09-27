@@ -122,9 +122,9 @@ if(LUMA_ARCH STREQUAL "x64")
         target_compile_options(imgui PRIVATE -w)
     endif()
 
-    add_library(gamesense STATIC src/gamesense/gamesense_server.cpp)
+    add_library(gamesense STATIC src/gamesense/gamesense_server.cpp src/gamesense/gg_forwarder.cpp)
     target_include_directories(gamesense PUBLIC src/gamesense)
-    target_link_libraries(gamesense PUBLIC luma_common ws2_32)
+    target_link_libraries(gamesense PUBLIC luma_common ws2_32 winhttp)
 
     add_executable(lumabridge_app WIN32
         src/app/main.cpp

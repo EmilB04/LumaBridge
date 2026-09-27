@@ -402,7 +402,8 @@ void DevicesPage(Controller& ctl, const Fonts& f) {
 void GamesPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
     const auto& gs = ctl.gameSense();
     if (!ui.integrationsLoaded || in.TakeFinished()) {
-        in.Refresh(gs.IsRunning(), gs.Port(), gs.CorePropsWritten(), gs.FoundSteelSeriesGG());
+        in.Refresh(gs.IsRunning(), gs.Port(), gs.CorePropsWritten(), gs.FoundSteelSeriesGG(), gs.ForwardPort(),
+                   gs.ForwardOk());
         ui.integrationsLoaded = true;
     }
 
@@ -419,7 +420,9 @@ void GamesPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, const 
         switch (it.state) {
         case IntegrationState::Active: Pill("Active", kGreen); break;
         case IntegrationState::NotInstalled: Pill("Off", kMuted); break;
-        case IntegrationState::Conflict: Pill("Vendor software present", kAmber); break;
+        case IntegrationState::Conflict:
+            Pill(it.id == "gamesense" ? "GG not answering" : "Vendor software present", kAmber);
+            break;
         case IntegrationState::PerGame: Pill("Per game", kAccent); break;
         case IntegrationState::Problem: Pill("Needs repair", kRed); break;
         }
@@ -678,6 +681,10 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
         if (PrimaryButton("Resume lighting control")) ctl.ResumeAura();
         EndCard();
     }
+
+    // Re-check integration status whenever the Games page is opened.
+    if (ui.page == Page::Games && ui.lastPage != Page::Games) ui.integrationsLoaded = false;
+    ui.lastPage = ui.page;
 
     switch (ui.page) {
     case Page::Lighting:

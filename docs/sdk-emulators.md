@@ -80,8 +80,14 @@ most "whole-rig" handler: full-keyboard bitmap > `rgb-1-zone` > whole keyboard >
 RGB zones > single keyboard zones > mouse and headset. Ties go to the most recent. A game
 goes inactive after its `deinitialize_timer_length_ms` (default 15 s) without events.
 
-If SteelSeries GG is installed, only one of GG and LumaBridge can serve GameSense at a
-time. LumaBridge backs GG's `coreProps.json` up while running and restores it on exit.
+**With SteelSeries GG installed**, LumaBridge sits in front of GG instead of replacing
+it. It saves GG's `coreProps.json`, answers games itself (so Aura reacts), and passes
+every request on to GG in order on a background thread. GG keeps working, including
+SteelSeries devices and **Moments** auto-clips, and a slow or closed GG never delays
+the game. If GG restarts and rewrites `coreProps.json` with a new port, LumaBridge
+notices within 2 seconds, follows the new port, and puts its own file back. On exit,
+GG's file is restored. Forwarding only ever goes to a loopback address, and
+`[GameSense] ForwardToGG=0` turns it off.
 
 ## Corsair iCUE (CUE SDK 2.x / 3.x)
 

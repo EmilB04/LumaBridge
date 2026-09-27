@@ -15,6 +15,7 @@
 
 #include "config.h"
 #include "gamesense_engine.h"
+#include "gg_forwarder.h"
 
 namespace luma::gamesense {
 
@@ -37,6 +38,10 @@ public:
     int Port() const { return port_; }
     // True when SteelSeries GG's own coreProps.json was found (and backed up).
     bool FoundSteelSeriesGG() const { return foundGG_; }
+    // GG's GameSense port LumaBridge forwards to (0 = not forwarding), and whether GG
+    // answered the last forwarded request.
+    int ForwardPort() const { return forwarder_.TargetPort(); }
+    bool ForwardOk() const { return forwarder_.LastSendOk(); }
     // False when coreProps.json couldn't be written, i.e. games can't find the server.
     bool CorePropsWritten() const { return corePropsOk_; }
 
@@ -47,6 +52,9 @@ private:
     void AcceptLoop();
     void Serve(SOCKET s);
     bool WriteCoreProps(const std::wstring& overridePath);
+    // Re-reads coreProps.json: if GG rewrote it (GG restarted), adopt GG's new address and
+    // put ours back.
+    void CheckCoreProps();
     void RestoreCoreProps();
 
     std::mutex engineMutex_;
@@ -66,6 +74,10 @@ private:
     bool corePropsBackedUp_ = false;
     bool foundGG_ = false;
     bool corePropsOk_ = false;
+    bool forwardToGG_ = true;
+    uint64_t nextCorePropsCheck_ = 0;
+    std::string lastCorePropsSeen_;  // skip re-trying a write that failed on unchanged content
+    GgForwarder forwarder_;
 };
 
 }  // namespace luma::gamesense

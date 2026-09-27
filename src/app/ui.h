@@ -23,6 +23,7 @@ enum class Page { Lighting, Devices, Games, Settings };
 
 struct UiState {
     Page page = Page::Lighting;
+    Page lastPage = Page::Lighting;
     char hex[16] = "";
     bool hexEditing = false;
     bool integrationsLoaded = false;

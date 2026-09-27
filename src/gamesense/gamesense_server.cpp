@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "core_props.h"
 #include "http_parser.h"
 #include "log.h"
 #include "module_bootstrap.h"
@@ -27,7 +28,29 @@ void CreateParentDirs(const std::wstring& file) {
         CreateDirectoryW(file.substr(0, pos).c_str(), nullptr);
 }
 
-bool Exists(const std::wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
+constexpr uint64_t kCorePropsCheckMs = 2000;
+
+std::string ReadSmallFile(const std::wstring& path) {
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return "";
+    char buf[4096];
+    DWORD read = 0;
+    std::string out;
+    if (ReadFile(f, buf, sizeof buf, &read, nullptr)) out.assign(buf, read);
+    CloseHandle(f);
+    return out;
+}
+
+bool WriteSmallFile(const std::wstring& path, const std::string& text) {
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    BOOL ok = WriteFile(f, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+    CloseHandle(f);
+    return ok && written == text.size();
+}
 
 }  // namespace
 
@@ -46,6 +69,8 @@ bool Server::Start(const Config& cfg, std::function<void()> onActivity) {
         Stop();
         return false;
     }
+    forwardToGG_ = cfg.gameSenseForwardToGG;
+    forwarder_.Start();
     corePropsOk_ = WriteCoreProps(cfg.gameSenseCoreProps);
     stop_ = false;
     running_ = true;
@@ -63,6 +88,7 @@ void Server::Stop() {
             std::lock_guard<std::mutex> lock(clientsMutex_);
             for (SOCKET c : clients_) shutdown(c, SD_BOTH);  // Serve() threads then exit
         }
+        forwarder_.Stop();
         RestoreCoreProps();
         running_ = false;
         LUMA_INFO("GameSense: server stopped");
@@ -77,6 +103,10 @@ void Server::Stop() {
 }
 
 Server::Snapshot Server::Poll(uint64_t nowMs) {
+    if (running_ && nowMs >= nextCorePropsCheck_) {
+        nextCorePropsCheck_ = nowMs + kCorePropsCheckMs;
+        CheckCoreProps();
+    }
     std::lock_guard<std::mutex> lock(engineMutex_);
     engine_.Tick(nowMs);
     return Snapshot{engine_.AnyActive(), engine_.Version(), engine_.Current()};
@@ -150,6 +180,7 @@ void Server::Serve(SOCKET s) {
             LUMA_DEBUG("GameSense: %s %s -> %d", req.method.c_str(), req.path.c_str(), resp.status);
             if (resp.status != 200)
                 LUMA_WARN("GameSense: %s -> %d %s", req.path.c_str(), resp.status, resp.body.c_str());
+            if (req.method == "POST") forwarder_.Enqueue(req.path, req.body);
             if (onActivity_) onActivity_();
 
             std::string out = http::BuildResponse(resp.status, resp.body, req.keepAlive);
@@ -176,32 +207,50 @@ bool Server::WriteCoreProps(const std::wstring& overridePath) {
     corePropsPath_ = overridePath.empty() ? DefaultCorePropsPath() : overridePath;
     if (corePropsPath_.empty()) return false;
     CreateParentDirs(corePropsPath_);
-
     const std::wstring backup = corePropsPath_ + L".lumabridge-backup";
-    if (Exists(corePropsPath_) && !Exists(backup)) {
-        // Ours are restored/deleted on exit, so an existing file belongs to SteelSeries GG.
-        if (CopyFileW(corePropsPath_.c_str(), backup.c_str(), TRUE))
-            LUMA_WARN("GameSense: SteelSeries GG's coreProps.json backed up; restored on exit. "
-                      "GG and LumaBridge can't both serve GameSense.");
+
+    // A coreProps.json that isn't ours is SteelSeries GG's, and the newest one: keep it as
+    // the backup (restored on exit) and as the address to forward to.
+    const std::string current = ReadSmallFile(corePropsPath_);
+    if (!current.empty() && !ParseCoreProps(current).ours) {
+        if (WriteSmallFile(backup, current))
+            LUMA_INFO("GameSense: SteelSeries GG's coreProps.json saved; it is restored on exit");
     }
-    corePropsBackedUp_ = Exists(backup);
+    const std::string ggText = ReadSmallFile(backup);
+    corePropsBackedUp_ = !ggText.empty();
     foundGG_ = corePropsBackedUp_;
+
+    const CoreProps gg = ParseCoreProps(ggText);
+    if (!forwardToGG_) {
+        forwarder_.SetTarget("", 0);
+        if (foundGG_) LUMA_WARN("GameSense: SteelSeries GG found but forwarding is off ([GameSense] ForwardToGG=0)");
+    } else if (gg.valid && !gg.ours && IsLoopbackHost(gg.host) && gg.port != port_) {
+        forwarder_.SetTarget(gg.host, gg.port);
+    } else {
+        forwarder_.SetTarget("", 0);
+    }
 
     char json[160];
     snprintf(json, sizeof json, "{\"address\":\"127.0.0.1:%d\",\"lumabridge\":true}", port_);
-    HANDLE f = CreateFileW(corePropsPath_.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
-                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (f == INVALID_HANDLE_VALUE) {
+    if (!WriteSmallFile(corePropsPath_, json)) {
         LUMA_ERROR("GameSense: cannot write %s (error %lu). Use Games > SteelSeries > Repair "
                    "(needs admin once) to create the folder with user write access.",
                    NarrowForLog(corePropsPath_).c_str(), GetLastError());
         return false;
     }
-    DWORD written = 0;
-    WriteFile(f, json, static_cast<DWORD>(std::strlen(json)), &written, nullptr);
-    CloseHandle(f);
     LUMA_INFO("GameSense: wrote %s -> %s", NarrowForLog(corePropsPath_).c_str(), json);
     return true;
+}
+
+void Server::CheckCoreProps() {
+    if (corePropsPath_.empty()) return;
+    const std::string current = ReadSmallFile(corePropsPath_);
+    const CoreProps now = ParseCoreProps(current);
+    if (now.ours && now.port == port_) return;  // still ours
+    if (!corePropsOk_ && current == lastCorePropsSeen_) return;  // unwritable; don't spam the log
+    lastCorePropsSeen_ = current;
+    if (!current.empty()) LUMA_INFO("GameSense: coreProps.json was rewritten (SteelSeries GG restarted?)");
+    corePropsOk_ = WriteCoreProps(corePropsPath_);
 }
 
 void Server::RestoreCoreProps() {

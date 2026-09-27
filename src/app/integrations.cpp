@@ -101,7 +101,7 @@ Integrations::~Integrations() {
     if (worker_.joinable()) worker_.join();
 }
 
-void Integrations::Refresh(bool gsRunning, int gsPort, bool gsOk, bool foundGG) {
+void Integrations::Refresh(bool gsRunning, int gsPort, bool gsOk, bool foundGG, int ggPort, bool ggOk) {
     appDir_ = AppDirectory();
     const std::wstring sys = SystemDir();
     items_.clear();
@@ -159,9 +159,16 @@ void Integrations::Refresh(bool gsRunning, int gsPort, bool gsOk, bool foundGG) 
         } else if (!gsOk) {
             it.state = IntegrationState::Problem;
             it.detail = "Games can't find LumaBridge - click Repair (administrator, once)";
+        } else if (ggPort && ggOk) {
+            it.detail = "Built in (port " + std::to_string(gsPort) +
+                        "), passing everything on to SteelSeries GG - Moments keeps working";
+        } else if (ggPort) {
+            it.state = IntegrationState::Conflict;
+            it.detail = "Built in (port " + std::to_string(gsPort) +
+                        "); SteelSeries GG isn't answering right now - start GG for Moments";
         } else {
             it.detail = "Built in, listening on port " + std::to_string(gsPort) +
-                        (foundGG ? " (SteelSeries GG paused while LumaBridge runs)" : "");
+                        (foundGG ? " (forwarding to SteelSeries GG is off)" : "");
         }
         items_.push_back(it);
     }

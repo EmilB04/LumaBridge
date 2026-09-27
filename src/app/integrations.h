@@ -32,7 +32,8 @@ class Integrations {
 public:
     ~Integrations();
 
-    void Refresh(bool gameSenseRunning, int gameSensePort, bool gameSenseOk, bool foundGG);
+    void Refresh(bool gameSenseRunning, int gameSensePort, bool gameSenseOk, bool foundGG, int ggPort,
+                 bool ggOk);
     const std::vector<Integration>& list() const { return items_; }
 
     // Runs the matching script in the background. `gameDir` only for per-game SDKs; `force`

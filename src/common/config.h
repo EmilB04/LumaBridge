@@ -39,7 +39,8 @@ struct Config {
     // [GameSense] (LumaBridgeHost.exe only)
     bool gameSenseEnabled = true;
     int gameSensePort = 49713;       // 0 = let Windows pick; falls back to that if taken
-    std::wstring gameSenseCoreProps;  // empty = %PROGRAMDATA%\SteelSeries\SteelSeries Engine 3\coreProps.json
+    std::wstring gameSenseCoreProps;
+    bool gameSenseForwardToGG = true;  // pass everything on to SteelSeries GG when installed  // empty = %PROGRAMDATA%\SteelSeries\SteelSeries Engine 3\coreProps.json
 
     // [Log]
     std::wstring logFile;  // empty = %LOCALAPPDATA%\LumaBridge\lumabridge.log
