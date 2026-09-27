@@ -890,6 +890,7 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
         if (PrimaryButton("Resume lighting control")) ctl.ResumeAura();
     } else if (ImGui::Button("Stop controlling the lights")) {
         ctl.StopLighting();
+        ui.handbackDoneMs = GetTickCount64() + 5000;
     }
     EndCard();
 
@@ -1049,7 +1050,11 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
         const bool byUser = ctl.pause() == Controller::Pause::ByUser;
         Pill(byUser ? "Not controlling the lights" : "Lighting control paused", kAmber);
         ImGui::Dummy(ImVec2(0, 2 * S()));
-        if (byUser)
+        const unsigned long long now = GetTickCount64();
+        if (byUser && ui.handbackDoneMs > now) {
+            const int secondsLeft = static_cast<int>((ui.handbackDoneMs - now + 999) / 1000);
+            Muted(("Handing back to Armoury Crate... " + std::to_string(secondsLeft) + "s").c_str());
+        } else if (byUser)
             Muted("You stopped LumaBridge's lighting and handed it back to Armoury Crate.");
         else
             Muted("LumaBridge closed unexpectedly the last time it controlled your lights, so it is "

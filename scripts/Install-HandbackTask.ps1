@@ -33,7 +33,7 @@ $TaskPath = '\LumaBridge\'
 $TaskName = 'Hand back lighting'
 # Bumped whenever the task changes; LumaBridge asks to set it up again when the recorded
 # version is older (kHandbackTaskVersion in src/app/integrations.h).
-$TaskVersion = 3
+$TaskVersion = 6
 $VersionKey = 'HKLM:\SOFTWARE\LumaBridge'
 
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -62,25 +62,35 @@ $me = [Security.Principal.WindowsIdentity]::GetCurrent()
 $admin = ([Security.Principal.WindowsPrincipal] $me).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 Write-Log "hand-back started as $($me.Name), elevated=$admin"
 
-Add-Type -Namespace LumaBridge -Name Native -MemberDefinition @"
-[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-public static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr sa, uint disposition, uint flags, IntPtr template);
-[DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
-"@
 # Is any program holding one of the controller's HID interfaces open? Checked by opening it
 # exclusively (and closing it right away): a restart while it's open gets deferred to the
 # next reboot, and until then Windows refuses every further restart.
+# Uses System.IO.File.Open (CreateFile under the hood) instead of Add-Type/P-Invoke: Add-Type
+# compiles with csc.exe on every run, which alone can cost a couple of seconds.
 function Get-HeldInterfaces($usbId) {
     $vidPid = ($usbId -split '\\')[1]
     $held = @()
     foreach ($hid in @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
                        Where-Object { $_.InstanceId -like "HID\$vidPid*" })) {
         $path = '\\?\' + ($hid.InstanceId -replace '\\', '#') + '#{4d1e55b2-f16f-11cf-88cb-001111000030}'
-        # GENERIC_READ | GENERIC_WRITE, no sharing, OPEN_EXISTING
-        $h = [LumaBridge.Native]::CreateFileW($path, [uint32]3221225472, 0, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
-        $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        if ($h -eq [IntPtr](-1)) { if ($err -eq 32) { $held += $hid.InstanceId } }
-        else { [void][LumaBridge.Native]::CloseHandle($h) }
+        try {
+            ([System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)).Close()
+        } catch [System.IO.IOException] {
+            if (($_.Exception.HResult -band 0xFFFF) -eq 32) { $held += $hid.InstanceId }  # ERROR_SHARING_VIOLATION
+        } catch { }
+    }
+    return ,$held
+}
+
+# Polls Get-HeldInterfaces until it's clear or `capMs` elapses, instead of a fixed sleep -
+# Stop-Process/Stop-Service usually release the handle in well under that.
+function Wait-Released($usbId, $capMs) {
+    $held = Get-HeldInterfaces $usbId
+    $waited = 0
+    while ($held.Count -and $waited -lt $capMs) {
+        Start-Sleep -Milliseconds 150
+        $waited += 150
+        $held = Get-HeldInterfaces $usbId
     }
     return ,$held
 }
@@ -96,6 +106,7 @@ if (-not $controllers.Count) {
 foreach ($c in $controllers) {
     $id = $c.InstanceId
     $held = Get-HeldInterfaces $id
+    $stoppedLightingService = $false
     if ($held.Count) {
         Write-Log "controller in use by another program ($($held -join ', '))"
         # Armoury Crate's motherboard helper keeps the controller open; its service starts it
@@ -104,20 +115,34 @@ foreach ($c in $controllers) {
             Write-Log "stopping $($p.ProcessName) (pid $($p.Id)), Armoury Crate's motherboard helper"
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
         }
-        Start-Sleep -Milliseconds 1500
-        $held = Get-HeldInterfaces $id
+        $held = Wait-Released $id 1500
+    }
+    if ($held.Count) {
+        # The helper process is only a client; LightingService is what actually keeps the
+        # device open on its behalf, so killing the helper alone doesn't release it.
+        $svc = Get-Service -Name LightingService -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -eq 'Running') {
+            Write-Log 'still in use - stopping LightingService, the ASUS service that holds the device open'
+            Stop-Service -Name LightingService -Force -ErrorAction SilentlyContinue
+            $stoppedLightingService = $true
+            $held = Wait-Released $id 1500
+        }
     }
     if ($held.Count) {
         Write-Log "still in use by another program - not restarting $id (Windows would only finish it at the next reboot)"
         Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match 'aac|armoury|lighting|aura|asus|rgb' } |
             ForEach-Object { Write-Log "  running: $($_.ProcessName) (pid $($_.Id))" }
-        continue
+    } else {
+        $out = & pnputil.exe /restart-device "$id" 2>&1 | Out-String
+        $code = $LASTEXITCODE
+        Write-Log ("pnputil /restart-device {0} -> exit {1}: {2}" -f $id, $code, ($out.Trim() -replace '\s+', ' '))
+        if ($code -eq 50 -or $code -eq 3010) {
+            Write-Log 'Windows has the restart waiting for a reboot: restart the PC once, then hand-back works again'
+        }
     }
-    $out = & pnputil.exe /restart-device "$id" 2>&1 | Out-String
-    $code = $LASTEXITCODE
-    Write-Log ("pnputil /restart-device {0} -> exit {1}: {2}" -f $id, $code, ($out.Trim() -replace '\s+', ' '))
-    if ($code -eq 50 -or $code -eq 3010) {
-        Write-Log 'Windows has the restart waiting for a reboot: restart the PC once, then hand-back works again'
+    if ($stoppedLightingService) {
+        Write-Log 'restarting LightingService'
+        Start-Service -Name LightingService -ErrorAction SilentlyContinue
     }
 }
 '@
