@@ -231,7 +231,7 @@ void HardwareHelper::Run() {
             continue;
         }
         std::array<Rgb, ram::kMaxLeds> colors{};
-        const double t = static_cast<double>(now - since) / 1000.0;
+        const double t = fx::Seconds(effect, now, since);
         for (int led = 0; led < ram::kLedsPerStick; ++led) {
             const Rgb c = Scale(fx::Render(effect, t, led, ram::kLedsPerStick), brightness);
             for (int slot = 0; slot < ram::kSlots; ++slot) colors[static_cast<size_t>(slot * ram::kLedsPerStick + led)] = c;

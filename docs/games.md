@@ -11,7 +11,7 @@ so anti-cheat isn't involved. Set them up on the **Games List** page: click the 
 
 | Game | Source | Effects |
 |---|---|---|
-| Counter-Strike 2 | Valve **Game State Integration**. LumaBridge writes `game\csgo\cfg\gamestate_integration_lumabridge.cfg`, and CS2 then POSTs its state to `127.0.0.1:49715`. Restart CS2 after setup. | Team color (CT blue / T gold), freeze time breathing, low health (≤ 25) red pulse, flashbang white-out that fades with the flash, burning flicker, bomb planted: red blink speeding up from 1 to 5 Hz over the 40 s fuse, explosion and defuse bursts, kill (green) and headshot (gold) flashes, round won (rainbow) and lost (dim red), and dim team color while dead. |
+| Counter-Strike 2 | Valve **Game State Integration**. LumaBridge writes `game\csgo\cfg\gamestate_integration_lumabridge.cfg`, and CS2 then POSTs its state to `127.0.0.1:49715`. Restart CS2 after setup. | Team color (CT blue / T gold), freeze time breathing, low health (≤ 25) red pulse, flashbang white-out that fades with the flash, burning flicker, bomb planted: a red beat counted from the plant, speeding up from 1 to 5 a second over the 40 s fuse, on every device at the same moment, explosion and defuse bursts, kill (green) and headshot (gold) flashes, round won (rainbow) and lost (dim red), and dim team color while dead. |
 | Rocket League | Psyonix **Stats API**. Off by default; LumaBridge sets `PacketSendRate` in `TAGame\Config\DefaultStatsAPI.ini` (with a backup) and reads the JSON events on the configured port (49123 by default). Restart the game after switching it on. | Your team's color around each fan (the team of the car the camera follows; both team colors while spectating), a strobe then a comet in the scoring team's color on a goal, faster in overtime, and the winner's color breathing at the end. |
 | War Thunder | The game's **local status page** at `http://127.0.0.1:8111` (the one its browser map uses). Always on. | Tanks: crew health from green through yellow to red, a red flash when crew is lost, and a pulse when crew is low. Aircraft: blue base, war emergency power flicker, low fuel pulse. |
 
@@ -41,3 +41,10 @@ Turn it on for all such games on the Lighting page (Auto), or per game on the Ga
 ## Not games
 
 DSX (a DualSense controller utility) is recognized and ignored in Auto mode.
+
+**Every device in step.** An effect carries its start time (`fx::Params::epoch`), shared by
+the fans, board, memory, keyboard, mouse and any other device, so they all show the same
+moment of it; before, each device counted from when it got the effect, and a game changing
+the speed (the bomb's fuse) restarted each one separately. During a game's lighting the
+Logitech mouse shows it LED by LED (its own effects run on the mouse's clock) and gets a new
+frame every 20 ms, with one round trip per frame.

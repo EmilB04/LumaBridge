@@ -83,9 +83,13 @@ public:
         }
         if (burning_ > 0) return Make(Kind::Twinkle, {255, 60, 0}, {255, 200, 0}, 2.5);
         if (bomb_ == "planted") {
-            // 1 blink per second, speeding up to 5 as the 40 s fuse runs out.
-            const double t = now > bombPlantedAt_ ? double(now - bombPlantedAt_) / kBombMs : 0.0;
-            return Make(Kind::Strobe, {255, 0, 0}, {}, 1.0 + 4.0 * (t > 1 ? 1 : t * t));
+            // The bomb's beat: one flash a second, speeding up to 5 as the 40 s fuse runs out,
+            // counted from the plant, so every device flashes at the same moment.
+            fx::Params p = Make(Kind::Beat, {255, 0, 0}, {28, 0, 0}, 1.0);
+            p.speedEnd = 5.0;
+            p.rampSeconds = kBombMs / 1000.0;
+            p.epoch = bombPlantedAt_;
+            return p;
         }
         if (health_ <= 0) return Make(Kind::Static, Scale(teamColor, 0.12));
         if (health_ <= 25) return Make(Kind::Breathing, {255, 0, 0}, {}, 1.6);

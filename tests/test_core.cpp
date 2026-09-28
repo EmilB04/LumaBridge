@@ -595,8 +595,11 @@ static void TestCs2() {
     CHECK(cs.Current(3000).kind == Kind::Breathing);             // then low health
     CHECK(cs.OnState(J(R"({"provider":{"steamid":"1"},"map":{},"round":{"phase":"live","bomb":"planted"},
         "player":{"steamid":"1","team":"T","activity":"playing","state":{"health":100,"round_kills":1}}})"), 4000));
-    const double early = cs.Current(4000).speed, late = cs.Current(4000 + 39000).speed;
-    CHECK(cs.Current(4000).kind == Kind::Strobe && late > early);  // the fuse speeds up
+    // The bomb's beat: counted from the plant (a shared start for every device), speeding up.
+    const luma::fx::Params beat = cs.Current(4000);
+    CHECK(beat.kind == Kind::Beat && beat.epoch == 4000 && beat.speed == 1.0 && beat.speedEnd == 5.0 &&
+          beat.rampSeconds == 40.0);
+    CHECK(luma::fx::SameParams(cs.Current(4000), cs.Current(30000)));  // one effect all along: nothing restarts
     CHECK(cs.OnState(J(R"({"provider":{"steamid":"1"},"map":{},"round":{"phase":"over","bomb":"exploded","win_team":"T"},
         "player":{"steamid":"1","team":"T","activity":"playing","state":{"health":100}}})"), 50000));
     CHECK(cs.Current(50000).kind == Kind::Strobe);         // explosion
@@ -978,6 +981,41 @@ static void TestDeviceLighting() {
     for (const char* id : device::All()) CHECK(device::Name(id)[0] != 0);
 }
 
+static void TestSharedClock() {
+    using namespace luma::fx;
+    // Seconds into an effect: from its shared start when it has one, else the device's own.
+    Params p;
+    CHECK(Seconds(p, 5000, 3000) == 2.0);
+    p.epoch = 1000;
+    CHECK(Seconds(p, 5000, 3000) == 4.0 && Seconds(p, 500, 3000) == 0.0);
+    // A beat: 1 a second at first, 5 a second after 40 s; beats counted continuously.
+    Params b;
+    b.kind = Kind::Beat;
+    b.color1 = luma::Rgb{255, 0, 0};
+    b.color2 = luma::Rgb{0, 0, 0};
+    b.speed = 1;
+    b.speedEnd = 5;
+    b.rampSeconds = 40;
+    CHECK(std::fabs(BeatPhase(b, 1.0) - (1.0 + 4.0 / 4800.0)) < 1e-9);  // ~1 beat after 1 s
+    CHECK(std::fabs(BeatPhase(b, 40.0) - (40.0 + 4.0 * 40.0 / 3.0)) < 1e-9);
+    CHECK(std::fabs(BeatPhase(b, 41.0) - BeatPhase(b, 40.0) - 5.0) < 1e-9);  // then 5 a second
+    // The tempo rises smoothly: beats per second between 1 and 5, never backwards.
+    double last = 0;
+    for (double t = 0.5; t <= 45; t += 0.5) {
+        const double ph = BeatPhase(b, t);
+        CHECK(ph > last);
+        last = ph;
+    }
+    // Each beat starts with a full flash that fades out within 30 % of it.
+    CHECK((Render(b, 0.0, 0, 1) == luma::Rgb{255, 0, 0}));
+    CHECK((Render(b, 0.5, 0, 1) == luma::Rgb{0, 0, 0}));
+    CHECK(Render(b, 0.1, 0, 1).r > 0 && Render(b, 0.1, 0, 1).r < 255);
+    // Two devices asking at the same moment see the same thing, whenever they got the effect.
+    Params e = b;
+    e.epoch = 10000;
+    CHECK(Render(e, Seconds(e, 12345, 10500), 0, 1) == Render(e, Seconds(e, 12345, 11900), 0, 1));
+}
+
 static void TestDeviceSleep() {
     namespace sl = luma::app::sleep;
     // Awake until the timeout, then a fade over kFadeMs, then dark; asleep once the dark frame is out.
@@ -1328,6 +1366,7 @@ int main() {
     TestOpenRgb();
     TestLampArray();
     TestDeviceSleep();
+    TestSharedClock();
     TestDeviceCatalog();
     TestHyperXRam();
     TestHwSensors();

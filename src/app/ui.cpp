@@ -267,6 +267,7 @@ const EffectInfo kEffects[] = {
     {"Comet", "A comet of your color with a fading tail chases around, over the second color.", 0.1f, 3.f,
      "%.1f laps per second"},
     {"Twinkle", "Your color with sparkles of the second color.", 0.1f, 3.f, "%.1f per second"},
+    {"Beat", "Flashes that speed up (a game's bomb).", 0, 0, ""},  // games only: not in the picker
 };
 
 // Effect picker: two rows of four.

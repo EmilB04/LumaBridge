@@ -382,7 +382,7 @@ void LampArrayOutput::Run() {
             since = effectSince_;
             skip = skip_;
         }
-        const double t = static_cast<double>(now - since) / 1000.0;
+        const double t = fx::Seconds(effect, now, since);
         DWORD wait = kFrameMs;
         for (auto it = devs.begin(); it != devs.end();) {
             Device& d = **it;

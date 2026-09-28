@@ -47,6 +47,7 @@ public:
         fx::Params fx;         // the effect (games: Static, or Strobe while they flash)
         bool fanTest = false;  // fans show the layout test pattern (Devices page)
         std::string label;     // "Battlefield 1 - Logitech LIGHTSYNC", "Manual color", ...
+        bool game = false;     // a game's own lighting: every device in step, the mouse LED by LED
         // Devices with their own look (device::kFans, ...) while your own lighting shows;
         // the others show `fx`.
         std::map<std::string, fx::Params> devices;

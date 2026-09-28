@@ -17,7 +17,7 @@ namespace luma::app {
 namespace {
 
 constexpr DWORD kFrameMs = 40;           // ~25 updates per second at most (only changed keys are sent)
-constexpr uint64_t kWirelessFrameMs = 100;  // through the Omni receiver: ~10 updates per second
+constexpr uint64_t kWirelessFrameMs = 50;   // through the Omni receiver: ~20 updates per second
 constexpr uint64_t kRefreshMs = 5000;    // re-send every key now and then (a keyboard waking up)
 
 // Opens the Azoth's lighting interface for writing: the keyboard's own (0B05:1A83) or the
@@ -133,7 +133,7 @@ void AzothOutput::Run() {
             loggedMissing = false;
             lastSent = 0;
         }
-        const double t = static_cast<double>(now - since) / 1000.0;
+        const double t = fx::Seconds(effect, now, since);
         auto lost = [&] {
             LUMA_WARN("ROG Azoth: write failed (error %lu) - unplugged?", GetLastError());
             CloseHandle(dev);

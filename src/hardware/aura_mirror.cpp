@@ -310,8 +310,7 @@ void AuraMirror::Run() {
         }
         if (pattern.active) {
             // What a single-color receiver (the routed path) would show: LED 0.
-            const double t = static_cast<double>(now - pattern.startedAt) / 1000.0;
-            color = fx::Render(pattern.params, t, 0, 1);
+            color = fx::Render(pattern.params, fx::Seconds(pattern.params, now, pattern.startedAt), 0, 1);
             animating = !pattern.fanTest && (fx::IsAnimated(pattern.params) || fx::IsAnimated(pattern.board));
         }
 
@@ -400,7 +399,11 @@ void AuraMirror::Run() {
                     Sleep(static_cast<DWORD>(framePeriodMs - (now - lastPushAt)));
                     continue;
                 }
-                const double t = static_cast<double>(GetTickCount64() - pattern.startedAt) / 1000.0;
+                // The effects' shared clock (fx::Params::epoch), so the fans and board are in step
+                // with every other device.
+                const uint64_t at = GetTickCount64();
+                const double t = fx::Seconds(pattern.params, at, pattern.startedAt);
+                const double tb = fx::Seconds(pattern.board, at, pattern.startedAt);
                 const auto& devs = aura.Devices();
                 frames.resize(devs.size());
                 for (size_t i = 0; i < devs.size(); ++i) {
@@ -409,7 +412,7 @@ void AuraMirror::Run() {
                     if (fans && pattern.fanTest) fx::RenderFanTest(pattern.fans, &f, devs[i].lightCount);
                     else if (fans) fx::RenderFans(pattern.params, t, pattern.fans, &f, devs[i].lightCount);
                     else if (pattern.fanTest) f.assign(static_cast<size_t>(devs[i].lightCount), Rgb{});
-                    else fx::RenderStrip(pattern.board, t, devs[i].lightCount, &f);
+                    else fx::RenderStrip(pattern.board, tb, devs[i].lightCount, &f);
                     const double level = pattern.fanTest ? 1.0 : fans ? pattern.fansLevel : pattern.boardLevel;
                     for (auto& c : f) c = ApplyCorrection(cc, level < 1.0 ? Scale(c, level) : c);
                 }

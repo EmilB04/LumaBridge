@@ -170,7 +170,8 @@ void Controller::UpdateLogitech() {
     logitechNote_ = own ? "" : "LumaBridge isn't controlling the lights - G HUB has them";
     if (own && prefs_.logitechForce) {
         logitech_.Set(output_.For(device::kMouse),
-                      cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, true);
+                      cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, true,
+                      output_.game);
         return;  // kept with LumaBridge even while a game lights Logitech gear
     }
     if (own)
@@ -187,7 +188,7 @@ void Controller::UpdateLogitech() {
                 break;
             }
     logitech_.Set(output_.For(device::kMouse),
-                  cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, own);
+                  cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, own, output_.game);
 }
 
 std::wstring Controller::GameDir(const char* profileKey) const {
@@ -403,6 +404,7 @@ Controller::Output Controller::Decide() const {
             for (const GameStatus& gs : games_)
                 if (SourceBelongsTo(*s, gs.game)) name = gs.game.name;
             Output g = lit((name + " - " + s->sdk).c_str());
+            g.game = true;
             if (s->hasEffect) {
                 g.fx = s->effect;
             } else {
@@ -636,6 +638,17 @@ void Controller::Tick() {
     }
 
     Output next = Decide();
+    // One clock for every device: an effect keeps its start while it runs (colors may change),
+    // so fans, board, keyboard and mouse render the same moment of it. A source that sets its
+    // own start (a bomb's beat, from the plant) keeps it.
+    {
+        auto stamp = [&](fx::Params& p, const fx::Params& before) {
+            if (p.epoch) return;
+            p.epoch = !output_.stopped && before.epoch && before.kind == p.kind && before.speed == p.speed ? before.epoch : now;
+        };
+        stamp(next.fx, output_.fx);
+        for (auto& [id, p] : next.devices) stamp(p, output_.For(id));
+    }
     if (!outputApplied_ || !next.SameLighting(output_)) {
         Apply(next);
         outputApplied_ = true;

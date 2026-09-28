@@ -20,6 +20,8 @@ enum class Kind {
     Gradient,     // color1 -> color2 -> color1 around the LEDs, optionally flowing
     Comet,        // color1 head with a fading tail over color2, chasing around
     Twinkle,      // color1 with random sparkles of color2
+    Beat,         // color1 flashes over color2, speeding up from `speed` to `speedEnd` beats a
+                  // second over `rampSeconds` (a bomb's beeps); games only
 };
 
 struct Params {
@@ -33,12 +35,23 @@ struct Params {
     double saturation = 1;   // 0 = white .. 1 = full color
     double spread = 1;       // rainbow wave: rainbows around each ring
     bool reverse = false;    // moving patterns turn the other way
+    // Beat: the tempo it reaches (beats a second) and how long it takes to get there.
+    double speedEnd = 0, rampSeconds = 0;
+    // When the effect started (GetTickCount64 ms), the same for every device so they're all in
+    // step; 0: each device counts from when it got the effect.
+    uint64_t epoch = 0;
 };
+
+// Seconds into the effect at `nowMs`: from its shared start, else from `sinceMs`.
+inline double Seconds(const Params& p, uint64_t nowMs, uint64_t sinceMs) {
+    const uint64_t from = p.epoch ? p.epoch : sinceMs;
+    return nowMs > from ? static_cast<double>(nowMs - from) / 1000.0 : 0.0;
+}
 
 inline bool SameParams(const Params& a, const Params& b) {
     return a.kind == b.kind && a.color1 == b.color1 && a.color2 == b.color2 && a.speed == b.speed &&
            a.hueStart == b.hueStart && a.hueSpan == b.hueSpan && a.saturation == b.saturation && a.spread == b.spread &&
-           a.reverse == b.reverse;
+           a.reverse == b.reverse && a.speedEnd == b.speedEnd && a.rampSeconds == b.rampSeconds && a.epoch == b.epoch;
 }
 
 // Does the effect change over time? (Static ones only need re-sending, not re-rendering.)
@@ -84,6 +97,17 @@ inline double Hash01(uint32_t x) {
 }  // namespace detail
 
 // Color of LED `i` of a ring / strip of `count` LEDs at time `t` seconds.
+// Beats so far at `t` for Kind::Beat: the tempo rises from speed to speedEnd along t^2 over
+// rampSeconds (slow at first, faster and faster), then stays. Continuous, so a rising tempo
+// never restarts a beat.
+inline double BeatPhase(const Params& p, double t) {
+    const double s0 = p.speed, s1 = p.speedEnd > 0 ? p.speedEnd : p.speed, T = p.rampSeconds;
+    if (t <= 0) return 0;
+    if (T <= 0) return s0 * t;
+    if (t <= T) return s0 * t + (s1 - s0) * t * t * t / (3 * T * T);
+    return s0 * T + (s1 - s0) * T / 3 + s1 * (t - T);
+}
+
 inline Rgb Render(const Params& p, double t, int i, int count) {
     using namespace detail;
     if (count < 1) count = 1;
@@ -116,6 +140,11 @@ inline Rgb Render(const Params& p, double t, int i, int count) {
         const double since = Frac(phase + Hash01(static_cast<uint32_t>(i) * 2654435761u));
         const double spark = since < 0.15 ? 1.0 - since / 0.15 : 0.0;
         return Lerp(p.color1, p.color2, spark);
+    }
+    case Kind::Beat: {
+        // Each beat: a flash of color1 that fades back to color2 within 30 % of the beat.
+        const double f = Frac(BeatPhase(p, t));
+        return Lerp(p.color2, p.color1, f < 0.3 ? 1.0 - f / 0.3 : 0.0);
     }
     case Kind::Static:
     default:

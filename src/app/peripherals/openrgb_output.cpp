@@ -273,7 +273,7 @@ void OpenRgbOutput::Run() {
             since = effectSince_;
             skip = skip_;
         }
-        const double t = static_cast<double>(now - since) / 1000.0;
+        const double t = fx::Seconds(effect, now, since);
         for (size_t i = 0; i < ctrls.size(); ++i) {
             const openrgb::Controller& c = ctrls[i];
             const bool wanted = own && c.leds && std::find(skip.begin(), skip.end(), c.name) == skip.end();

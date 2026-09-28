@@ -18,7 +18,7 @@ namespace luma::app {
 namespace {
 
 constexpr int kDeviceTypeAll = 7;  // LOGI_DEVICETYPE_MONOCHROME | RGB | PERKEY_RGB
-constexpr DWORD kFrameMs = 50;
+constexpr DWORD kFrameMs = 20;  // quick enough to keep up with the fans and keyboard (game flashes)
 
 int Percent(uint8_t v) { return (v * 100 + 127) / 255; }
 
@@ -108,9 +108,13 @@ public:
     bool Set(const hidpp::Effect& e) { return Send(hidpp::SetEffect(device_, feature_, layout_, e), nullptr); }
     bool StartPerKey() { return Send(hidpp::StartPerKey(device_, feature_, layout_), nullptr); }
     // One frame: a color per LED along the strip (layout().strip.size() colors).
+    // The frame's LED reports go out without waiting for each answer (one round trip per frame
+    // instead of one per report, so the mouse keeps up with the other devices); the last report
+    // (the frame end) waits, which still notices a mouse that stopped answering.
     bool Frame(const Rgb* colors) {
-        for (const hidpp::Report& r : hidpp::PerKeyFrame(device_, layout_, colors))
-            if (!Send(r, nullptr, 500)) return false;
+        const auto reports = hidpp::PerKeyFrame(device_, layout_, colors);
+        for (size_t i = 0; i < reports.size(); ++i)
+            if (!(i + 1 < reports.size() ? Write(reports[i]) : Send(reports[i], nullptr, 500))) return false;
         return true;
     }
 
@@ -170,6 +174,19 @@ private:
     }
 
     // Sends a request and waits for its answer (other reports are skipped).
+    // Writes a request without waiting for its answer (Send reads past it later).
+    bool Write(const hidpp::Report& req) {
+        OVERLAPPED ov{};
+        ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        DWORD n = 0;
+        BOOL ok = WriteFile(h_, req.data(), static_cast<DWORD>(req.size()), &n, &ov);
+        if (!ok && GetLastError() == ERROR_IO_PENDING)
+            ok = WaitForSingleObject(ov.hEvent, 1000) == WAIT_OBJECT_0 && GetOverlappedResult(h_, &ov, &n, FALSE);
+        if (!ok) CancelIo(h_);
+        CloseHandle(ov.hEvent);
+        return ok;
+    }
+
     bool Send(const hidpp::Report& req, hidpp::Report* reply, DWORD timeoutMs = 1000) {
         OVERLAPPED ov{};
         ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -247,7 +264,8 @@ void LogitechOutput::Stop() {
     state_ = State::Off;
 }
 
-void LogitechOutput::Set(const fx::Params& effect, double brightness, bool own) {
+void LogitechOutput::Set(const fx::Params& effect, double brightness, bool own, bool inStep) {
+    inStep_ = inStep;
     std::lock_guard<std::mutex> lock(mutex_);
     brightness_ = brightness < 0 ? 0 : brightness > 1 ? 1 : brightness;
     const bool changed = effect.kind != effect_.kind || effect.speed != effect_.speed;
@@ -360,7 +378,10 @@ void LogitechOutput::Run() {
             perKeyOn = false;
             last[0] = last[1] = last[2] = -1;
         };
-        std::optional<hidpp::Effect> want = mouse.open() ? hidpp::ForEffect(effect, mouse.layout()) : std::nullopt;
+        // The mouse's own effects run on its own clock: fine for your own lighting, but a game's
+        // lighting goes LED by LED, in step with the other devices.
+        std::optional<hidpp::Effect> want =
+            mouse.open() && !inStep_ ? hidpp::ForEffect(effect, mouse.layout()) : std::nullopt;
         if (want) want->intensity = static_cast<uint8_t>(level * 100 + 0.5);
         if (want) {
             // Slider drags change the speed many times a second: at most 4 sends a second.
@@ -389,7 +410,7 @@ void LogitechOutput::Run() {
                 }
             }
             if (perKeyOn) {
-                const double t = static_cast<double>(now - since) / 1000.0;
+                const double t = fx::Seconds(effect, now, since);
                 const size_t n = mouse.layout().strip.size();
                 std::vector<Rgb> frame(n);
                 for (size_t i = 0; i < n; ++i)
@@ -411,7 +432,7 @@ void LogitechOutput::Run() {
             }
         }
         mouseEffect_ = false;
-        const Rgb c = Scale(fx::Render(effect, static_cast<double>(now - since) / 1000.0, 0, 1), level);
+        const Rgb c = Scale(fx::Render(effect, fx::Seconds(effect, now, since), 0, 1), level);
         if (onMouse) {
             // Back from the mouse's own effect: a plain color on it, then the SDK's colors again.
             onMouse.reset();

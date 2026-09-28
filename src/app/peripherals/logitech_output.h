@@ -44,7 +44,9 @@ public:
     // What Logitech devices should show; `own = false` hands them back to G HUB (a game is
     // lighting them itself, or LumaBridge isn't controlling the lights).
     // `brightness` 0..1.
-    void Set(const fx::Params& effect, double brightness, bool own);
+    // `inStep`: a game's lighting - the mouse shows it LED by LED on the shared clock, never with
+    // its own effects (they run on the mouse's clock, out of step with the other devices).
+    void Set(const fx::Params& effect, double brightness, bool own, bool inStep = false);
 
     // Asleep (device_sleep.h): nothing more goes to the devices until they're used again, so a
     // wireless mouse can sleep.
@@ -65,6 +67,7 @@ private:
     std::atomic<State> state_{State::Off};
     std::atomic<bool> mouseEffect_{false};
     std::atomic<bool> asleep_{false};
+    std::atomic<bool> inStep_{false};
     mutable std::mutex mutex_;
     fx::Params effect_;
     double brightness_ = 1.0;
