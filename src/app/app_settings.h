@@ -27,10 +27,11 @@ enum class IdleBehavior { ManualColor, Rainbow, Off, ArmouryCrate };
 // its own. Color: the game's own color (Prefs::gameColors).
 enum class GameMode { Default, Screen, Idle, Color };
 
-// Dashboard cards, in display order (ids; see ui.cpp). Cards not listed are hidden.
+// Dashboard cards below the fixed Lighting / Game row, in display order (ids; see ui.cpp).
+// Cards not listed are hidden.
 inline const std::vector<std::string>& DefaultDashboard() {
-    static const std::vector<std::string> kDefault{"lighting", "game", "cpu", "gpu", "memory",
-                                                   "fans",     "temps", "devices", "connections", "system"};
+    static const std::vector<std::string> kDefault{"cpu",     "gpu",         "memory",  "power", "fans",
+                                                   "temps",   "devices",     "connections", "storage", "system"};
     return kDefault;
 }
 

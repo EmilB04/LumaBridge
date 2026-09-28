@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
@@ -144,8 +145,17 @@ Prefs LoadPrefs(const std::wstring& ini) {
             size_t comma = dash.find(',', pos);
             if (comma == std::string::npos) comma = dash.size();
             const std::string id = dash.substr(pos, comma - pos);
-            if (!id.empty() && id != "-") p.dashboard.push_back(id);
+            // "lighting" / "game": now the fixed top row.
+            if (!id.empty() && id != "-" && id != "lighting" && id != "game") p.dashboard.push_back(id);
             pos = comma + 1;
+        }
+        // Cards added since this list was saved start out shown.
+        const std::string known = Narrow(Read(ini, L"App", L"DashboardKnown"));
+        for (const auto& id : DefaultDashboard()) {
+            const bool old = known.empty() ? id != "power" && id != "storage"
+                                           : ("," + known + ",").find("," + id + ",") != std::string::npos;
+            if (!old && std::find(p.dashboard.begin(), p.dashboard.end(), id) == p.dashboard.end())
+                p.dashboard.push_back(id);
         }
     }
     v = Read(ini, L"Sleep", L"Logitech");
@@ -279,6 +289,9 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     std::string dash;
     for (size_t i = 0; i < p.dashboard.size(); ++i) dash += (i ? "," : "") + p.dashboard[i];
     WriteConfigValue(ini, L"App", L"Dashboard", Widen(dash.empty() ? "-" : dash));  // "-": all hidden
+    std::string known;
+    for (const auto& id : DefaultDashboard()) known += (known.empty() ? "" : ",") + id;
+    WriteConfigValue(ini, L"App", L"DashboardKnown", Widen(known));
     WriteConfigValue(ini, L"Dashboard", L"LhmPort", Num(p.lhmPort));
     WriteConfigValue(ini, L"Games", L"ForzaPort", Num(p.forzaPort));
     WriteConfigValue(ini, L"App", L"LogitechDevices", p.logitechDevices ? L"1" : L"0");
