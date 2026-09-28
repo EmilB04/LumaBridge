@@ -83,6 +83,7 @@ public:
 
     // Settings: mutate, then call Changed() so they are applied and (debounced) saved.
     Prefs& prefs() { return prefs_; }
+    const Prefs& prefs() const { return prefs_; }
     Config& config() { return cfg_; }
     void Changed();
     void RememberManualColor();  // push the current manual color onto the recents list
@@ -231,6 +232,8 @@ private:
     int mirrorHz_ = 0;
     bool auraPaused_ = false;
     bool fanTest_ = false;
+    bool AuraNative() const;
+    bool auraNativeApplied_ = false;  // Apply() handed the Aura devices back to Armoury Crate
     uint64_t handbackDoneAt_ = 0;  // GetTickCount64() when the current hand-back should be done
     bool shutDown_ = false;
     Output output_;

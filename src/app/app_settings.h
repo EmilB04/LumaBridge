@@ -145,6 +145,11 @@ inline bool DeviceReversed(const Prefs& p, const std::string& id) {
     auto it = p.deviceLighting.find(id);
     return it != p.deviceLighting.end() && it->second.reverse;
 }
+// Handed back to its own app (DeviceLighting::native).
+inline bool DeviceNative(const Prefs& p, const std::string& id) {
+    auto it = p.deviceLighting.find(id);
+    return it != p.deviceLighting.end() && it->second.native;
+}
 inline Spot SetupSpot(const Prefs& p, const std::string& item) {
     auto it = p.setupSpots.find(item);
     return it != p.setupSpots.end() ? it->second : DefaultSpot(item);

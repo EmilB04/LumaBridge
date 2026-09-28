@@ -2180,7 +2180,7 @@ struct SetupItem {
 
 // What a device shows right now (grey while LumaBridge isn't controlling the lights).
 const fx::Params* LiveParams(const Controller& ctl, const char* id) {
-    if (ctl.output().stopped) return nullptr;
+    if (ctl.output().stopped || DeviceNative(ctl.prefs(), id)) return nullptr;  // grey: not LumaBridge's
     static std::map<std::string, fx::Params> live;  // stable addresses, one per device
     return &(live[id] = ctl.DeviceEffect(id));
 }
@@ -2615,6 +2615,28 @@ void SetupCard(Controller& ctl, UiState& ui, const Fonts& f, bool selectable) {
     EndCard();
 }
 
+// Hands a device back to its own app, or takes it again. The fans and the motherboard share
+// one ASUS controller, so they go together.
+void SetNative(Controller& ctl, const std::string& id, bool native) {
+    auto& all = ctl.prefs().deviceLighting;
+    all[id].native = native;
+    if (id == device::kFans || id == device::kBoard) {
+        all[device::kFans].native = native;
+        all[device::kBoard].native = native;
+    }
+}
+
+void NativeNote(const std::string& id) {
+    if (id == device::kFans || id == device::kBoard)
+        Muted("Armoury Crate lights the fans and the motherboard (they share one ASUS controller, so both go "
+              "back together). LumaBridge leaves them alone, games included.");
+    else if (id == device::kOther)
+        Muted("These devices show their own lighting again (their firmware's, or what OpenRGB had). "
+              "LumaBridge leaves them alone, games included.");
+    else
+        Muted("%s lights it again. LumaBridge leaves it alone, games included.", NativeApp(id));
+}
+
 // Lighting > Manual: your setup on top, then the lighting of everything or one device.
 void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
     Prefs& p = ctl.prefs();
@@ -2646,14 +2668,18 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
         const char* name = device::Name(ui.lightTarget);
         BeginCard("device");
         CardTitle(f, name, Icon::Lighting);
-        int own = d.own ? 1 : 0;
-        const char* modes[] = {"Same as all devices", "Its own lighting"};
-        if (Segmented("own", &own, modes, 2, std::min(420 * S(), ImGui::GetContentRegionAvail().x))) {
-            if (own && !d.own && d.look == Look{}) d.look = MainLook(p);  // start from what it shows now
-            d.own = own == 1;
+        int mode = d.native ? 2 : d.own ? 1 : 0;
+        const std::string back = std::string("Back to ") + NativeApp(ui.lightTarget);
+        const char* modes[] = {"Same as all devices", "Its own lighting", back.c_str()};
+        if (Segmented("own", &mode, modes, 3, std::min(620 * S(), ImGui::GetContentRegionAvail().x))) {
+            if (mode == 1 && !d.own && d.look == Look{}) d.look = MainLook(p);  // start from what it shows now
+            if (mode != 2) d.own = mode == 1;
+            SetNative(ctl, ui.lightTarget, mode == 2);
             ctl.Changed();
         }
-        if (ui.lightTarget == device::kKeyboard)
+        if (d.native)
+            NativeNote(ui.lightTarget);
+        else if (ui.lightTarget == device::kKeyboard)
             Muted("The Azoth shows the effect key by key, by cable or through its Omni receiver.");
         else if (ui.lightTarget == device::kOther)
             Muted("Devices with Windows' lighting standard (and OpenRGB's, if you use it) show this lighting, "
@@ -2664,9 +2690,9 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
         else if (!d.own)
             Muted("It shows the same lighting as the rest. Pick \"Its own lighting\" to set it apart.");
         EndCard();
-        if (d.own && LookEditor(ctl, ui, f, d.look)) ctl.Changed();
+        if (d.own && !d.native && LookEditor(ctl, ui, f, d.look)) ctl.Changed();
     }
-    BrightnessCard(ctl, f, ui.lightTarget);
+    if (ui.lightTarget.empty() || !DeviceNative(p, ui.lightTarget)) BrightnessCard(ctl, f, ui.lightTarget);
 }
 
 void FansCard(Controller& ctl, const Fonts& f) {
@@ -3027,6 +3053,19 @@ void DeviceLightingCard(Controller& ctl, UiState& ui, const Fonts& f, const char
     const bool own = it != p.deviceLighting.end() && it->second.own;
     BeginCard("device-lighting");
     CardTitle(f, "Lighting", Icon::Lighting);
+    {
+        bool native = DeviceNative(p, id);
+        const std::string label = std::string("Let ") + NativeApp(id) + " light it";
+        if (Toggle(label.c_str(), &native)) {
+            SetNative(ctl, id, native);
+            ctl.Changed();
+        }
+        if (native) {
+            NativeNote(id);
+            EndCard();
+            return;
+        }
+    }
     if (own) {
         const Look l = it->second.look;
         const ImVec2 a = ImGui::GetCursorScreenPos();

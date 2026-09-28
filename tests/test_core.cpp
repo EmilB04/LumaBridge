@@ -1075,7 +1075,7 @@ static void TestDeviceLighting() {
     d.look.reverse = true;
     d.brightness = 0.4f;
     const std::string enc = EncodeDevice(d);
-    CHECK(enc == "1|5|FF1A00|0080FF|0.25|170|90|0.45|2|1|0.4|0");
+    CHECK(enc == "1|5|FF1A00|0080FF|0.25|170|90|0.45|2|1|0.4|0|0");
     DeviceLighting back;
     CHECK(DecodeDevice(enc, &back) && back.own && back.look == d.look && back.brightness == 0.4f);
     // 0.7.0 wrote no brightness: full.
@@ -1091,6 +1091,11 @@ static void TestDeviceLighting() {
     flipped.reverse = true;
     CHECK(DecodeDevice(EncodeDevice(flipped), &back) && back.reverse && back.brightness == 0.4f);
     CHECK(DecodeDevice("1|5|FF1A00|0080FF|0.25|170|90|0.45|2|1|0.5", &back) && !back.reverse);
+    DeviceLighting handed = d;
+    handed.native = true;
+    CHECK(DecodeDevice(EncodeDevice(handed), &back) && back.native && !back.reverse);
+    CHECK(DecodeDevice("1|5|FF1A00|0080FF|0.25|170|90|0.45|2|1|0.5|1", &back) && back.reverse && !back.native);
+    CHECK(std::string(NativeApp(device::kMouse)) == "G HUB" && std::string(NativeApp(device::kFans)) == "Armoury Crate");
 
     // Static never moves; the rest keep their speed.
     Look l;

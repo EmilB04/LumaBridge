@@ -79,18 +79,28 @@ struct DeviceLighting {
     // Moving effects run the other way on this device (its own look, the main one and games
     // alike), for devices whose LEDs are numbered the other way round or mounted mirrored.
     bool reverse = false;
+    // Handed back to the device's own app (Armoury Crate, G HUB, ...): LumaBridge leaves it
+    // alone, games included.
+    bool native = false;
 };
 
-// "own|effect|RRGGBB|RRGGBB|speed|hueStart|hueSpan|saturation|spread|reverse|brightness|flip"
-// (0.7.0 wrote the first ten only, 0.15.0 and earlier the first eleven). `reverse` is the
-// look's own; `flip` is the device's direction (DeviceLighting::reverse).
+// The app that lights a device when LumaBridge hands it back.
+inline const char* NativeApp(const std::string& id) {
+    if (id == device::kMouse) return "G HUB";
+    if (id == device::kOther) return "its own app";
+    return "Armoury Crate";
+}
+
+// "own|effect|RRGGBB|RRGGBB|speed|hueStart|hueSpan|saturation|spread|reverse|brightness|flip|native"
+// (0.7.0 wrote the first ten only, 0.14.x the first eleven). `reverse` is the look's own;
+// `flip` is the device's direction (DeviceLighting::reverse); `native`: handed back.
 inline std::string EncodeDevice(const DeviceLighting& d) {
     const Look& l = d.look;
     char buf[160];
-    snprintf(buf, sizeof buf, "%d|%d|%02X%02X%02X|%02X%02X%02X|%g|%g|%g|%g|%d|%d|%g|%d", d.own ? 1 : 0,
+    snprintf(buf, sizeof buf, "%d|%d|%02X%02X%02X|%02X%02X%02X|%g|%g|%g|%g|%d|%d|%g|%d|%d", d.own ? 1 : 0,
              static_cast<int>(l.effect), l.color1.r, l.color1.g, l.color1.b, l.color2.r, l.color2.g, l.color2.b,
              l.speedHz, l.hueStart, l.hueSpan, l.saturation, l.spread, l.reverse ? 1 : 0, d.brightness,
-             d.reverse ? 1 : 0);
+             d.reverse ? 1 : 0, d.native ? 1 : 0);
     return buf;
 }
 
@@ -102,7 +112,7 @@ inline bool DecodeDevice(const std::string& s, DeviceLighting* out) {
         if (bar == std::string::npos) break;
         pos = bar + 1;
     }
-    if (f.size() < 10 || f.size() > 12) return false;
+    if (f.size() < 10 || f.size() > 13) return false;
     auto hex = [](const std::string& h, Rgb* c) {
         if (h.size() != 6) return false;
         char* end = nullptr;
@@ -130,7 +140,8 @@ inline bool DecodeDevice(const std::string& s, DeviceLighting* out) {
     if (d.look.spread < 1 || d.look.spread > 4) d.look.spread = 1;
     d.look.reverse = f[9] == "1";
     if (f.size() >= 11 && !num(f[10], 0, 1, &d.brightness)) d.brightness = 1;
-    d.reverse = f.size() == 12 && f[11] == "1";
+    d.reverse = f.size() >= 12 && f[11] == "1";
+    d.native = f.size() >= 13 && f[12] == "1";
     *out = d;
     return true;
 }

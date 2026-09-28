@@ -170,6 +170,10 @@ void Controller::UpdateLogitech() {
     }
     bool own = !output_.stopped;
     logitechNote_ = own ? "" : "LumaBridge isn't controlling the lights - G HUB has them";
+    if (own && DeviceNative(prefs_, device::kMouse)) {
+        own = false;
+        logitechNote_ = "Handed back to G HUB";
+    }
     if (own && prefs_.logitechForce) {
         logitech_.Set(DeviceEffect(device::kMouse),
                       cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, true,
@@ -538,8 +542,15 @@ void Controller::UpdateGames(uint64_t now) {
     games_ = std::move(next);
 }
 
+// The fans and the motherboard share one ASUS controller: they go back to Armoury Crate
+// together.
+bool Controller::AuraNative() const {
+    return DeviceNative(prefs_, device::kFans) || DeviceNative(prefs_, device::kBoard);
+}
+
 void Controller::Apply(const Output& out) {
-    if (out.stopped) {
+    auraNativeApplied_ = AuraNative();
+    if (out.stopped || auraNativeApplied_) {
         if (mirror_.IsRunning()) {
             LUMA_INFO("no longer controlling the lights - handing back to Armoury Crate");
             mirror_.Stop();
@@ -676,7 +687,7 @@ void Controller::Tick() {
         stamp(next.fx, output_.fx);
         for (auto& [id, p] : next.devices) stamp(p, output_.For(id));
     }
-    if (!outputApplied_ || !next.SameLighting(output_)) {
+    if (!outputApplied_ || !next.SameLighting(output_) || AuraNative() != auraNativeApplied_) {
         Apply(next);
         outputApplied_ = true;
     }
@@ -687,14 +698,14 @@ void Controller::Tick() {
         for (const LampArrayDevice& d : lampArray_.devices())
             if (!LampArrayOn(d)) skip.push_back(d.name);
         lampArray_.Set(DeviceEffect(device::kOther), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kOther),
-                       prefs_.lampArray && !output_.stopped, skip);
+                       prefs_.lampArray && !output_.stopped && !DeviceNative(prefs_, device::kOther), skip);
     }
     {
         std::vector<std::string> skip;
         for (const OpenRgbDevice& d : openRgb_.devices())
             if (!OpenRgbOn(d)) skip.push_back(d.name);
         openRgb_.Set(DeviceEffect(device::kOther), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kOther),
-                     prefs_.openRgb && !output_.stopped, skip);
+                     prefs_.openRgb && !output_.stopped && !DeviceNative(prefs_, device::kOther), skip);
     }
     {
         const uint64_t now = GetTickCount64();
@@ -705,9 +716,10 @@ void Controller::Tick() {
         azoth_.Set(DeviceEffect(device::kKeyboard),
                    cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kKeyboard) *
                        sleep::Level(now, azothInputAt_, AzothSleepMs()),
-                   prefs_.azothKeyboard && !output_.stopped);
+                   prefs_.azothKeyboard && !output_.stopped && !DeviceNative(prefs_, device::kKeyboard));
     }
-    hardware_.SetRam(DeviceEffect(device::kRam), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kRam), prefs_.ramLighting, !output_.stopped, prefs_.ramRelease);
+    hardware_.SetRam(DeviceEffect(device::kRam), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kRam), prefs_.ramLighting,
+                     !output_.stopped && !DeviceNative(prefs_, device::kRam), prefs_.ramRelease);
     if (now - sensorsPushedAt_ >= 500) {
         sensorsPushedAt_ = now;
         monitor_.SetBuiltInSensors(hardware_.Sensors(), hardware_.chip());
