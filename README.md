@@ -7,9 +7,16 @@ built in, including in games that only support other brands. No middleware neede
 ![LumaBridge, Lighting page in Auto mode](docs/images/app-auto.png)
 
 - **Dashboard:** lighting, the running game, CPU / GPU load and temperatures, memory, fan
-  speeds, Aura devices and connections at a glance. Cards can be hidden and reordered. Fan
-  speeds and CPU / board temperatures come from LumaBridge itself once Hardware access is set
-  up (Ryzen CPUs, Nuvoton NCT679x boards), else from LibreHardwareMonitor if it runs.
+  speeds, power and clocks, drives, devices and connections at a glance. Cards can be hidden
+  and reordered. Fan speeds, CPU temperature and power come from LumaBridge itself once
+  Hardware access is set up (AMD Ryzen and Intel CPUs, Nuvoton NCT679x boards), else from
+  LibreHardwareMonitor if it runs.
+- **My setup:** your PC and desk in 3D, live: the case with everything LumaBridge found
+  inside (motherboard, CPU cooler, memory, graphics card, drives, fans), the monitor,
+  keyboard, mouse and other lit devices on the desk. LEDs show their live colors, fans spin
+  with the speeds the sensors report, and the airflow moves through the case. Drag things
+  around, turn the view, and correct LumaBridge's guess of where the fans sit and which way
+  they blow. The Lighting page shows the same view: click a lit part to edit its lighting.
 - **Auto mode:** games drive your lights. LumaBridge answers the game's lighting SDK as
   if that brand's software were installed, and follows the game that's currently active.
   Every running game is listed, with whether it supports dynamic lighting. Counter-Strike 2,

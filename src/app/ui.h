@@ -6,6 +6,7 @@
 #include <array>
 #include <string>
 
+#include "scene3d.h"
 #include "setup_plan.h"
 
 struct ImFont;
@@ -26,7 +27,7 @@ struct Fonts {
 };
 
 // Sidebar order.
-enum class Page { Dashboard, Lighting, GamesList, Devices, Integrations, Settings };
+enum class Page { Dashboard, MySetup, Lighting, GamesList, Devices, Integrations, Settings };
 
 struct UiState {
     Page page = Page::Dashboard;
@@ -37,7 +38,17 @@ struct UiState {
     std::string hexSlot;  // which color editor the hex field being typed in belongs to
     int colorSlot = 0;    // Lighting > Manual: which of the two colors is being edited
     std::string lightTarget;  // Lighting > Manual: the device being edited ("" = all devices)
-    std::string dragItem;     // Lighting: the item being dragged on the "Your setup" canvas
+    // The 3D views (see SetupView): each one's camera, and what the mouse is doing in them.
+    struct View3d {
+        s3d::Camera cam;
+        bool camSet = false;
+        int dragObj = -1;        // the object being moved on the desk (-1: none)
+        s3d::V3 dragOffset;      // from where the mouse meets the desk to the object's spot
+        bool orbiting = false;
+    };
+    View3d setupView, lightView, guideView;
+    bool setupEdit = false;      // My setup: editing the fan slots
+    bool setupAirflow = true, setupLabels = true;
     // Games List: the game whose page is open ("" = the list), and its built-in profile key.
     std::string gameDetail, gameDetailProfile;
     char gameFilter[64] = "";

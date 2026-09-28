@@ -100,8 +100,11 @@ struct Prefs {
     int ramRelease = 0;
     // Per device (device::kFans, ...): its own look, or following the main one.
     std::map<std::string, DeviceLighting> deviceLighting;
-    // The Lighting page's "Your setup" canvas: where each item sits (see DefaultSpot).
+    // Where things sit on the desk in the 3D views ("desk:case", "desk:keyboard", ...; see
+    // pc::DeskItems). Also the old 2D canvas's spots (0.15 and earlier), kept as they were.
     std::map<std::string, Spot> setupSpots;
+    // The case's fans and how it's turned (pc::Encode); "" until you correct LumaBridge's guess.
+    std::string caseLayout;
     static constexpr size_t kMaxRecent = 8;
 };
 

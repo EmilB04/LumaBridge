@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <iterator>
 
+#include "pc_layout.h"
+
 namespace luma::app {
 namespace {
 
@@ -218,10 +220,12 @@ Prefs LoadPrefs(const std::wstring& ini) {
     }
     std::vector<std::string> items{device::kBoard, device::kRam, device::kMouse, device::kKeyboard};
     for (int i = 0; i < 8; ++i) items.push_back(FanItem(i));
+    for (const char* item : pc::DeskItems()) items.push_back(item);
     for (const std::string& item : items) {
         Spot s;
         if (DecodeSpot(Narrow(Read(ini, L"Lighting", (L"Spot." + Widen(item)).c_str())), &s)) p.setupSpots[item] = s;
     }
+    p.caseLayout = Narrow(Read(ini, L"Lighting", L"CaseLayout"));
     const std::wstring manual = Read(ini, L"App", L"ManualGames");
     for (size_t pos = 0; pos < manual.size();) {
         size_t bar = manual.find(L'|', pos);
@@ -309,6 +313,9 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
         WriteConfigValue(ini, L"Lighting", (L"Device." + Widen(id)).c_str(), Widen(EncodeDevice(d)));
     for (const auto& [item, spot] : p.setupSpots)
         WriteConfigValue(ini, L"Lighting", (L"Spot." + Widen(item)).c_str(), Widen(EncodeSpot(spot)));
+    for (const char* item : pc::DeskItems())  // moved back to where LumaBridge puts it
+        if (!p.setupSpots.count(item)) WriteConfigValue(ini, L"Lighting", (L"Spot." + Widen(item)).c_str(), L"");
+    WriteConfigValue(ini, L"Lighting", L"CaseLayout", Widen(p.caseLayout));
 
     WriteConfigValue(ini, L"Color", L"Brightness", Num(cfg.auraCorrection.brightness * 100.0));
     WriteConfigValue(ini, L"Color", L"GainR", Num(cfg.auraCorrection.gainR * 100.0));
