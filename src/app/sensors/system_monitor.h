@@ -26,6 +26,7 @@ struct GpuStat {
     std::string name;
     uint64_t vramTotal = 0, vramUsed = 0;  // bytes (used: NVIDIA only)
     double temp = -1, load = -1, fanPct = -1, powerW = -1;  // -1 = unknown
+    double clockMhz = -1, memClockMhz = -1;                   // NVIDIA only
 };
 
 struct SystemSnapshot {
@@ -34,6 +35,9 @@ struct SystemSnapshot {
     std::string cpuName;  // from Windows (cleaner than SMBIOS on some boards)
     int cpuThreads = 0;
     double cpuLoad = -1;  // %
+    // The processor's effective clock (MHz) from Windows' performance counters (what Task
+    // Manager's "Speed" shows): the rated frequency times the current performance; -1 unknown.
+    double cpuClockMhz = -1;
     uint64_t memTotal = 0, memUsed = 0;
     std::vector<GpuStat> gpus;
     bool nvml = false;           // NVIDIA's library is available

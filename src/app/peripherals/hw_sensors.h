@@ -1,5 +1,5 @@
 // Reading the board's sensors without LibreHardwareMonitor: the CPU's own temperature
-// (AMD Ryzen, family 17h and later) and the Nuvoton NCT679x monitoring chip most ASUS AMD
+// (AMD Ryzen, family 17h and later; Intel), its package power (both) and the Nuvoton NCT679x monitoring chip most ASUS AMD
 // boards use (fan speeds, board temperatures). Register facts as documented by the Linux
 // k10temp / nct6775 drivers and LibreHardwareMonitor; the code is LumaBridge's own. Only
 // reads: the chip is never configured, apart from selecting which register to read.
@@ -21,6 +21,37 @@ inline double TctlCelsius(uint32_t reg) {
     const bool shifted = (reg & 0x80000u) != 0 || (reg & 0x30000u) == 0x30000u;
     const double t = static_cast<double>(reg >> 21) * 0.125;
     return shifted ? t - 49.0 : t;
+}
+
+// ---- Package power (RAPL energy counters) -------------------------------------------
+// AMD (family 17h+) and Intel both count the energy the whole processor has used in a 32-bit
+// register that wraps; the power-unit register says what one count is worth. Watts are the
+// change in energy over the time between two reads.
+
+constexpr uint32_t kAmdPowerUnitMsr = 0xC0010299, kAmdPackageEnergyMsr = 0xC001029B;
+constexpr uint32_t kIntelPowerUnitMsr = 0x606, kIntelPackageEnergyMsr = 0x611;
+constexpr uint32_t kIntelTemperatureTargetMsr = 0x1A2, kIntelPackageThermMsr = 0x1B1;
+
+// Joules per count: bits 12:8 of the power-unit register are n in 1 / 2^n J.
+inline double EnergyUnitJoules(uint64_t powerUnit) {
+    return 1.0 / static_cast<double>(1ull << ((powerUnit >> 8) & 0x1F));
+}
+
+// Watts from two readings of the energy counter `seconds` apart (the counter wraps at 2^32).
+// -1 when the interval is too short to mean anything.
+inline double PackageWatts(uint64_t before, uint64_t after, double unitJoules, double seconds) {
+    if (seconds < 0.05) return -1;
+    const uint32_t delta = static_cast<uint32_t>(after) - static_cast<uint32_t>(before);
+    return delta * unitJoules / seconds;
+}
+
+// Intel package temperature: TjMax (bits 23:16 of IA32_TEMPERATURE_TARGET) minus how far below
+// it the package is (bits 22:16 of IA32_PACKAGE_THERM_STATUS, valid when bit 31 is set).
+// -1 if the reading isn't valid.
+inline double IntelPackageCelsius(uint64_t temperatureTarget, uint64_t packageTherm) {
+    const int tjMax = static_cast<int>((temperatureTarget >> 16) & 0xFF);
+    if (!(packageTherm & 0x80000000ull) || tjMax < 60 || tjMax > 130) return -1;
+    return tjMax - static_cast<int>((packageTherm >> 16) & 0x7F);
 }
 
 // ---- Nuvoton NCT679x ----------------------------------------------------------------

@@ -39,12 +39,12 @@ enum class RamStatus : uint32_t {
 enum class RamRelease : uint32_t { OwnRainbow = 0, Off = 1, KeepLast = 2 };
 
 enum class SensorKind : uint32_t { Cpu = 0, Board = 1 };
-enum class SensorType : uint32_t { Temperature = 0, Fan = 1 };
+enum class SensorType : uint32_t { Temperature = 0, Fan = 1, Power = 2 };  // Power: since 0.15.1, same layout
 
 struct SensorEntry {
     SensorKind kind;
     SensorType type;
-    double value;   // °C or RPM
+    double value;   // °C, RPM or W
     char name[40];
 };
 

@@ -1142,22 +1142,31 @@ void WPower(DashCtx& c) {
         snprintf(b, sizeof b, "%.0f W", g.second);
         row(Icon::Gpu, g.first, b);
     }
-    // Clocks: the fastest core, and the graphics core.
+    // Clocks: the fastest core (LibreHardwareMonitor), else Windows' own effective clock; the
+    // graphics core (NVIDIA's library, else LibreHardwareMonitor).
     double cpuClock = -1;
     for (const auto& x : s.lhm)
         if (x.kind == HardwareKind::Cpu && x.type == SensorType::Clock && x.name.find("Core") != std::string::npos)
             cpuClock = std::max(cpuClock, x.value);
+    if (cpuClock <= 0) cpuClock = s.cpuClockMhz;
     if (cpuClock > 0) {
         snprintf(b, sizeof b, "%.2f GHz", cpuClock / 1000);
         row(Icon::Gauge, "Processor clock", b);
     }
-    if (const auto* x = sensors::PickSensor(s.lhm, HardwareKind::Gpu, SensorType::Clock, {"GPU Core", "Core"})) {
-        snprintf(b, sizeof b, "%.0f MHz", x->value);
-        row(Icon::Gauge, "Graphics clock", b);
+    for (const auto& g : s.gpus) {
+        double mhz = g.clockMhz;
+        if (mhz <= 0)
+            if (const auto* x = sensors::PickSensor(s.lhm, HardwareKind::Gpu, SensorType::Clock, {"GPU Core", "Core"}))
+                mhz = x->value;
+        if (mhz <= 0) continue;
+        snprintf(b, sizeof b, "%.0f MHz", mhz);
+        row(Icon::Gauge, s.gpus.size() > 1 ? sensors::FriendlyGpu(g.name) + " clock" : std::string("Graphics clock"), b);
     }
-    if (!parts && cpuClock <= 0) {
-        if (!s.lhmConnected) LhmHint();
-        else Muted("No power readings reported.");
+    if (!cpuW) {
+        // Why the processor's power is missing.
+        if (!s.lhmConnected) Muted("Processor power: set up Hardware access on the Devices page (one click).");
+        else if (s.sensorSource.rfind("LumaBridge", 0) == 0)
+            Muted("Processor power: update Hardware access on the Devices page (one click) to read it.");
     }
 }
 

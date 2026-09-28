@@ -155,7 +155,7 @@ if(LUMA_ARCH STREQUAL "x64")
         src/integrations/logitech)
     target_compile_definitions(lumabridge_app PRIVATE LUMA_VERSION="${PROJECT_VERSION}")
     target_link_libraries(lumabridge_app PRIVATE imgui aura_bridge gamesense luma_common shell32 ole32 advapi32 dbghelp psapi version
-                          winhttp ws2_32 d3d11 dxgi hid setupapi)
+                          winhttp ws2_32 d3d11 dxgi hid setupapi pdh)
     set_target_properties(lumabridge_app PROPERTIES OUTPUT_NAME "LumaBridge")
     if(MSVC)
         target_link_options(lumabridge_app PRIVATE /MANIFEST:NO)  # app.rc embeds our manifest
@@ -228,7 +228,8 @@ install(TARGETS hw_helper RUNTIME DESTINATION .)
 # PawnIO, bundled unmodified (third_party/pawnio/README.md): installed by Install-Helper.ps1.
 install(FILES third_party/pawnio/PawnIO_setup.exe third_party/pawnio/COPYING third_party/pawnio/README.md DESTINATION pawnio)
 install(FILES third_party/pawnio/modules/SmbusPIIX4.bin third_party/pawnio/modules/LpcIO.bin
-        third_party/pawnio/modules/AMDFamily17.bin third_party/pawnio/modules/COPYING DESTINATION pawnio/modules)
+        third_party/pawnio/modules/AMDFamily17.bin third_party/pawnio/modules/IntelMSR.bin
+        third_party/pawnio/modules/COPYING DESTINATION pawnio/modules)
 install(TARGETS aura-test aura-usb-test ram-probe ghub-probe chroma-probe device-probe hidpp-probe azoth-probe logiled-harness RUNTIME DESTINATION tools)
 install(FILES scripts/Run-HardwareTest.ps1 DESTINATION tools)
 install(FILES scripts/Install-LogiLedProxy.ps1 scripts/Install-SdkEmulators.ps1 scripts/Install-HandbackTask.ps1 scripts/Install-Helper.ps1 scripts/Write-GameFile.ps1

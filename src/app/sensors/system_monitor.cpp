@@ -1,6 +1,7 @@
 #include "system_monitor.h"
 
 #include <dxgi.h>
+#include <pdh.h>
 #include <winhttp.h>
 
 #include <cstring>
@@ -74,6 +75,7 @@ struct Nvml {
     using GetUtil = int(__cdecl*)(void*, unsigned*);  // nvmlUtilization_t {gpu, memory}
     using GetUInt = int(__cdecl*)(void*, unsigned*);
     using GetMem = int(__cdecl*)(void*, unsigned long long*);  // nvmlMemory_t {total, free, used}
+    using GetClock = int(__cdecl*)(void*, int, unsigned*);     // nvmlClockType_t: 0 graphics, 2 memory
 
     HMODULE lib = nullptr;
     Fn0 init = nullptr, shutdown = nullptr;
@@ -84,6 +86,7 @@ struct Nvml {
     GetUtil util = nullptr;
     GetUInt fan = nullptr, power = nullptr;
     GetMem mem = nullptr;
+    GetClock clock = nullptr;
     bool ok = false;
 
     bool Load() {
@@ -106,6 +109,7 @@ struct Nvml {
         fan = reinterpret_cast<GetUInt>(get("nvmlDeviceGetFanSpeed"));
         power = reinterpret_cast<GetUInt>(get("nvmlDeviceGetPowerUsage"));
         mem = reinterpret_cast<GetMem>(get("nvmlDeviceGetMemoryInfo"));
+        clock = reinterpret_cast<GetClock>(get("nvmlDeviceGetClockInfo"));
         ok = init && shutdown && count && handle && name && init() == 0;
         if (!ok) {
             FreeLibrary(lib);
@@ -142,11 +146,48 @@ struct Nvml {
             if (util && util(dev, u) == 0) g->load = u[0];
             if (fan && fan(dev, &v) == 0) g->fanPct = v;
             if (power && power(dev, &v) == 0) g->powerW = v / 1000.0;
+            if (clock && clock(dev, 0, &v) == 0) g->clockMhz = v;
+            if (clock && clock(dev, 2, &v) == 0) g->memClockMhz = v;
             if (mem && mem(dev, m) == 0) {
                 g->vramTotal = m[0];
                 g->vramUsed = m[2];
             }
         }
+    }
+};
+
+// ---- The processor's clock (Windows' performance counters) ---------------------------------
+// "Processor Frequency" is the rated clock; "% Processor Performance" how far above or below
+// it the cores run right now (above 100 while boosting). English names, so it works whatever
+// language Windows is in.
+
+struct CpuClock {
+    PDH_HQUERY query = nullptr;
+    PDH_HCOUNTER freq = nullptr, perf = nullptr;
+    bool ok = false;
+
+    bool Open() {
+        if (PdhOpenQueryW(nullptr, 0, &query) != ERROR_SUCCESS) return false;
+        ok = PdhAddEnglishCounterW(query, L"\\Processor Information(_Total)\\Processor Frequency", 0, &freq) == ERROR_SUCCESS &&
+             PdhAddEnglishCounterW(query, L"\\Processor Information(_Total)\\% Processor Performance", 0, &perf) == ERROR_SUCCESS &&
+             PdhCollectQueryData(query) == ERROR_SUCCESS;
+        if (!ok) Close();
+        return ok;
+    }
+    void Close() {
+        if (query) PdhCloseQuery(query);
+        query = nullptr;
+        ok = false;
+    }
+    // MHz, or -1 (needs two samples: the first call only primes the counters).
+    double Read() {
+        if (!ok || PdhCollectQueryData(query) != ERROR_SUCCESS) return -1;
+        PDH_FMT_COUNTERVALUE f{}, p{};
+        if (PdhGetFormattedCounterValue(freq, PDH_FMT_DOUBLE, nullptr, &f) != ERROR_SUCCESS ||
+            PdhGetFormattedCounterValue(perf, PDH_FMT_DOUBLE, nullptr, &p) != ERROR_SUCCESS)
+            return -1;
+        const double mhz = f.doubleValue * p.doubleValue / 100.0;
+        return mhz > 100 && mhz < 10000 ? mhz : -1;
     }
 };
 
@@ -226,6 +267,8 @@ void SystemMonitor::Run() {
 
     FILETIME idle0{}, kernel0{}, user0{};
     GetSystemTimes(&idle0, &kernel0, &user0);
+    CpuClock cpuClock;
+    if (!cpuClock.Open()) LUMA_INFO("dashboard: Windows' processor clock counters aren't available");
     uint64_t nextLhm = 0;
     bool lhmOk = false;
     std::vector<Sensor> lhm;
@@ -252,6 +295,7 @@ void SystemMonitor::Run() {
             kernel0 = kernel;
             user0 = user;
         }
+        s.cpuClockMhz = cpuClock.Read();
         MEMORYSTATUSEX ms{};
         ms.dwLength = sizeof ms;
         if (GlobalMemoryStatusEx(&ms)) {
@@ -292,6 +336,7 @@ void SystemMonitor::Run() {
         snap_ = std::move(s);
     }
     if (http) WinHttpCloseHandle(http);
+    cpuClock.Close();
     nvml.Unload();
 }
 

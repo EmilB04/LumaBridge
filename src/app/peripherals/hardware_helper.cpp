@@ -190,12 +190,14 @@ void HardwareHelper::Run() {
                 const helper::SensorEntry& e = sh->sensors[i];
                 sensors::Sensor s;
                 s.kind = e.kind == helper::SensorKind::Cpu ? sensors::HardwareKind::Cpu : sensors::HardwareKind::Board;
-                s.type = e.type == helper::SensorType::Fan ? sensors::SensorType::Fan : sensors::SensorType::Temperature;
+                s.type = e.type == helper::SensorType::Fan     ? sensors::SensorType::Fan
+                         : e.type == helper::SensorType::Power ? sensors::SensorType::Power
+                                                               : sensors::SensorType::Temperature;
                 s.value = e.value;
                 char name[sizeof e.name + 1] = {};
                 memcpy(name, e.name, sizeof e.name);
                 s.name = name;
-                s.unit = s.type == sensors::SensorType::Fan ? "RPM" : "\xC2\xB0" "C";
+                s.unit = s.type == sensors::SensorType::Fan ? "RPM" : s.type == sensors::SensorType::Power ? "W" : "\xC2\xB0" "C";
                 s.hardware = s.kind == sensors::HardwareKind::Cpu ? "CPU" : std::string("Nuvoton ") + sh->chip;
                 list.push_back(s);
             }

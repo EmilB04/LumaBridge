@@ -305,8 +305,18 @@ public:
             haveCpu_ = pci_.Lock() && cpu_.Execute("ioctl_read_smn", {hw::kTctlSmn}, &v, 1);
             if (haveCpu_) pci_.Unlock();
             Log("CPU temperature: %s", haveCpu_ ? "Ryzen Tctl" : "not available");
+            StartPower(cpu_, hw::kAmdPowerUnitMsr, hw::kAmdPackageEnergyMsr, "Ryzen");
+        } else if (cpu_.Load(L"IntelMSR.bin") == PawnModule::Result::Ok) {
+            intel_ = true;
+            uint64_t target = 0, therm = 0;
+            haveCpu_ = cpu_.Execute("ioctl_read_msr", {hw::kIntelTemperatureTargetMsr}, &target, 1) &&
+                       cpu_.Execute("ioctl_read_msr", {hw::kIntelPackageThermMsr}, &therm, 1) &&
+                       hw::IntelPackageCelsius(target, therm) >= 0;
+            tempTarget_ = target;
+            Log("CPU temperature: %s", haveCpu_ ? "Intel package" : "not available");
+            StartPower(cpu_, hw::kIntelPowerUnitMsr, hw::kIntelPackageEnergyMsr, "Intel");
         } else {
-            Log("CPU temperature: AMDFamily17 module didn't load (not an AMD Ryzen?)");
+            Log("CPU temperature and power: neither AMDFamily17 nor IntelMSR loaded");
         }
         if (lpc_.Load(L"LpcIO.bin") == PawnModule::Result::Ok) FindChip();
         else Log("monitoring chip: LpcIO module didn't load");
@@ -325,12 +335,34 @@ public:
             snprintf(out[n].name, sizeof out[n].name, "%s", name);
             ++n;
         };
-        if (haveCpu_ && pci_.Lock()) {
+        if (haveCpu_ && intel_) {
+            uint64_t therm = 0;
+            if (cpu_.Execute("ioctl_read_msr", {hw::kIntelPackageThermMsr}, &therm, 1)) {
+                const double c = hw::IntelPackageCelsius(tempTarget_, therm);
+                if (c >= 0) add(helper::SensorKind::Cpu, helper::SensorType::Temperature, c, "CPU Package");
+            }
+        } else if (haveCpu_ && pci_.Lock()) {
             uint64_t v = 0;
             const bool ok = cpu_.Execute("ioctl_read_smn", {hw::kTctlSmn}, &v, 1);
             pci_.Unlock();
             if (ok) add(helper::SensorKind::Cpu, helper::SensorType::Temperature, hw::TctlCelsius(static_cast<uint32_t>(v)),
                         "Core (Tctl/Tdie)");
+        }
+        if (energyUnit_ > 0) {
+            // Package power: the energy used since the last read over the time since then.
+            uint64_t e = 0;
+            LARGE_INTEGER now, freq;
+            QueryPerformanceCounter(&now);
+            QueryPerformanceFrequency(&freq);
+            if (cpu_.Execute("ioctl_read_msr", {energyMsr_}, &e, 1)) {
+                if (energyAt_) {
+                    const double w = hw::PackageWatts(energy_, e, energyUnit_,
+                                                      static_cast<double>(now.QuadPart - energyAt_) / static_cast<double>(freq.QuadPart));
+                    if (w >= 0 && w < 1000) add(helper::SensorKind::Cpu, helper::SensorType::Power, w, "Package");
+                }
+                energy_ = e;
+                energyAt_ = now.QuadPart;
+            }
         }
         if (base_ && isa_.Lock()) {
             for (const auto& t : hw::kTemps) {
@@ -349,6 +381,18 @@ public:
 
 private:
     static bool TemperatureValid(uint8_t raw, double* c) { return hw::TemperatureValid(raw, c); }
+
+    // Package power from the processor's energy counter, if its module lets us read it.
+    void StartPower(PawnModule& m, uint32_t unitMsr, uint32_t energyMsr, const char* what) {
+        uint64_t unit = 0, e = 0;
+        if (m.Execute("ioctl_read_msr", {unitMsr}, &unit, 1) && m.Execute("ioctl_read_msr", {energyMsr}, &e, 1)) {
+            energyUnit_ = hw::EnergyUnitJoules(unit);
+            energyMsr_ = energyMsr;
+            Log("CPU power: %s package energy counter (%.1f uJ per count)", what, energyUnit_ * 1e6);
+        } else {
+            Log("CPU power: the %s energy counter can't be read", what);
+        }
+    }
 
     uint8_t SioIn(uint8_t reg) {
         uint64_t v = 0;
@@ -423,6 +467,12 @@ private:
     }
 
     PawnModule cpu_, lpc_;
+    bool intel_ = false;          // cpu_ holds IntelMSR (else AMDFamily17)
+    uint64_t tempTarget_ = 0;     // Intel: IA32_TEMPERATURE_TARGET, read once
+    double energyUnit_ = 0;       // J per count of the package energy counter; 0: no power
+    uint32_t energyMsr_ = 0;
+    uint64_t energy_ = 0;         // the last reading, and when (QueryPerformanceCounter)
+    int64_t energyAt_ = 0;
     NamedLock pci_{L"Global\\Access_PCI"};
     NamedLock isa_{L"Global\\Access_ISABUS.HTP.Method"};
     bool haveCpu_ = false;

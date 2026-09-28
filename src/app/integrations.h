@@ -75,7 +75,7 @@ private:
 // HKLM\SOFTWARE\LumaBridge\HandbackTaskVersion); an older task needs setting up again.
 constexpr DWORD kHandbackTaskVersion = 6;
 // Same for the hardware helper (Install-Helper.ps1, HKLM\SOFTWARE\LumaBridge\HelperTaskVersion).
-constexpr DWORD kHelperTaskVersion = 1;
+constexpr DWORD kHelperTaskVersion = 2;  // 2: CPU package power, Intel CPUs (0.15.1)
 
 std::wstring AppDirectory();
 // Folder picker; empty when cancelled.

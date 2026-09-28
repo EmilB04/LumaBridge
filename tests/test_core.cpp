@@ -1552,6 +1552,16 @@ static void TestHwSensors() {
     CHECK(std::fabs(TctlCelsius(0x2D0u << 21) - 90.0) < 1e-9);
     CHECK(std::fabs(TctlCelsius((0x2D0u << 21) | 0x80000u) - 41.0) < 1e-9);
     CHECK(std::fabs(TctlCelsius((0x2D0u << 21) | 0x30000u) - 41.0) < 1e-9);
+    // Package power from the energy counter: Ryzen's unit is usually 2^-16 J (0x0A1003 has
+    // 0x10 in bits 12:8); 3,276,800 counts in 1 s is 50 W. The counter wraps.
+    const double unit = EnergyUnitJoules(0x0A1003);
+    CHECK(std::fabs(unit - 1.0 / 65536) < 1e-12);
+    CHECK(std::fabs(PackageWatts(1000, 1000 + 3276800, unit, 1.0) - 50.0) < 1e-9);
+    CHECK(std::fabs(PackageWatts(0xFFFF0000u, 0x00310000u, unit, 1.0) - 50.0) < 1e-9);  // wrapped
+    CHECK(PackageWatts(0, 100, unit, 0.01) < 0);                                        // too soon
+    // Intel: TjMax 100 (IA32_TEMPERATURE_TARGET bits 23:16), 38 below it -> 62 °C.
+    CHECK(IntelPackageCelsius(100ull << 16, 0x80000000ull | (38ull << 16)) == 62);
+    CHECK(IntelPackageCelsius(100ull << 16, 38ull << 16) < 0);  // not valid
     CHECK(std::fabs(TctlCelsius((0x2D0u << 21) | 0x10000u) - 90.0) < 1e-9);  // one TJ_SEL bit: no shift
     // Fans: count 1350 = 1000 RPM; the idle / missing readings are 0.
     CHECK(std::fabs(FanRpm(1350 >> 5, 1350 & 0x1F) - 1000.0) < 1e-9);
