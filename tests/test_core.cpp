@@ -27,6 +27,8 @@
 #include "forza_lighting.h"
 #include "flight_sim_lighting.h"
 #include "dcs_lighting.h"
+#include "scene3d.h"
+#include "pc_layout.h"
 #include "war_thunder_lighting.h"
 #include "screen_colors.h"
 #include "smbios.h"
@@ -756,6 +758,97 @@ static void TestLeague() {
     l.OnGameData(data(900, "false", R"({"EventID":5,"EventName":"GameEnd","Result":"Win"})"), 9000);
     CHECK(l.Current(9000).kind == Kind::RainbowWave);
     CHECK(!l.Active(9000 + LeagueLighting::kStaleMs + 1));
+}
+
+static void TestScene3d() {
+    using namespace luma::app::s3d;
+    Camera cam;
+    cam.target = {0, 0, 0};
+    cam.yaw = 0;
+    cam.pitch = 0.0001f;
+    cam.distance = 100;
+    Viewport vp{0, 0, 200, 100};
+    // Looking along -z from +z: the target lands in the middle, +x to the right, +y up.
+    Projected c = Project(cam, vp, {0, 0, 0});
+    CHECK(c.visible && std::fabs(c.sx - 100) < 0.01f && std::fabs(c.sy - 50) < 0.1f && std::fabs(c.z - 100) < 0.01f);
+    CHECK(Project(cam, vp, {10, 0, 0}).sx > 100 && Project(cam, vp, {0, 10, 0}).sy < 50);
+    CHECK(!Project(cam, vp, {0, 0, 150}).visible);  // behind the eye
+    // The screen ray back through a projected point finds it again.
+    V3 hit;
+    cam.pitch = 0.6f;
+    const Projected g = Project(cam, vp, {12, 0, -30});
+    CHECK(HitPlaneY(ScreenRay(cam, vp, g.sx, g.sy), 0, &hit) && std::fabs(hit.x - 12) < 0.05f && std::fabs(hit.z + 30) < 0.05f);
+
+    // A box shows its three faces towards the eye; a room (inward walls) the three away.
+    cam.yaw = 0.7f;
+    cam.pitch = 0.5f;
+    Scene box;
+    box.Box({-5, -5, -5}, {5, 5, 5}, Rgba(200, 200, 200), 1);
+    CHECK(Render(box, cam, vp).size() == 3);
+    Scene room;
+    room.Room({-5, -5, -5}, {5, 5, 5}, Rgba(200, 200, 200), 2);
+    CHECK(Render(room, cam, vp).size() == 3);
+    // Painter's order: far first; the nearer box wins the pick; walls always draw first.
+    Scene two;
+    two.Room({-40, -40, -40}, {40, 40, 40}, Rgba(50, 50, 50), 9);
+    two.Box({-3, -3, -3}, {3, 3, 3}, Rgba(255, 0, 0), 1);
+    two.xf = Transform::Translate(Normalize(cam.Eye() - cam.target) * 20.f);
+    two.Box({-1, -1, -1}, {1, 1, 1}, Rgba(0, 255, 0), 2);
+    const auto items = Render(two, cam, vp);
+    CHECK(items.front().background);
+    for (size_t i = 1; i < items.size(); ++i)
+        if (!items[i].background && !items[i - 1].background) CHECK(items[i - 1].depth >= items[i].depth);
+    CHECK(Pick(items, vp.w / 2, vp.h / 2) == 2);
+    CHECK(Pick(items, 1, 1) == 9 || Pick(items, 1, 1) == -1);
+    // Emissive faces keep their color; lit ones are shaded.
+    Scene led;
+    led.xf = Transform{};
+    led.Box({-1, -1, -1}, {1, 1, 1}, Rgba(255, 0, 0), 1, kEmissive);
+    for (const auto& d : Render(led, cam, vp)) CHECK(d.color == Rgba(255, 0, 0));
+    // A transform facing +x puts local z along x.
+    const Transform f = Transform::Facing({1, 0, 0}, {5, 0, 0});
+    const V3 p = f.Apply({0, 0, 2});
+    CHECK(std::fabs(p.x - 7) < 1e-4f && std::fabs(p.y) < 1e-4f);
+    const float square[] = {0, 0, 10, 0, 10, 10, 0, 10};
+    CHECK(InsidePolygon(square, 4, 5, 5) && !InsidePolygon(square, 4, 15, 5));
+}
+
+static void TestPcLayout() {
+    using namespace luma::app::pc;
+    // 6 fans, 3 of them RGB: 3 in front (the RGB ones), 1 at the back, 2 on top.
+    const Layout g = Guess(3, 3);
+    CHECK(g.Fans() == 6 && g.RgbFans() == 3 && g.guessed);
+    int front = 0, back = 0, top = 0;
+    for (int i = 0; i < kSlots; ++i) {
+        if (g.slots[static_cast<size_t>(i)] == SlotFan::None) continue;
+        const Mount m = Slots()[static_cast<size_t>(i)].mount;
+        front += m == Mount::Front;
+        back += m == Mount::Back;
+        top += m == Mount::Top;
+    }
+    CHECK(front == 3 && back == 1 && top == 2);
+    CHECK(g.ChainIndex(0) == 0 && g.ChainIndex(2) == 2 && g.ChainIndex(3) == -1);
+    CHECK(!g.Exhaust(0) && g.Exhaust(3) && g.Exhaust(4));
+    CHECK(Guess(0, 20).Fans() == kSlots);  // never more than there are slots
+
+    Layout l = g;
+    CycleSlot(&l, 3);  // the back fan becomes an RGB fan
+    CHECK(l.slots[3] == SlotFan::Rgb && !l.guessed && l.ChainIndex(3) == 3);
+    CycleSlot(&l, 3);
+    CHECK(l.slots[3] == SlotFan::None);
+    l.exhaust[static_cast<size_t>(Mount::Top)] = false;
+    l.turn = 2;
+    Layout back2;
+    CHECK(Decode(Encode(l), &back2) && back2 == l);
+    CHECK(Encode(Guess(3, 3)).rfind("v1;slots=222111000;exhaust=0110;turn=0", 0) == 0);
+    CHECK(!Decode("", &back2) && !Decode("v1;slots=22;exhaust=0110", &back2) && !Decode("v1;slots=922110000;exhaust=0110", &back2));
+
+    // Airflow starts outside an intake and ends outside an exhaust.
+    const auto p0 = AirflowPoint(g, 0, 0, 0, 7), p1 = AirflowPoint(g, 0, 0, 1, 7);
+    CHECK(p0.z > kCaseD / 2 - 2);                            // in front of the front fans
+    CHECK(p1.z < -kCaseD / 2 + 2 || p1.y > kCaseH - 2);      // behind the back or above the top
+    Layout none;
+    CHECK(AirflowPoint(none, 0, 0, 1, 3).z < -kCaseD / 2);   // no fans: out the back vents
 }
 
 static void TestFlightSim() {
@@ -1626,6 +1719,8 @@ int main() {
     TestLeague();
     TestForza();
     TestFlightSim();
+    TestScene3d();
+    TestPcLayout();
     TestDcs();
     TestDeviceCatalog();
     TestHyperXRam();
