@@ -50,6 +50,7 @@ bool Controller::Init() {
     RescanDevices();
     detector_.SetExtraGames(prefs_.manualGames);
     RescanLibrary();
+    feeds_.SetForzaPort(prefs_.forzaPort);
     feeds_.Start();
     monitor_.Start(prefs_.lhmPort);
     if (prefs_.logitechDevices) logitech_.Start(AppDirectory() + L"\\integrations\\LumaBridge_x64.dll");
@@ -205,6 +206,7 @@ std::wstring Controller::GameDir(const char* profileKey) const {
 void Controller::RefreshFeedSettings() {
     const std::wstring rl = GameDir("rocketleague");
     if (!rl.empty()) feeds_.SetRocketLeaguePort(RocketLeagueStatsPort(rl));
+    feeds_.SetForzaPort(prefs_.forzaPort);
 }
 
 void Controller::RescanLibrary() {
@@ -555,13 +557,15 @@ void Controller::Apply(const Output& out) {
 }
 
 void Controller::UpdateFeeds(uint64_t now) {
-    bool rl = false, wt = false;
+    GameFeeds::Running running;
     for (const GameStatus& g : games_)
         if (g.profile) {
-            rl |= g.profile->feed == games::Feed::RocketLeagueStats;
-            wt |= g.profile->feed == games::Feed::WarThunderApi;
+            running.rocketLeague |= g.profile->feed == games::Feed::RocketLeagueStats;
+            running.warThunder |= g.profile->feed == games::Feed::WarThunderApi;
+            running.league |= g.profile->feed == games::Feed::LeagueLiveClient;
+            running.forza |= g.profile->feed == games::Feed::ForzaDataOut;
         }
-    feeds_.SetRunning(rl, wt);
+    feeds_.SetRunning(running);
     struct {
         GameFeeds::Feed feed;
         const char* sdk;
@@ -570,8 +574,12 @@ void Controller::UpdateFeeds(uint64_t now) {
         {feeds_.Cs2(now), "Game State Integration", "Counter-Strike 2"},
         {feeds_.RocketLeague(now), "Stats API", "Rocket League"},
         {feeds_.WarThunder(now), "local status page", "War Thunder"},
+        {feeds_.Dota2(now), "Game State Integration", "Dota 2"},
+        {feeds_.League(now), "Live Client Data API", "League of Legends"},
+        {feeds_.Forza(now), "Data Out telemetry", "Forza"},
     };
-    for (int i = 0; i < 3; ++i) {
+    static_assert(sizeof(feeds) / sizeof(feeds[0]) == sizeof(feedActive_) / sizeof(feedActive_[0]), "one flag per feed");
+    for (size_t i = 0; i < std::size(feeds); ++i) {
         if (feeds[i].feed.active) {
             tracker_.OnEffect(0, feeds[i].sdk, feeds[i].game, feeds[i].feed.effect, now);
         } else if (feedActive_[i]) {

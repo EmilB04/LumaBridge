@@ -93,16 +93,20 @@ void GameFeeds::Start() {
     }
     rlThread_ = std::thread(&GameFeeds::RocketLeagueLoop, this);
     wtThread_ = std::thread(&GameFeeds::WarThunderLoop, this);
+    leagueThread_ = std::thread(&GameFeeds::LeagueLoop, this);
+    forzaThread_ = std::thread(&GameFeeds::ForzaLoop, this);
 }
 
 void GameFeeds::Stop() {
-    if (!cs2Thread_.joinable() && !rlThread_.joinable() && !wtThread_.joinable()) return;
+    if (!cs2Thread_.joinable() && !rlThread_.joinable() && !wtThread_.joinable() && !leagueThread_.joinable() &&
+        !forzaThread_.joinable())
+        return;
     stop_ = true;
     if (cs2Listen_ != INVALID_SOCKET) {
         closesocket(cs2Listen_);  // ends accept()
         cs2Listen_ = INVALID_SOCKET;
     }
-    for (std::thread* t : {&cs2Thread_, &rlThread_, &wtThread_})
+    for (std::thread* t : {&cs2Thread_, &rlThread_, &wtThread_, &leagueThread_, &forzaThread_})
         if (t->joinable()) t->join();
     if (wsa_) WSACleanup();
     wsa_ = false;
@@ -121,6 +125,21 @@ GameFeeds::Feed GameFeeds::RocketLeague(uint64_t now) {
 GameFeeds::Feed GameFeeds::WarThunder(uint64_t now) {
     std::lock_guard<std::mutex> lock(mutex_);
     return Feed{wt_.Active(now), wt_.Current(now)};
+}
+
+GameFeeds::Feed GameFeeds::Dota2(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{dota_.Active(now), dota_.Current(now)};
+}
+
+GameFeeds::Feed GameFeeds::League(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{league_.Active(now), league_.Current(now)};
+}
+
+GameFeeds::Feed GameFeeds::Forza(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{forza_.Active(now), forza_.Current()};
 }
 
 // ---- Counter-Strike 2 ----------------------------------------------------------------------
@@ -155,9 +174,14 @@ void GameFeeds::Cs2Serve(SOCKET s) {
         while ((st = parser.Next(&req)) == http::Parser::Status::Done) {
             Json j;
             if (req.method == "POST" && Json::Parse(req.body, &j)) {
+                // CS2 and Dota 2 both post here; their app id tells them apart.
                 std::lock_guard<std::mutex> lock(mutex_);
-                if (cs2_.OnState(j, GetTickCount64(), kCs2Token) && !cs2Seen_.exchange(true))
+                if (j["provider"]["appid"].Number(0) == 570) {
+                    if (dota_.OnState(j, GetTickCount64(), kCs2Token) && !dotaSeen_.exchange(true))
+                        LUMA_INFO("games: Dota 2 is sending its game state");
+                } else if (cs2_.OnState(j, GetTickCount64(), kCs2Token) && !cs2Seen_.exchange(true)) {
                     LUMA_INFO("games: Counter-Strike 2 is sending its game state");
+                }
             }
             const std::string out = http::BuildResponse(200, "", req.keepAlive);
             send(s, out.data(), static_cast<int>(out.size()), 0);
@@ -169,6 +193,123 @@ void GameFeeds::Cs2Serve(SOCKET s) {
         if (st == http::Parser::Status::Error) break;
     }
     closesocket(s);
+}
+
+// ---- League of Legends ----------------------------------------------------------------------
+
+namespace {
+// GET https://127.0.0.1:2999<path> from the League client's own API. Its certificate is Riot's
+// own, issued to "127.0.0.1" by Riot's local CA: accepted as is (loopback only).
+std::string LeagueGet(HINTERNET session, const wchar_t* path) {
+    std::string body;
+    HINTERNET con = WinHttpConnect(session, L"127.0.0.1", 2999, 0);
+    if (!con) return body;
+    HINTERNET req = WinHttpOpenRequest(con, L"GET", path, nullptr, nullptr, nullptr, WINHTTP_FLAG_SECURE);
+    DWORD flags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+                  SECURITY_FLAG_IGNORE_CERT_DATE_INVALID | SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+    if (req && WinHttpSetOption(req, WINHTTP_OPTION_SECURITY_FLAGS, &flags, sizeof flags) &&
+        WinHttpSendRequest(req, nullptr, 0, nullptr, 0, 0, 0) && WinHttpReceiveResponse(req, nullptr)) {
+        DWORD status = 0, len = sizeof status;
+        WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &len, nullptr);
+        DWORD avail = 0;
+        while (status == 200 && WinHttpQueryDataAvailable(req, &avail) && avail && body.size() < (4u << 20)) {
+            std::string chunk(avail, '\0');
+            DWORD got = 0;
+            if (!WinHttpReadData(req, chunk.data(), avail, &got) || !got) break;
+            body.append(chunk.data(), got);
+        }
+    }
+    if (req) WinHttpCloseHandle(req);
+    WinHttpCloseHandle(con);
+    return body;
+}
+}  // namespace
+
+void GameFeeds::LeagueLoop() {
+    HINTERNET session = WinHttpOpen(L"LumaBridge", WINHTTP_ACCESS_TYPE_NO_PROXY, nullptr, nullptr, 0);
+    if (!session) return;
+    WinHttpSetTimeouts(session, 1000, 1000, 1000, 1000);
+    bool inMatch = false;
+    while (!stop_) {
+        if (!leagueRunning_) {
+            if (inMatch) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                league_ = games::LeagueLighting{};  // the next match starts fresh
+            }
+            inMatch = false;
+            Nap(stop_, 1000);
+            continue;
+        }
+        const std::string body = LeagueGet(session, L"/liveclientdata/allgamedata");
+        Json j;
+        if (body.empty() || !Json::Parse(body, &j) || !j["activePlayer"].IsObject()) {
+            Nap(stop_, 1000);  // loading screen, or the client without a match
+            continue;
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            league_.OnGameData(j, GetTickCount64());
+            if (!inMatch) league_.Prime();  // the first answer: the events so far are history
+        }
+        if (!inMatch) {
+            inMatch = true;
+            if (!leagueSeen_.exchange(true)) LUMA_INFO("games: League of Legends is answering (Live Client Data API)");
+        }
+        Nap(stop_, 200);
+    }
+    WinHttpCloseHandle(session);
+}
+
+// ---- Forza ----------------------------------------------------------------------------------
+
+void GameFeeds::ForzaLoop() {
+    SOCKET s = INVALID_SOCKET;
+    int boundPort = 0;
+    while (!stop_) {
+        if (!forzaRunning_ || boundPort != forzaPort_) {
+            if (s != INVALID_SOCKET) {
+                closesocket(s);
+                s = INVALID_SOCKET;
+                boundPort = 0;
+            }
+            if (!forzaRunning_) {
+                forzaBusy_ = false;
+                Nap(stop_, 1000);
+                continue;
+            }
+        }
+        if (s == INVALID_SOCKET) {
+            s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            BOOL exclusive = TRUE;
+            setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&exclusive), sizeof exclusive);
+            sockaddr_in a{};
+            a.sin_family = AF_INET;
+            a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            a.sin_port = htons(static_cast<u_short>(forzaPort_.load()));
+            if (bind(s, reinterpret_cast<sockaddr*>(&a), sizeof a) != 0) {
+                if (!forzaBusy_.exchange(true))
+                    LUMA_WARN("games: UDP port %d is taken (another telemetry app?) - Forza lighting unavailable",
+                              forzaPort_.load());
+                closesocket(s);
+                s = INVALID_SOCKET;
+                Nap(stop_, 3000);
+                continue;
+            }
+            forzaBusy_ = false;
+            boundPort = forzaPort_;
+            DWORD timeout = 500;
+            setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof timeout);
+            LUMA_INFO("games: listening for Forza's Data Out on 127.0.0.1:%d", boundPort);
+        }
+        uint8_t buf[1500];
+        const int n = recv(s, reinterpret_cast<char*>(buf), sizeof buf, 0);
+        if (n > 0) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (forza_.OnPacket(buf, static_cast<size_t>(n), GetTickCount64()) && !forzaSeen_.exchange(true))
+                LUMA_INFO("games: Forza is sending its Data Out telemetry");
+        }
+    }
+    if (s != INVALID_SOCKET) closesocket(s);
 }
 
 // ---- Rocket League --------------------------------------------------------------------------
@@ -304,6 +445,37 @@ void GameFeeds::WarThunderLoop() {
 
 // ---- setup helpers --------------------------------------------------------------------------
 
+std::wstring Dota2ConfigPath(const std::wstring& gameDir) {
+    return gameDir.empty() ? L"" : gameDir + L"\\game\\dota\\cfg\\gamestate_integration\\gamestate_integration_lumabridge.cfg";
+}
+
+bool Dota2ConfigInstalled(const std::wstring& gameDir) {
+    const std::wstring p = Dota2ConfigPath(gameDir);
+    return !p.empty() && GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+std::string Dota2ConfigText() {
+    return "\"LumaBridge\"\n"
+           "{\n"
+           "  \"uri\" \"http://127.0.0.1:" + std::to_string(GameFeeds::kCs2Port) + "/\"\n"
+           "  \"timeout\" \"5.0\"\n"
+           "  \"buffer\" \"0.05\"\n"
+           "  \"throttle\" \"0.1\"\n"
+           "  \"heartbeat\" \"10.0\"\n"
+           "  \"data\"\n"
+           "  {\n"
+           "    \"provider\" \"1\"\n"
+           "    \"map\" \"1\"\n"
+           "    \"player\" \"1\"\n"
+           "    \"hero\" \"1\"\n"
+           "  }\n"
+           "  \"auth\"\n"
+           "  {\n"
+           "    \"token\" \"" + std::string(GameFeeds::kCs2Token) + "\"\n"
+           "  }\n"
+           "}\n";
+}
+
 std::string Cs2ConfigText() {
     char text[1024];
     snprintf(text, sizeof text,
@@ -360,6 +532,9 @@ std::string RocketLeagueStatsText(const std::wstring& gameDir, bool enable) {
 }
 
 bool WriteTextFile(const std::wstring& path, const std::string& text) {
+    // Its folders first (Dota 2's gamestate_integration folder may not exist yet).
+    for (size_t i = path.find_first_of(L"\\/", 3); i != std::wstring::npos; i = path.find_first_of(L"\\/", i + 1))
+        CreateDirectoryW(path.substr(0, i).c_str(), nullptr);
     HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) return false;
     DWORD written = 0;

@@ -16,7 +16,7 @@ enum class ProfileKind {
     NotAGame,   // a tool that looks like a game; ignored in Auto mode
 };
 
-enum class Feed { None, Cs2Gsi, RocketLeagueStats, WarThunderApi };
+enum class Feed { None, Cs2Gsi, RocketLeagueStats, WarThunderApi, Dota2Gsi, LeagueLiveClient, ForzaDataOut };
 
 struct GameProfile {
     const char* key;        // stable id ("cs2")
@@ -48,6 +48,19 @@ inline const GameProfile* Profiles(size_t* count) {
          "Built in: the game's local status page",
          "Tanks: crew health from green to red, with a flash when a crew member is lost. Aircraft: "
          "war emergency power and low fuel. Nothing to set up."},
+        {"dota2", "Dota 2", {"dota2.exe"}, {"dota2"}, ProfileKind::BuiltIn, Feed::Dota2Gsi,
+         "Built in: Valve's Game State Integration",
+         "Your team's color (dimmer at night), low health, stuns and hexes, kills, death, and victory or "
+         "defeat. Set up once on its page in the Games List, add -gamestateintegration to Dota 2's launch "
+         "options in Steam, then restart Dota 2."},
+        {"league", "League of Legends", {"league of legends.exe"}, {"leagueoflegends"}, ProfileKind::BuiltIn,
+         Feed::LeagueLiveClient, "Built in: Riot's Live Client Data API",
+         "Your side's color, low health, death, your kills and multikills, your team's dragons (in the "
+         "dragon's color), barons and heralds, and victory or defeat. Nothing to set up."},
+        {"forza", "Forza", {"forzahorizon5.exe", "forzahorizon4.exe"}, {"forzahorizon5", "forzahorizon4", "forzamotorsport"},
+         ProfileKind::BuiltIn, Feed::ForzaDataOut, "Built in: the game's Data Out telemetry",
+         "Rev lights: blue at low revs, then green, yellow and red as the engine climbs, and a red "
+         "flash at the limiter. Switch on Data Out in the game's settings (its page says how)."},
         {"overwatch", "Overwatch 2", {"overwatch.exe"}, {"overwatch", "overwatch2"}, ProfileKind::VendorSdk,
          Feed::None, "Razer Chroma (hero effects)",
          "Install Razer Chroma on the Integrations page. Blizzard's anti-cheat may refuse an "

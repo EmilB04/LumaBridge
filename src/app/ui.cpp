@@ -956,7 +956,10 @@ void WConnections(DashCtx& c) {
         bool on;
     } built[] = {{"Counter-Strike 2 feed", feeds.Cs2Seen()},
                  {"Rocket League feed", feeds.RocketLeagueConnected()},
-                 {"War Thunder feed", feeds.WarThunderSeen()}};
+                 {"War Thunder feed", feeds.WarThunderSeen()},
+                 {"Dota 2 feed", feeds.Dota2Seen()},
+                 {"League of Legends feed", feeds.LeagueSeen()},
+                 {"Forza feed", feeds.ForzaSeen()}};
     for (const auto& b : built) {
         ImGui::GetWindowDrawList()->AddCircleFilled(
             ImVec2(ImGui::GetCursorScreenPos().x + 5 * S(), ImGui::GetCursorScreenPos().y + ImGui::GetTextLineHeight() / 2),
@@ -2869,6 +2872,8 @@ void RefreshFeeds(Controller& ctl, UiState& ui) {
     ui.cs2Dir = ctl.GameDir("cs2");
     ui.rlDir = ctl.GameDir("rocketleague");
     ui.cs2Installed = Cs2ConfigInstalled(ui.cs2Dir);
+    ui.dotaDir = ctl.GameDir("dota2");
+    ui.dotaInstalled = Dota2ConfigInstalled(ui.dotaDir);
     ui.rlIniFound = !RocketLeagueStatsText(ui.rlDir, true).empty();
     ui.rlEnabled = RocketLeagueStatsEnabled(ui.rlDir);
     ctl.RefreshFeedSettings();
@@ -2884,6 +2889,15 @@ void FeedPill(const Controller& ctl, const UiState& ui, const std::string& key) 
     } else if (key == "rocketleague") {
         if (feeds.RocketLeagueConnected()) Pill("Receiving", kGreen);
         else Pill(ui.rlEnabled ? "Switched on" : "Off", ui.rlEnabled ? kGreen : kAmber);
+    } else if (key == "dota2") {
+        if (!feeds.Cs2Listening()) Pill("Port busy", kRed);
+        else if (feeds.Dota2Seen()) Pill("Receiving", kGreen);
+        else Pill(ui.dotaInstalled ? "Set up" : "Not set up", ui.dotaInstalled ? kGreen : kAmber);
+    } else if (key == "league") {
+        Pill(feeds.LeagueSeen() ? "Receiving" : "Ready", kGreen);
+    } else if (key == "forza") {
+        if (feeds.ForzaPortBusy()) Pill("Port busy", kRed);
+        else Pill(feeds.ForzaSeen() ? "Receiving" : "Switch on in the game", feeds.ForzaSeen() ? kGreen : kAmber);
     } else {
         Pill(feeds.WarThunderSeen() ? "Receiving" : "Ready", kGreen);
     }
@@ -2932,6 +2946,49 @@ void FeedSetup(Controller& ctl, Integrations& in, UiState& ui, const std::string
                 Muted("Sets PacketSendRate in the game's DefaultStatsAPI.ini (a backup is kept).");
             }
         }
+    } else if (key == "dota2") {
+        if (ui.dotaDir.empty()) {
+            Muted("Dota 2 wasn't found in your game libraries (Rescan on the list).");
+        } else if (ui.dotaInstalled) {
+            Muted("%s", feeds.Dota2Seen() ? "Dota 2 is sending its game state."
+                                          : "Set up. In Steam, add -gamestateintegration to Dota 2's launch options "
+                                            "(Properties > General), then restart Dota 2.");
+            ImGui::BeginDisabled(in.Busy());
+            if (ImGui::Button("Remove##dota2"))
+                WriteFeedFile(in, ui, "dota2", "Dota 2 feed removed", Dota2ConfigPath(ui.dotaDir), "", true);
+            ImGui::EndDisabled();
+        } else {
+            ImGui::BeginDisabled(in.Busy());
+            if (PrimaryButton("Set up##dota2"))
+                WriteFeedFile(in, ui, "dota2", "Dota 2 feed set up - add -gamestateintegration to its launch options",
+                              Dota2ConfigPath(ui.dotaDir), Dota2ConfigText(), false);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            Muted("Adds gamestate_integration_lumabridge.cfg to Dota 2's cfg folder (Valve's official way). Dota 2 "
+                  "also needs -gamestateintegration in its launch options in Steam.");
+        }
+    } else if (key == "league") {
+        Muted("%s", feeds.LeagueSeen() ? "League of Legends answered this session."
+                                       : "Nothing to set up: it works as soon as you're in a match (Riot's own Live "
+                                         "Client Data API on this PC).");
+    } else if (key == "forza") {
+        Muted("In the game: Settings > HUD and Gameplay (Forza Motorsport: Gameplay & HUD) > Data Out: On, Data Out "
+              "IP Address: 127.0.0.1, Data Out IP Port: the port below.");
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Port");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(110 * S());
+        int port = ctl.prefs().forzaPort;
+        if (ImGui::InputInt("##forzaport", &port, 0, 0) && port > 1024 && port < 65536) {
+            ctl.prefs().forzaPort = port;
+            ctl.Changed();
+            ctl.RefreshFeedSettings();
+        }
+        ImGui::SameLine();
+        Muted("%s", feeds.ForzaPortBusy() ? "Taken by another program (a telemetry app?) - pick another port here and in "
+                                            "the game."
+                    : feeds.ForzaSeen() ? "Receiving while you drive."
+                                        : "Works while you drive, once Data Out is on.");
     } else {
         Muted("%s", feeds.WarThunderSeen() ? "Seen War Thunder's status page this session."
                                            : "Nothing to set up: it works as soon as you're in a battle.");
@@ -3085,7 +3142,7 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
     ImGui::PopFont();
     Muted("These games light up through their own official data, no vendor software needed. Click one to set it up.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
-    static const char* kBuiltIn[] = {"cs2", "rocketleague", "warthunder"};
+    static const char* kBuiltIn[] = {"cs2", "rocketleague", "warthunder", "dota2", "league", "forza"};
     const float avail = ImGui::GetContentRegionAvail().x;
     const int cols = avail > 700 * S() ? 3 : 1;
     if (ImGui::BeginTable("builtin", cols, ImGuiTableFlags_SizingStretchSame)) {

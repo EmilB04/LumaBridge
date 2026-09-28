@@ -22,6 +22,9 @@
 #include "game_profiles.h"
 #include "cs2_lighting.h"
 #include "rocket_league_lighting.h"
+#include "dota2_lighting.h"
+#include "league_lighting.h"
+#include "forza_lighting.h"
 #include "war_thunder_lighting.h"
 #include "screen_colors.h"
 #include "smbios.h"
@@ -659,6 +662,101 @@ static void TestRocketLeague() {
     CHECK(me.myTeam() == 1);
     CHECK(me.OnMessage(J(R"({"Event":"MatchCreated","Data":{}})"), 3000));
     CHECK((me.myTeam() == -1 && me.Current(3000).color2 == luma::Rgb{255, 110, 0}));
+}
+
+static void TestDota2() {
+    using namespace luma::app::games;
+    using luma::fx::Kind;
+    Dota2Lighting d;
+    // CS2's posts aren't Dota's; a wrong token neither.
+    CHECK(!d.OnState(J(R"({"provider":{"appid":730},"auth":{"token":"lumabridge"}})"), 1000, "lumabridge"));
+    CHECK(!d.OnState(J(R"({"provider":{"appid":570},"auth":{"token":"x"}})"), 1000, "lumabridge"));
+    auto post = [&](const char* game, uint64_t now) {
+        return d.OnState(J((std::string(R"({"provider":{"name":"Dota 2","appid":570},"auth":{"token":"lumabridge"},)") + game +
+                            "}").c_str()),
+                         now, "lumabridge");
+    };
+    CHECK(post(R"("map":{"game_state":"DOTA_GAMERULES_STATE_STRATEGY_TIME","daytime":true,"win_team":"none"},
+        "player":{"team_name":"dire","kills":0},"hero":{"alive":true,"health_percent":100})", 1000));
+    CHECK(d.Active(1000) && d.team() == "dire" && d.Current(1000).kind == Kind::Breathing);
+    CHECK(post(R"("map":{"game_state":"DOTA_GAMERULES_STATE_GAME_IN_PROGRESS","daytime":true,"win_team":"none"},
+        "player":{"team_name":"dire","kills":0},"hero":{"alive":true,"health_percent":90})", 2000));
+    CHECK((d.Current(2000).kind == Kind::Static && d.Current(2000).color1 == Dota2Lighting::kDire));
+    CHECK(post(R"("map":{"game_state":"DOTA_GAMERULES_STATE_GAME_IN_PROGRESS","daytime":false,"win_team":"none"},
+        "player":{"team_name":"dire","kills":1},"hero":{"alive":true,"health_percent":20})", 3000));
+    CHECK(d.Current(3000).kind == Kind::Strobe);     // a kill
+    CHECK(d.Current(4000).kind == Kind::Breathing);  // then low health
+    CHECK(post(R"("map":{"game_state":"DOTA_GAMERULES_STATE_GAME_IN_PROGRESS","daytime":false,"win_team":"none"},
+        "player":{"team_name":"dire","kills":1},"hero":{"alive":false,"health_percent":0})", 5000));
+    CHECK((d.Current(5000).color1 == luma::Scale(Dota2Lighting::kDire, 0.12)));  // dead
+    CHECK(post(R"("map":{"game_state":"DOTA_GAMERULES_STATE_POST_GAME","daytime":true,"win_team":"dire"},
+        "player":{"team_name":"dire","kills":1},"hero":{"alive":true,"health_percent":100})", 6000));
+    CHECK(d.Current(6000).kind == Kind::RainbowWave);  // won
+    CHECK(d.Active(6000) && !d.Active(6000 + 20000));
+}
+
+static void TestLeague() {
+    using namespace luma::app::games;
+    using luma::fx::Kind;
+    LeagueLighting l;
+    const char* base = R"({"activePlayer":{"riotId":"Me#EUW","riotIdGameName":"Me","summonerName":"Me",
+        "championStats":{"currentHealth":%d,"maxHealth":1000}},
+        "allPlayers":[{"riotId":"Me#EUW","riotIdGameName":"Me","team":"CHAOS","isDead":%s},
+                      {"riotId":"Foe#EUW","riotIdGameName":"Foe","team":"ORDER","isDead":false}],
+        "events":{"Events":[%s]}})";
+    auto data = [&](int hp, const char* dead, const char* events) {
+        char buf[2048];
+        snprintf(buf, sizeof buf, base, hp, dead, events);
+        return J(buf);
+    };
+    // The first answer: kills from before don't replay.
+    l.OnGameData(data(900, "false", R"({"EventID":0,"EventName":"GameStart"},{"EventID":1,"EventName":"ChampionKill","KillerName":"Me"})"), 1000);
+    l.Prime();
+    CHECK(l.Active(1000) && l.team() == "CHAOS");
+    CHECK((l.Current(1000).kind == Kind::Static && l.Current(1000).color1 == LeagueLighting::kRedSide));
+    l.OnGameData(data(900, "false", R"({"EventID":2,"EventName":"ChampionKill","KillerName":"Me"})"), 2000);
+    CHECK(l.Current(2000).kind == Kind::Strobe);  // my kill
+    l.OnGameData(data(900, "false", R"({"EventID":3,"EventName":"DragonKill","DragonType":"Water","KillerName":"Me"})"), 3000);
+    CHECK((l.Current(3000).kind == Kind::Breathing && l.Current(3000).color1 == luma::Rgb{0, 170, 255}));
+    l.OnGameData(data(900, "false", R"({"EventID":4,"EventName":"DragonKill","DragonType":"Fire","KillerName":"Foe"})"), 6000);
+    CHECK(l.Current(6000).kind == Kind::Static);  // their dragon: nothing
+    l.OnGameData(data(200, "false", ""), 7000);
+    CHECK((l.Current(7000).kind == Kind::Breathing && l.Current(7000).color1 == luma::Rgb{255, 0, 0}));  // low health
+    l.OnGameData(data(0, "true", ""), 8000);
+    CHECK((l.Current(8000).color1 == luma::Scale(LeagueLighting::kRedSide, 0.12)));  // dead
+    l.OnGameData(data(900, "false", R"({"EventID":5,"EventName":"GameEnd","Result":"Win"})"), 9000);
+    CHECK(l.Current(9000).kind == Kind::RainbowWave);
+    CHECK(!l.Active(9000 + LeagueLighting::kStaleMs + 1));
+}
+
+static void TestForza() {
+    using namespace luma::app::games;
+    using luma::fx::Kind;
+    ForzaLighting f;
+    auto packet = [](int32_t raceOn, float maxRpm, float idle, float rpm) {
+        std::vector<uint8_t> p(324, 0);  // a Dash packet; only the start is read
+        std::memcpy(&p[0], &raceOn, 4);
+        std::memcpy(&p[8], &maxRpm, 4);
+        std::memcpy(&p[12], &idle, 4);
+        std::memcpy(&p[16], &rpm, 4);
+        return p;
+    };
+    CHECK(!f.OnPacket(packet(1, 8000, 800, 800).data(), 10, 1000));  // too short
+    auto p = packet(0, 8000, 800, 3000);
+    CHECK(f.OnPacket(p.data(), p.size(), 1000) && !f.Active(1000));  // menus / paused
+    p = packet(1, 8000, 800, 1500);
+    f.OnPacket(p.data(), p.size(), 2000);
+    CHECK((f.Active(2000) && f.Current().kind == Kind::Static && f.Current().color1 == luma::Rgb{0, 90, 255}));
+    p = packet(1, 8000, 800, 7000);  // 86 %: yellow into red
+    f.OnPacket(p.data(), p.size(), 3000);
+    CHECK(f.Current().color1.r == 255 && f.Current().color1.g < 220);
+    p = packet(1, 8000, 800, 7950);  // the limiter
+    f.OnPacket(p.data(), p.size(), 4000);
+    CHECK(f.Current().kind == Kind::Strobe);
+    CHECK(!f.Active(4000 + ForzaLighting::kStaleMs + 1));
+    CHECK(FindProfile("ForzaHorizon5.exe", "")->feed == Feed::ForzaDataOut);
+    CHECK(FindProfile("League of Legends.exe", "")->feed == Feed::LeagueLiveClient);
+    CHECK(FindProfile("dota2.exe", "")->feed == Feed::Dota2Gsi && FindProfile("x.exe", "Forza Motorsport") != nullptr);
 }
 
 static void TestWarThunder() {
@@ -1367,6 +1465,9 @@ int main() {
     TestLampArray();
     TestDeviceSleep();
     TestSharedClock();
+    TestDota2();
+    TestLeague();
+    TestForza();
     TestDeviceCatalog();
     TestHyperXRam();
     TestHwSensors();

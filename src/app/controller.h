@@ -249,7 +249,7 @@ private:
     uint64_t sensorsPushedAt_ = 0;
     std::string logitechNote_;
     void UpdateLogitech();
-    bool feedActive_[3] = {};
+    bool feedActive_[6] = {};
     std::future<std::vector<InstalledGame>> libraryJob_;
     Presence presence_;
     uint64_t logitechInputAt_ = 0, azothInputAt_ = 0;  // last used (GetTickCount64)

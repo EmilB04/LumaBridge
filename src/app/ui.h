@@ -46,8 +46,8 @@ struct UiState {
     std::string deviceDetail;
     // Built-in game feed setup state (Integrations page), re-checked every couple of seconds.
     unsigned long long feedCheckAt = 0;
-    bool cs2Installed = false, rlIniFound = false, rlEnabled = false;
-    std::wstring cs2Dir, rlDir;
+    bool cs2Installed = false, rlIniFound = false, rlEnabled = false, dotaInstalled = false;
+    std::wstring cs2Dir, rlDir, dotaDir;
     std::string feedMessage, feedMessageId;  // result of the last direct (non-elevated) write
     bool integrationsLoaded = false;
     bool autostart = false;
