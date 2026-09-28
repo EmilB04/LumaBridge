@@ -1048,7 +1048,7 @@ static void TestDeviceLighting() {
     d.look.reverse = true;
     d.brightness = 0.4f;
     const std::string enc = EncodeDevice(d);
-    CHECK(enc == "1|5|FF1A00|0080FF|0.25|170|90|0.45|2|1|0.4");
+    CHECK(enc == "1|5|FF1A00|0080FF|0.25|170|90|0.45|2|1|0.4|0");
     DeviceLighting back;
     CHECK(DecodeDevice(enc, &back) && back.own && back.look == d.look && back.brightness == 0.4f);
     // 0.7.0 wrote no brightness: full.
@@ -1059,6 +1059,11 @@ static void TestDeviceLighting() {
     CHECK(!DecodeDevice("1|5|FF1A0|0080FF|0.25|170|90|0.45|2|1", &back));    // bad color
     CHECK(!DecodeDevice("1|5|FF1A00|0080FF|25|170|90|0.45|2|1", &back));     // speed out of range
     CHECK(DecodeDevice("0|0|000000|FFFFFF|0.5|0|360|1|9|0", &back) && !back.own && back.look.spread == 1);
+    // The device's direction (12th field); older lines leave it the same way as the others.
+    DeviceLighting flipped = d;
+    flipped.reverse = true;
+    CHECK(DecodeDevice(EncodeDevice(flipped), &back) && back.reverse && back.brightness == 0.4f);
+    CHECK(DecodeDevice("1|5|FF1A00|0080FF|0.25|170|90|0.45|2|1|0.5", &back) && !back.reverse);
 
     // Static never moves; the rest keep their speed.
     Look l;

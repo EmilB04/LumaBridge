@@ -135,6 +135,10 @@ public:
 
     // Built-in feeds and their setup (Integrations page).
     const GameFeeds& feeds() const { return feeds_; }
+    // What a device shows: its effect in `out`, turned round if the device is set to run the
+    // other way.
+    fx::Params DeviceEffect(const Output& out, const std::string& id) const;
+    fx::Params DeviceEffect(const std::string& id) const { return DeviceEffect(output_, id); }
     // Install folder of a known game (by profile key, e.g. "cs2"), from the Games List scan.
     std::wstring GameDir(const char* profileKey) const;
     void RefreshFeedSettings();  // re-read Rocket League's Stats API port after setup changes

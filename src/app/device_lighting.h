@@ -76,16 +76,21 @@ struct DeviceLighting {
     // The device's own brightness (0..1), on top of the overall one. Always applies, games
     // included, whether or not it has its own look.
     float brightness = 1;
+    // Moving effects run the other way on this device (its own look, the main one and games
+    // alike), for devices whose LEDs are numbered the other way round or mounted mirrored.
+    bool reverse = false;
 };
 
-// "own|effect|RRGGBB|RRGGBB|speed|hueStart|hueSpan|saturation|spread|reverse|brightness"
-// (0.7.0 wrote the first ten only).
+// "own|effect|RRGGBB|RRGGBB|speed|hueStart|hueSpan|saturation|spread|reverse|brightness|flip"
+// (0.7.0 wrote the first ten only, 0.15.0 and earlier the first eleven). `reverse` is the
+// look's own; `flip` is the device's direction (DeviceLighting::reverse).
 inline std::string EncodeDevice(const DeviceLighting& d) {
     const Look& l = d.look;
     char buf[160];
-    snprintf(buf, sizeof buf, "%d|%d|%02X%02X%02X|%02X%02X%02X|%g|%g|%g|%g|%d|%d|%g", d.own ? 1 : 0,
+    snprintf(buf, sizeof buf, "%d|%d|%02X%02X%02X|%02X%02X%02X|%g|%g|%g|%g|%d|%d|%g|%d", d.own ? 1 : 0,
              static_cast<int>(l.effect), l.color1.r, l.color1.g, l.color1.b, l.color2.r, l.color2.g, l.color2.b,
-             l.speedHz, l.hueStart, l.hueSpan, l.saturation, l.spread, l.reverse ? 1 : 0, d.brightness);
+             l.speedHz, l.hueStart, l.hueSpan, l.saturation, l.spread, l.reverse ? 1 : 0, d.brightness,
+             d.reverse ? 1 : 0);
     return buf;
 }
 
@@ -97,7 +102,7 @@ inline bool DecodeDevice(const std::string& s, DeviceLighting* out) {
         if (bar == std::string::npos) break;
         pos = bar + 1;
     }
-    if (f.size() != 10 && f.size() != 11) return false;
+    if (f.size() < 10 || f.size() > 12) return false;
     auto hex = [](const std::string& h, Rgb* c) {
         if (h.size() != 6) return false;
         char* end = nullptr;
@@ -124,7 +129,8 @@ inline bool DecodeDevice(const std::string& s, DeviceLighting* out) {
     d.look.spread = std::atoi(f[8].c_str());
     if (d.look.spread < 1 || d.look.spread > 4) d.look.spread = 1;
     d.look.reverse = f[9] == "1";
-    if (f.size() == 11 && !num(f[10], 0, 1, &d.brightness)) d.brightness = 1;
+    if (f.size() >= 11 && !num(f[10], 0, 1, &d.brightness)) d.brightness = 1;
+    d.reverse = f.size() == 12 && f[11] == "1";
     *out = d;
     return true;
 }

@@ -171,7 +171,7 @@ void Controller::UpdateLogitech() {
     bool own = !output_.stopped;
     logitechNote_ = own ? "" : "LumaBridge isn't controlling the lights - G HUB has them";
     if (own && prefs_.logitechForce) {
-        logitech_.Set(output_.For(device::kMouse),
+        logitech_.Set(DeviceEffect(device::kMouse),
                       cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, true,
                       output_.game);
         return;  // kept with LumaBridge even while a game lights Logitech gear
@@ -189,7 +189,7 @@ void Controller::UpdateLogitech() {
                 logitechNote_ = g.game.name + " lights them through G HUB";
                 break;
             }
-    logitech_.Set(output_.For(device::kMouse),
+    logitech_.Set(DeviceEffect(device::kMouse),
                   cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, own, output_.game);
 }
 
@@ -374,6 +374,12 @@ void Controller::OnIpc(const ipc::Frame& f) {
     }
 }
 
+fx::Params Controller::DeviceEffect(const Output& out, const std::string& id) const {
+    fx::Params p = out.For(id);
+    if (DeviceReversed(prefs_, id)) p.reverse = !p.reverse;
+    return p;
+}
+
 Controller::Output Controller::Decide() const {
     auto lit = [](const char* label) {
         Output o;
@@ -552,8 +558,8 @@ void Controller::Apply(const Output& out) {
         mirror_.Start(c, nullptr, "LumaBridge app", /*routeToApp=*/false);
         mirrorHz_ = c.maxUpdateHz;
     }
-    const fx::Params& board = out.For(device::kBoard);
-    mirror_.SetPattern(out.For(device::kFans), cfg_.argbFans, out.fanTest, &board);
+    const fx::Params board = DeviceEffect(out, device::kBoard);
+    mirror_.SetPattern(DeviceEffect(out, device::kFans), cfg_.argbFans, out.fanTest, &board);
     mirror_.SetLevels(DeviceBrightness(prefs_, device::kFans), DeviceBrightness(prefs_, device::kBoard));
 }
 
@@ -680,14 +686,14 @@ void Controller::Tick() {
         std::vector<std::string> skip;
         for (const LampArrayDevice& d : lampArray_.devices())
             if (!LampArrayOn(d)) skip.push_back(d.name);
-        lampArray_.Set(output_.For(device::kOther), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kOther),
+        lampArray_.Set(DeviceEffect(device::kOther), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kOther),
                        prefs_.lampArray && !output_.stopped, skip);
     }
     {
         std::vector<std::string> skip;
         for (const OpenRgbDevice& d : openRgb_.devices())
             if (!OpenRgbOn(d)) skip.push_back(d.name);
-        openRgb_.Set(output_.For(device::kOther), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kOther),
+        openRgb_.Set(DeviceEffect(device::kOther), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kOther),
                      prefs_.openRgb && !output_.stopped, skip);
     }
     {
@@ -696,12 +702,12 @@ void Controller::Tick() {
         if (asleep != azothAsleep_) LUMA_INFO("ROG Azoth: %s", asleep ? "asleep (not used for a while)" : "awake");
         azothAsleep_ = asleep;
         azoth_.SetAsleep(asleep);
-        azoth_.Set(output_.For(device::kKeyboard),
+        azoth_.Set(DeviceEffect(device::kKeyboard),
                    cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kKeyboard) *
                        sleep::Level(now, azothInputAt_, AzothSleepMs()),
                    prefs_.azothKeyboard && !output_.stopped);
     }
-    hardware_.SetRam(output_.For(device::kRam), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kRam), prefs_.ramLighting, !output_.stopped, prefs_.ramRelease);
+    hardware_.SetRam(DeviceEffect(device::kRam), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kRam), prefs_.ramLighting, !output_.stopped, prefs_.ramRelease);
     if (now - sensorsPushedAt_ >= 500) {
         sensorsPushedAt_ = now;
         monitor_.SetBuiltInSensors(hardware_.Sensors(), hardware_.chip());

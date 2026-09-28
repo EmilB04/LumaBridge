@@ -1512,6 +1512,11 @@ void BrightnessCard(Controller& ctl, const Fonts& f, const std::string& device =
         }
         Muted("Only this device, games included, on top of the overall brightness (%.0f%%, under All devices).",
               ctl.config().auraCorrection.brightness * 100.0);
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        bool& rev = ctl.prefs().deviceLighting[device].reverse;
+        if (Toggle("Reverse direction", &rev)) ctl.Changed();
+        Muted(rev ? "Moving effects run the other way on this device."
+                  : "Moving effects run the same way as on every other device.");
     }
     EndCard();
 }
@@ -2043,7 +2048,9 @@ struct SetupItem {
 
 // What a device shows right now (grey while LumaBridge isn't controlling the lights).
 const fx::Params* LiveParams(const Controller& ctl, const char* id) {
-    return ctl.output().stopped ? nullptr : &ctl.output().For(id);
+    if (ctl.output().stopped) return nullptr;
+    static std::map<std::string, fx::Params> live;  // stable addresses, one per device
+    return &(live[id] = ctl.DeviceEffect(id));
 }
 
 // Also dimmed like the device: the overall brightness times the device's own.
@@ -2904,8 +2911,8 @@ void DeviceLightingCard(Controller& ctl, UiState& ui, const Fonts& f, const char
     } else {
         Muted("It shows the main lighting, like the other devices.");
     }
-    Muted("Brightness: %.0f%% of the overall %.0f%%.", DeviceBrightness(p, id) * 100.0,
-          ctl.config().auraCorrection.brightness * 100.0);
+    Muted("Brightness: %.0f%% of the overall %.0f%%.%s", DeviceBrightness(p, id) * 100.0,
+          ctl.config().auraCorrection.brightness * 100.0, DeviceReversed(p, id) ? " Direction: reversed." : "");
     ImGui::Dummy(ImVec2(0, 2 * S()));
     if (PrimaryButton("Change its lighting")) {
         ui.page = Page::Lighting;
