@@ -1406,7 +1406,11 @@ void EffectStrip(const fx::Params& fx, ImVec2 a, ImVec2 b, float rounding) {
 }
 
 // The presets of the current effect as tiles with a live preview; click to apply.
-bool PresetTiles(Controller& ctl, Look& p) {
+bool PresetTilesOf(Controller& ctl, Look& p, std::initializer_list<fx::Kind> kinds);
+bool PresetTiles(Controller& ctl, Look& p) { return PresetTilesOf(ctl, p, {p.effect}); }
+
+// The presets of these effects as tiles; click one to apply it (effect and colors).
+bool PresetTilesOf(Controller& ctl, Look& p, std::initializer_list<fx::Kind> kinds) {
     bool changed = false;
     const float w = 128 * S(), h = 60 * S(), gap = 8 * S();
     const float avail = ImGui::GetContentRegionAvail().x;
@@ -1415,7 +1419,7 @@ bool PresetTiles(Controller& ctl, Look& p) {
     int shown = 0;
     for (size_t i = 0; i < std::size(kPresets); ++i) {
         const Preset& x = kPresets[i];
-        if (x.kind != p.effect) continue;
+        if (std::find(kinds.begin(), kinds.end(), x.kind) == kinds.end()) continue;
         if (shown % perRow) ImGui::SameLine(0, gap);
         ++shown;
         ImGui::PushID(static_cast<int>(i));
@@ -3792,8 +3796,8 @@ using setup::Brand;
 using setup::Conn;
 using SetupState = UiState::SetupState;
 
-const char* kSetupSteps[] = {"Welcome", "Hardware", "Software", "Devices", "Connections", "Set up"};
-enum SetupStep { kStepWelcome, kStepHardware, kStepSoftware, kStepDevices, kStepConnections, kStepRun };
+const char* kSetupSteps[] = {"Welcome", "Hardware", "Software", "Devices", "Connections", "Set up", "Your look"};
+enum SetupStep { kStepWelcome, kStepHardware, kStepSoftware, kStepDevices, kStepConnections, kStepRun, kStepLook };
 
 // The guide's "Your devices" step: what LumaBridge found, and the fans on the ARGB header,
 // which it can't count itself.
@@ -4083,6 +4087,13 @@ void SetupRun(Controller& ctl, Integrations& in, UiState& ui) {
 }
 
 void SetupFinish(Controller& ctl, UiState& ui) {
+    // The look step showed the look on every device in Manual; now what the user chose: games
+    // take over (their look while no game runs) or always their look.
+    if (ui.setupModeBefore >= 0) {
+        ctl.prefs().mode = ui.setupAuto ? Mode::Auto : Mode::Manual;
+        if (ui.setupAuto) ctl.prefs().idle = IdleBehavior::ManualColor;
+        ui.setupModeBefore = -1;
+    }
     ctl.prefs().setupDone = true;
     ctl.Changed();
     ui.setupStep = -1;
@@ -4243,6 +4254,60 @@ void SetupGuide(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
         }
         break;
     }
+    case kStepLook: {
+        // Every device shows the look right now: Manual while this step is open.
+        if (ui.setupModeBefore < 0) {
+            ui.setupModeBefore = static_cast<int>(ctl.prefs().mode);
+            ctl.prefs().mode = Mode::Manual;
+            ctl.Changed();
+        }
+        heading("Pick your look",
+                "Click one: every device shows it right away - fans, board, memory, keyboard and mouse together. "
+                "Try a few. Everything can be fine-tuned later on the Lighting page.");
+        if (ctl.auraPaused()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(kAmber));
+            ImGui::TextWrapped("LumaBridge isn't controlling the lights right now.");
+            ImGui::PopStyleColor();
+            if (PrimaryButton("Resume lighting control")) ctl.ResumeAura();
+            ImGui::Dummy(ImVec2(0, 6 * S()));
+        }
+        Look look = MainLook(ctl.prefs());
+        bool picked = false;
+        auto group = [&](const char* title, std::initializer_list<fx::Kind> kinds) {
+            ImGui::PushFont(f.bold);
+            ImGui::TextUnformatted(title);
+            ImGui::PopFont();
+            ImGui::PushID(title);
+            picked |= PresetTilesOf(ctl, look, kinds);
+            ImGui::PopID();
+            ImGui::Dummy(ImVec2(0, 6 * S()));
+        };
+        group("Gradients", {fx::Kind::Gradient});
+        group("Rainbows", {fx::Kind::RainbowWave, fx::Kind::ColorCycle});
+        group("Moving", {fx::Kind::Comet, fx::Kind::Twinkle});
+        group("Calm", {fx::Kind::Breathing, fx::Kind::Static});
+        if (picked) {
+            SetMainLook(ctl.prefs(), look);
+            for (auto& [id, d] : ctl.prefs().deviceLighting) d.own = false;  // every device the same look
+            ctl.Changed();
+        }
+        ImGui::PushFont(f.bold);
+        ImGui::TextUnformatted("On your devices");
+        ImGui::PopFont();
+        SetupCanvas(ctl, ui, false);
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+        ImGui::PushFont(f.bold);
+        ImGui::TextUnformatted("While you play");
+        ImGui::PopFont();
+        int mode = ui.setupAuto ? 0 : 1;
+        const char* modes[] = {"Games light everything (recommended)", "Always my look"};
+        if (Segmented("setupmode", &mode, modes, 2, colW)) ui.setupAuto = mode == 0;
+        Muted("%s", ui.setupAuto ? "Games with lighting light your devices while they run; your look shows the rest of "
+                                   "the time."
+                                 : "Your look stays on, games or not.");
+        if (footer(false, "Finish")) SetupFinish(ctl, ui);
+        break;
+    }
     default: {
         SetupRun(ctl, in, ui);
         const bool done = ui.setupNext >= setup::kConns;
@@ -4287,7 +4352,7 @@ void SetupGuide(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
             ImGui::Dummy(ImVec2(0, 12 * S()));
             const float nw = 150 * S();
             ImGui::SetCursorPosX(ImGui::GetContentRegionMax().x - nw);
-            if (PrimaryButton("Finish", ImVec2(nw, 0))) SetupFinish(ctl, ui);
+            if (PrimaryButton("Next", ImVec2(nw, 0))) ui.setupStep = kStepLook;
         }
         break;
     }

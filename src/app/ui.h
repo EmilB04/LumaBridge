@@ -63,6 +63,9 @@ struct UiState {
     std::array<SetupState, setup::kConns> setupState{};
     std::array<std::string, setup::kConns> setupResult;
     int setupNext = -1;  // the connection being set up (-1: not started)
+    // The look step: the mode to go back to (-1: not changed) and the user's choice.
+    int setupModeBefore = -1;
+    bool setupAuto = true;
 };
 
 // Applies the LumaBridge theme at the given DPI scale (call again when DPI changes).
