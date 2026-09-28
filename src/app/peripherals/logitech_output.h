@@ -15,10 +15,22 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "effects.h"
 
 namespace luma::app {
+
+// A Logitech device found over HID++ (through its receiver or its cable).
+struct LogitechDevice {
+    std::string name;   // as the device reports it, e.g. "G502 X PLUS"
+    int type = -1;      // HID++ device type (hidpp::DeviceTypeName), -1 if unknown
+    bool rgb = false;   // has RGB lighting (hidpp::kLightingFeatures)
+};
+
+// Every Logitech device reachable over HID++, with or without lighting. Talks to each
+// receiver and cable, so it takes a few seconds: run it in the background.
+std::vector<LogitechDevice> ScanLogitechDevices();
 
 class LogitechOutput {
 public:

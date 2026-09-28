@@ -140,6 +140,23 @@ public:
     // Why LumaBridge isn't lighting Logitech devices right now ("" when it is).
     const std::string& logitechNote() const { return logitechNote_; }
 
+    // What's plugged in, found in the background (at start, on RescanDevices and every
+    // minute): the pages show only devices this PC has.
+    struct Presence {
+        bool scanned = false;  // the first scan has finished
+        bool azoth = false;    // ROG Azoth, by cable or its Omni receiver
+        std::vector<LogitechDevice> logitech;  // with and without RGB lighting
+        // Logitech devices with RGB lighting.
+        std::vector<LogitechDevice> LogitechRgb() const {
+            std::vector<LogitechDevice> out;
+            for (const auto& d : logitech)
+                if (d.rgb) out.push_back(d);
+            return out;
+        }
+    };
+    const Presence& presence() const { return presence_; }
+    void RescanPresence();
+
     // ASUS ROG Azoth over USB (wired).
     const AzothOutput& azoth() const { return azoth_; }
     void SetAzothEnabled(bool on);
@@ -204,6 +221,9 @@ private:
     void UpdateLogitech();
     bool feedActive_[3] = {};
     std::future<std::vector<InstalledGame>> libraryJob_;
+    Presence presence_;
+    std::future<Presence> presenceJob_;
+    uint64_t presenceAt_ = 0;  // when the last presence scan started
     bool libraryRescanPending_ = false;  // the list changed while a scan was running
 };
 

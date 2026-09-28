@@ -9,6 +9,8 @@
 #include "integrations.h"
 #include "log.h"
 #include "usb_aura.h"
+#include "azoth_protocol.h"
+#include "vendor_detect.h"
 
 namespace luma::app {
 namespace {
@@ -148,7 +150,20 @@ void Controller::RemoveManualGame(const std::wstring& exePath) {
     Changed();
 }
 
+void Controller::RescanPresence() {
+    if (presenceJob_.valid()) return;  // already scanning
+    presenceAt_ = GetTickCount64();
+    presenceJob_ = std::async(std::launch::async, [] {
+        Presence p;
+        p.azoth = UsbDevicePresent(azoth::kVendor, {azoth::Product(azoth::Link::Wired), azoth::Product(azoth::Link::Wireless)});
+        p.logitech = ScanLogitechDevices();
+        p.scanned = true;
+        return p;
+    });
+}
+
 void Controller::RescanDevices() {
+    RescanPresence();
     if (mirror_.IsRunning()) {
         mirror_.Rescan();
         return;
@@ -517,6 +532,9 @@ void Controller::Tick() {
                             prefs_.mode == Mode::Auto;
     if (wantScreen && !screen_.Running()) screen_.Start();
     if (!wantScreen && screen_.Running()) screen_.Stop();
+    if (presenceJob_.valid() && presenceJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+        presence_ = presenceJob_.get();
+    if (now - presenceAt_ > 60000) RescanPresence();  // devices plugged in or out
     if (libraryJob_.valid() && libraryJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         library_ = libraryJob_.get();
         RefreshFeedSettings();

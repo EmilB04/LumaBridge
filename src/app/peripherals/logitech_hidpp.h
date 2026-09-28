@@ -33,7 +33,7 @@ constexpr uint8_t kLong = 0x11;
 constexpr uint8_t kSwId = 0x0A;  // LumaBridge's software ID (G HUB uses 0x0B)
 constexpr uint8_t kWired = 0xFF; // device index of a mouse on its cable; 1-6 behind a receiver
 
-constexpr uint16_t kFeatureName = 0x0005;
+constexpr uint16_t kFeatureName = 0x0005;  // name (functions 0, 1) and type (function 2)
 constexpr uint16_t kRgbEffects = 0x8071;
 // Effect IDs in GetInfo's answers.
 constexpr uint16_t kIdFixed = 0x0001, kIdCycle = 0x0003, kIdBreathing = 0x000A;
@@ -46,6 +46,27 @@ constexpr uint16_t kIdPerKey = 0x0013;  // the whole-mouse effect that shows per
 constexpr std::array<uint8_t, 8> kG502XPlusStrip = {3, 4, 8, 7, 6, 5, 2, 1};
 
 using Report = std::array<uint8_t, 20>;
+
+// The lighting features: any of them means the device has RGB lighting.
+constexpr std::array<uint16_t, 4> kLightingFeatures = {0x8070, 0x8071, 0x8080, 0x8081};
+
+// HID++ device type (feature 0x0005, function 2), for showing it.
+inline const char* DeviceTypeName(int type) {
+    switch (type) {
+    case 0: return "Keyboard";
+    case 2: return "Numpad";
+    case 3: return "Mouse";
+    case 4: return "Trackpad";
+    case 5: return "Trackball";
+    case 8: return "Headset";
+    case 10: return "Steering wheel";
+    case 12: return "Gamepad";
+    case 14: return "Speaker";
+    case 15: return "Microphone";
+    case 16: return "Light";
+    default: return "Device";
+    }
+}
 
 inline Report Request(uint8_t device, uint8_t feature, uint8_t function, std::initializer_list<uint8_t> params) {
     Report r{kLong, device, feature, static_cast<uint8_t>(function << 4 | kSwId)};

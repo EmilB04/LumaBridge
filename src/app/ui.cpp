@@ -26,6 +26,7 @@
 #include "setup_hardware.h"
 #include "vendor_detect.h"
 #include "azoth_layout.h"
+#include "logitech_hidpp.h"
 
 namespace luma::app {
 namespace {
@@ -754,6 +755,52 @@ void WTemps(DashCtx& c) {
     else if (!shown) Muted("No temperatures reported.");
 }
 
+// ---- Which devices this PC has ------------------------------------------------------
+// The pages show only these. Until the first scan has finished, a device that's switched on
+// counts as there.
+
+std::vector<LogitechDevice> LogitechRgb(const Controller& ctl) { return ctl.presence().LogitechRgb(); }
+
+bool HasLogitechRgb(Controller& ctl) {
+    const auto& p = ctl.presence();
+    return p.scanned ? !p.LogitechRgb().empty() : ctl.prefs().logitechDevices;
+}
+
+bool HasAzoth(Controller& ctl) {
+    const auto& p = ctl.presence();
+    return p.scanned ? p.azoth || ctl.azoth().state() == AzothOutput::State::Active : ctl.prefs().azothKeyboard;
+}
+
+// RGB memory LumaBridge can light: sticks the helper found, or the SMBIOS scan says Kingston
+// FURY / HyperX (confirmed once the helper looks).
+bool HasRgbRam(Controller& ctl, const sensors::SystemSnapshot& snap) {
+    return ctl.hardware().sticks() > 0 || DetectSetup(snap.smbios).ram != RamStyle::Generic;
+}
+
+// "Logitech G502 X PLUS", or "Logitech devices" for several (or before the scan).
+std::string LogitechName(const Controller& ctl) {
+    const auto rgb = LogitechRgb(ctl);
+    if (rgb.size() == 1 && !rgb[0].name.empty()) return "Logitech " + rgb[0].name;
+    return "Logitech devices";
+}
+
+// "Mouse", "Mouse and keyboard", ... of the Logitech RGB devices found.
+std::string LogitechKinds(const Controller& ctl) {
+    std::string out;
+    std::vector<int> seen;
+    for (const auto& d : LogitechRgb(ctl)) {
+        if (std::find(seen.begin(), seen.end(), d.type) != seen.end()) continue;
+        seen.push_back(d.type);
+        std::string k = hidpp::DeviceTypeName(d.type);
+        if (!out.empty()) {
+            for (auto& ch : k) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            out += " and ";
+        }
+        out += k;
+    }
+    return out.empty() ? "Logitech gear" : out;
+}
+
 void WDevices(DashCtx& c) {
     const auto& devices = c.ctl.devices();
     if (devices.empty()) {
@@ -772,29 +819,29 @@ void WDevices(DashCtx& c) {
         ImGui::SameLine();
         Muted("%d LEDs%s", d.lightCount, off ? " - off" : "");
     }
-    Muted("AURA LED Controller (USB 0B05:1939)");
-    if (c.ctl.prefs().logitechDevices) {
+    Muted("ASUS AURA LED Controller");
+    if (c.ctl.prefs().logitechDevices && HasLogitechRgb(c.ctl)) {
         const bool active = c.ctl.logitech().state() == LogitechOutput::State::Active;
         IconItem(Icon::Mouse, 18 * S(), active ? Hex(kAccent) : Hex(kMuted));
         ImGui::SameLine();
-        ImGui::TextUnformatted("Logitech devices");
+        ImGui::TextUnformatted(LogitechName(c.ctl).c_str());
         ImGui::SameLine();
         Muted("%s", active ? "via G HUB" : "G HUB has them");
     }
-    if (c.ctl.prefs().ramLighting) {
+    if (c.ctl.prefs().ramLighting && HasRgbRam(c.ctl, c.snap)) {
         using R = HardwareHelper::RamState;
         const auto st = c.ctl.hardware().ramState();
         IconItem(Icon::Memory, 18 * S(), st == R::Active ? Hex(kAccent) : Hex(kMuted));
         ImGui::SameLine();
         ImGui::TextUnformatted("RAM");
         ImGui::SameLine();
-        Muted("%s", st == R::Active     ? "HyperX / Kingston FURY"
+        Muted("%s", st == R::Active     ? "following LumaBridge"
                     : st == R::Problem  ? "can't light it (Devices)"
                     : st == R::Released ? "Armoury Crate's lighting"
                     : c.ctl.hardware().state() == HardwareHelper::State::NotSetUp ? "needs hardware access (Devices)"
                                                                                   : "starting...");
     }
-    if (c.ctl.prefs().azothKeyboard) {
+    if (c.ctl.prefs().azothKeyboard && HasAzoth(c.ctl)) {
         const auto st = c.ctl.azoth().state();
         IconItem(Icon::Keyboard, 18 * S(), st == AzothOutput::State::Active ? Hex(kAccent) : Hex(kMuted));
         ImGui::SameLine();
@@ -1774,19 +1821,26 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
     for (float x = o.x + 20 * S(); x < o.x + W; x += 24 * S())  // dot grid
         for (float y = o.y + 20 * S(); y < o.y + H; y += 24 * S()) dl->AddCircleFilled(ImVec2(x, y), 1 * S(), Hex(0x1C2230), 4);
 
-    // What's there.
+    // What's there: only what this PC has. Fans with an Aura ARGB header; the board with an
+    // Aura controller (or RGB memory, which sits in it).
     const fx::FanLayout& layout = ctl.config().argbFans;
     std::vector<SetupItem> items;
-    for (int i = 0; i < layout.Fans(); ++i) items.push_back({FanItem(i), device::kFans, ImVec2(84 * S(), 84 * S()), i});
-    items.push_back({device::kBoard, device::kBoard, ImVec2(240 * S(), 180 * S())});
+    bool header = false;
+    for (const auto& d : ctl.devices()) header |= d.type == 0x00011000;
+    if (header)
+        for (int i = 0; i < layout.Fans(); ++i) items.push_back({FanItem(i), device::kFans, ImVec2(84 * S(), 84 * S()), i});
+    if (!ctl.devices().empty() || HasRgbRam(ctl, ctl.monitor().Snapshot()))
+        items.push_back({device::kBoard, device::kBoard, ImVec2(240 * S(), 180 * S())});
     // The board and memory as the system scan found them. The memory is drawn in the board's
     // slots (and selected by clicking the sticks); lit only when RAM lighting is on.
     const SetupHardware hw = DetectSetup(ctl.monitor().Snapshot().smbios);
     const bool ramOn = prefs.ramLighting;
     const std::array<bool, 4> slots =
         hw.slotsKnown ? hw.slots : GuessSlots(hw.sticks ? hw.sticks : std::max(ctl.hardware().sticks(), 2));
-    if (prefs.azothKeyboard) items.push_back({device::kKeyboard, device::kKeyboard, ImVec2(330 * S(), 138 * S())});
-    if (prefs.logitechDevices) items.push_back({device::kMouse, device::kMouse, ImVec2(70 * S(), 112 * S())});
+    if (prefs.azothKeyboard && HasAzoth(ctl))
+        items.push_back({device::kKeyboard, device::kKeyboard, ImVec2(330 * S(), 138 * S())});
+    if (prefs.logitechDevices && HasLogitechRgb(ctl))
+        items.push_back({device::kMouse, device::kMouse, ImVec2(70 * S(), 112 * S())});
 
     // Live colors.
     const double t = ImGui::GetTime();
@@ -1901,6 +1955,11 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
                                      Hex(kAccentHover), 12);
     }
     ImGui::PopID();
+    if (items.empty()) {
+        const char* none = "No lights LumaBridge can control were found on this PC yet (Devices > Rescan devices).";
+        const ImVec2 ns = ImGui::CalcTextSize(none);
+        dl->AddText(ImVec2(o.x + W / 2 - ns.x / 2, o.y + H / 2 - ns.y / 2), Hex(kMuted), none);
+    }
     ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + H));
     ImGui::Dummy(ImVec2(W, 6 * S()));
 }
@@ -1918,7 +1977,7 @@ void SetupCard(Controller& ctl, UiState& ui, const Fonts& f, bool selectable) {
         ctl.Changed();
     }
     ImGui::SameLine();
-    Muted("Turn on the keyboard, mouse or memory on the Devices page to see them here. The memory sits in the "
+    Muted("Everything LumaBridge found on this PC shows here (Devices lists them all). The memory sits in the "
           "motherboard's slots: click the sticks to select it.");
     EndCard();
 }
@@ -1932,8 +1991,10 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
     std::vector<std::string> ids{""};
     std::vector<const char*> labels{"All devices"};
     for (const char* id : device::All()) {
-        if ((id == std::string(device::kRam) && !p.ramLighting) || (id == std::string(device::kMouse) && !p.logitechDevices) ||
-            (id == std::string(device::kKeyboard) && !p.azothKeyboard))
+        const sensors::SystemSnapshot snap = ctl.monitor().Snapshot();
+        if ((id == std::string(device::kRam) && !(p.ramLighting && HasRgbRam(ctl, snap))) ||
+            (id == std::string(device::kMouse) && !(p.logitechDevices && HasLogitechRgb(ctl))) ||
+            (id == std::string(device::kKeyboard) && !(p.azothKeyboard && HasAzoth(ctl))))
             continue;
         ids.push_back(id);
         labels.push_back(device::Name(id));
@@ -1967,7 +2028,8 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
         if (ui.lightTarget == device::kKeyboard)
             Muted("The Azoth shows the effect key by key, by cable or through its Omni receiver.");
         else if (ui.lightTarget == device::kMouse)
-            Muted("A G502 X Plus shows the effect LED by LED; other Logitech mice show one color.");
+            Muted("%s", ctl.logitech().mouseEffect() ? "It shows the effect LED by LED."
+                                                      : "Through G HUB it shows one color: the effect's first LED.");
         else if (!d.own)
             Muted("It shows the same lighting as the rest. Pick \"Its own lighting\" to set it apart.");
         EndCard();
@@ -1980,7 +2042,8 @@ void FansCard(Controller& ctl, const Fonts& f) {
     BeginCard("fans");
     CardTitle(f, "Fans on the ARGB header", Icon::Fan);
     Muted("Per-LED effects (rainbow wave, gradient, comet, twinkle) need to know how the LEDs are "
-          "grouped. Fans chained on a hub count in order. be quiet! Light Wings 120 mm: 20 LEDs per fan.");
+          "grouped. Fans chained on a hub count in order. The fan's box or product page says how many LEDs it "
+          "has; the test pattern below confirms it.");
     ImGui::Dummy(ImVec2(0, 4 * S()));
     fx::FanLayout& l = ctl.config().argbFans;
     const float w = std::min(220 * S(), ImGui::GetContentRegionAvail().x / 2 - 8 * S());
@@ -2054,10 +2117,10 @@ void LogitechCard(Controller& ctl, const Fonts& f) {
     const auto& lg = ctl.logitech();
     BeginCard("logitech");
     CardTitle(f, "Settings", Icon::Gear);
-    Muted("Your Logitech mouse and other Logitech RGB gear show LumaBridge's color, through Logitech's own "
-          "LED SDK in G HUB (nothing goes into a game). They show one color: the first LED of the effect. "
-          "A G502 X Plus shows the whole effect instead, LED by LED along its light strip: breathing, "
-          "color cycle and the classic rainbow wave run on the mouse itself.");
+    Muted("Your Logitech RGB gear shows LumaBridge's lighting through Logitech's own LED SDK in G HUB "
+          "(nothing goes into a game), as one color: the first LED of the effect. A mouse LumaBridge knows LED by "
+          "LED (the G502 X Plus so far) shows the whole effect instead, and runs breathing, color cycle and the "
+          "rainbow wave itself.");
     if (ctl.prefs().logitechDevices && lg.state() == LogitechOutput::State::Released && !ctl.logitechNote().empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, V4(kAmber));
         ImGui::TextWrapped("Right now G HUB has them: %s.", ctl.logitechNote().c_str());
@@ -2344,8 +2407,8 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         return;
     }
     if (id == device::kMouse) {
-        if (!DeviceHeader(ui, f, Icon::Mouse, "Logitech devices", LogitechStatus(ctl), false,
-                          "Through G HUB; the G502 X Plus directly, LED by LED"))
+        if (!DeviceHeader(ui, f, Icon::Mouse, LogitechName(ctl), LogitechStatus(ctl), false,
+                          LogitechKinds(ctl) + ", through G HUB"))
             return;
         LogitechCard(ctl, f);
         DeviceLightingCard(ctl, ui, f, device::kMouse);
@@ -2417,22 +2480,31 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
         r.leds = d.lightCount;
         rows.push_back(r);
     }
-    {
+    if (HasRgbRam(ctl, snap)) {
         const Integration* setup = HelperSetup(ctl, in, ui);
         const SetupHardware hw = DetectSetup(snap.smbios);
         rows.push_back({device::kRam, "Memory (RAM)", hw.ramName.empty() ? "Memory" : hw.ramName, Icon::Memory,
                         RamStatus(ctl, setup && setup->state == IntegrationState::Active),
                         ctl.prefs().ramLighting && ctl.hardware().sticks() ? ctl.hardware().sticks() * 5 : -1});
     }
-    rows.push_back({device::kMouse, "Logitech devices", "Mouse, through G HUB", Icon::Mouse, LogitechStatus(ctl)});
-    rows.push_back({device::kKeyboard, "ASUS ROG Azoth", "Keyboard", Icon::Keyboard, AzothStatus(ctl)});
+    if (HasLogitechRgb(ctl))
+        rows.push_back({device::kMouse, LogitechName(ctl), LogitechKinds(ctl) + ", through G HUB", Icon::Mouse,
+                        LogitechStatus(ctl)});
+    if (HasAzoth(ctl)) rows.push_back({device::kKeyboard, "ASUS ROG Azoth", "Keyboard", Icon::Keyboard, AzothStatus(ctl)});
+    // Found, but nothing LumaBridge can light: said, so it isn't a mystery.
+    std::string unlit;
+    for (const auto& d : ctl.presence().logitech)
+        if (!d.rgb && !d.name.empty())
+            unlit += (unlit.empty() ? "" : ", ") + ("Logitech " + d.name) + " (" + hidpp::DeviceTypeName(d.type) + ")";
 
     BeginCard("devices");
     CardTitle(f, "Devices", Icon::Leds);
     Muted("Click a device for its settings and lighting.%s",
           aura.empty() ? " No Aura devices found: click Rescan devices; if it stays empty, the log (Settings) says why." : "");
+    if (!unlit.empty()) Muted("Also found, without RGB lighting: %s.", unlit.c_str());
     ImGui::Dummy(ImVec2(0, 2 * S()));
-    if (ImGui::BeginTable("devices", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
+    if (rows.empty()) Muted("Nothing LumaBridge can light was found on this PC yet.");
+    else if (ImGui::BeginTable("devices", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Device", ImGuiTableColumnFlags_WidthStretch, 2.6f);
         ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthStretch, 1.4f);
         ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 1.8f);
@@ -3337,7 +3409,104 @@ using setup::Brand;
 using setup::Conn;
 using SetupState = UiState::SetupState;
 
-const char* kSetupSteps[] = {"Welcome", "Hardware", "Software", "Connections", "Set up"};
+const char* kSetupSteps[] = {"Welcome", "Hardware", "Software", "Devices", "Connections", "Set up"};
+enum SetupStep { kStepWelcome, kStepHardware, kStepSoftware, kStepDevices, kStepConnections, kStepRun };
+
+// The guide's "Your devices" step: what LumaBridge found, and the fans on the ARGB header,
+// which it can't count itself.
+void SetupDevicesStep(Controller& ctl, UiState& ui, const Fonts& f) {
+    const auto& pres = ctl.presence();
+    const sensors::SystemSnapshot snap = ctl.monitor().Snapshot();
+    const SetupHardware hw = DetectSetup(snap.smbios);
+    auto line = [&](Icon icon, bool ok, const std::string& name, const std::string& what) {
+        IconItem(icon, 18 * S(), ok ? Hex(kAccent) : Hex(kMuted));
+        ImGui::SameLine(0, 10 * S());
+        ImGui::PushFont(f.bold);
+        ImGui::TextUnformatted(name.c_str());
+        ImGui::PopFont();
+        ImGui::SameLine();
+        Muted("%s", what.c_str());
+    };
+
+    BeginCard("found");
+    CardTitle(f, "Found on this PC", Icon::Leds);
+    int auraCount = 0;
+    bool header = false;
+    for (const auto& d : ctl.devices()) {
+        Icon icon;
+        line(Icon::Board, true, DeviceLabel(d, snap, ctl.config().argbFans, &icon), std::to_string(d.lightCount) + " LEDs");
+        ++auraCount;
+        header |= d.type == 0x00011000;
+    }
+    if (!auraCount)
+        line(Icon::Board, false, "No ASUS Aura controller found",
+             ui.setupAnswers.has(Brand::Asus) ? "- try Devices > Rescan devices later; the log says why" : "");
+    if (!pres.scanned) {
+        Muted("Looking for Logitech devices and keyboards...");
+    } else {
+        for (const auto& d : pres.logitech)
+            line(Icon::Mouse, d.rgb, "Logitech " + (d.name.empty() ? std::string("device") : d.name),
+                 std::string(hidpp::DeviceTypeName(d.type)) + (d.rgb ? ", RGB lighting" : " - no RGB lighting, left out"));
+        if (pres.azoth) line(Icon::Keyboard, true, "ASUS ROG Azoth", "Keyboard, every key its own color");
+    }
+    if (hw.ram != RamStyle::Generic)
+        line(Icon::Memory, true, hw.ramName.empty() ? "RGB memory" : hw.ramName,
+             "RGB memory - confirmed once Hardware access is set up");
+    else if (!hw.ramName.empty())
+        line(Icon::Memory, false, hw.ramName, "- no RGB memory LumaBridge can light");
+    EndCard();
+
+    if (header || (!auraCount && ui.setupAnswers.has(Brand::Asus))) {
+        BeginCard("fans");
+        CardTitle(f, "Fans on the ARGB header", Icon::Fan);
+        Muted("LumaBridge can't count fans itself. How many are on the motherboard's ARGB header (fans chained on "
+              "a hub count too), and how many LEDs does each have? The box or product page says.");
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        fx::FanLayout& l = ctl.config().argbFans;
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Fans");
+        ImGui::SameLine(120 * S());
+        for (int n = 1; n <= 8; ++n) {
+            ImGui::PushID(n);
+            char b[4];
+            snprintf(b, sizeof b, "%d", n);
+            if (n == l.Fans() ? PrimaryButton(b, ImVec2(34 * S(), 0)) : ImGui::Button(b, ImVec2(34 * S(), 0))) {
+                l.fans = n;
+                ctl.Changed();
+            }
+            ImGui::PopID();
+            ImGui::SameLine();
+        }
+        ImGui::NewLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("LEDs per fan");
+        ImGui::SameLine(120 * S());
+        for (int n : {8, 12, 16, 18, 20, 24}) {
+            ImGui::PushID(100 + n);
+            char b[4];
+            snprintf(b, sizeof b, "%d", n);
+            if (n == l.LedsPerFan() ? PrimaryButton(b, ImVec2(34 * S(), 0)) : ImGui::Button(b, ImVec2(34 * S(), 0))) {
+                l.ledsPerFan = n;
+                ctl.Changed();
+            }
+            ImGui::PopID();
+            ImGui::SameLine();
+        }
+        ImGui::SetNextItemWidth(130 * S());
+        if (ImGui::InputInt("##leds", &l.ledsPerFan, 1, 4)) {
+            l.ledsPerFan = l.LedsPerFan();
+            ctl.Changed();
+        }
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        bool test = ctl.fanTest();
+        if (Toggle("Show test pattern", &test)) ctl.SetFanTest(test);
+        ImGui::SameLine();
+        Muted("Each fan one solid color with a single white LED. A color spilling onto the next fan: change LEDs "
+              "per fan.");
+        if (ctl.fanTest()) LightsPreview(ctl.output(), l, 0);
+        EndCard();
+    }
+}
 
 void SetupStepper(int step, float width) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -3501,6 +3670,7 @@ void SetupFinish(Controller& ctl, UiState& ui) {
 
 void SetupGuide(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
     EnsureIntegrations(ctl, in, ui);
+    if (ui.setupStep != kStepDevices && ctl.fanTest()) ctl.SetFanTest(false);  // the test is on the devices step
     const float avail = ImGui::GetContentRegionAvail().x;
     const float colW = std::min(avail, 780 * S());
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - colW) / 2);
@@ -3527,7 +3697,7 @@ void SetupGuide(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
     };
 
     switch (ui.setupStep) {
-    case 0: {
+    case kStepWelcome: {
         if (f.logo) {
             const float s = 72 * S();
             ImGui::Image(static_cast<ImTextureID>(f.logo), ImVec2(s, s));
@@ -3546,11 +3716,11 @@ void SetupGuide(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
                 ui.setupAnswers = ui.setupFound;
                 ui.setupDetected = true;
             }
-            ui.setupStep = 1;
+            ui.setupStep = kStepHardware;
         }
         break;
     }
-    case 1: {
+    case kStepHardware: {
         heading("What RGB hardware do you have?",
                 "Ticked: found on this PC. Tick anything LumaBridge missed, untick what you don't have.");
         for (int i = 0; i < setup::kBrands; ++i) {
@@ -3562,10 +3732,10 @@ void SetupGuide(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
                 ui.setupAnswers.set(b, on);
             if (i % 2) ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
         }
-        if (footer(true, "Next")) ui.setupStep = 2;
+        if (footer(true, "Next")) ui.setupStep = kStepSoftware;
         break;
     }
-    case 2: {
+    case kStepSoftware: {
         heading("Which lighting software do you use?",
                 "LumaBridge works alongside it: it hands the lights back to Armoury Crate, passes game lighting on to "
                 "SteelSeries GG, and doesn't replace Razer's or Alienware's own game lighting.");
@@ -3580,12 +3750,23 @@ void SetupGuide(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
             if (i % 2) ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
         }
         if (footer(true, "Next")) {
-            SetupDefaults(ctl, in, ui);
-            ui.setupStep = 3;
+            ctl.RescanPresence();
+            ui.setupStep = kStepDevices;
         }
         break;
     }
-    case 3: {
+    case kStepDevices: {
+        heading("Your devices",
+                "What LumaBridge found. Only these show up in LumaBridge; plug something in later and it appears by "
+                "itself (or Devices > Rescan devices).");
+        SetupDevicesStep(ctl, ui, f);
+        if (footer(true, "Next")) {
+            SetupDefaults(ctl, in, ui);
+            ui.setupStep = kStepConnections;
+        }
+        break;
+    }
+    case kStepConnections: {
         heading("LumaBridge's connections",
                 "All on, except where your answers say otherwise. Change anything you like - everything can be "
                 "changed later on the Devices and Integrations pages.");
@@ -3636,7 +3817,7 @@ void SetupGuide(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
                   admin == 1 ? "" : "s");
         if (footer(true, "Set up")) {
             ui.setupNext = -1;
-            ui.setupStep = 4;
+            ui.setupStep = kStepRun;
         }
         break;
     }

@@ -824,6 +824,9 @@ static void TestAzoth() {
 }
 
 static void TestLogitechHidpp() {
+    CHECK(std::strcmp(luma::app::hidpp::DeviceTypeName(3), "Mouse") == 0);
+    CHECK(std::strcmp(luma::app::hidpp::DeviceTypeName(0), "Keyboard") == 0);
+    CHECK(std::strcmp(luma::app::hidpp::DeviceTypeName(-1), "Device") == 0);
     using namespace luma::app::hidpp;
     // The G502 X Plus's list (cluster 0): 0 off, 1 fixed, 2 breathing, 3 cycle; RGB effects at index 09.
     Layout l;

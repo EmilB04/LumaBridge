@@ -11,15 +11,23 @@
 
 namespace luma::aurausb {
 
+// USB product IDs of ASUS motherboards' "AURA LED Controller" (the same family: firmware and
+// configuration table as in aura_usb_protocol.h); which one a board has depends on its
+// generation. 0x1939: ROG STRIX B550-F and others of its time.
+inline const std::vector<uint16_t>& MainboardProductIds() {
+    static const std::vector<uint16_t> k{0x1939, 0x18F3, 0x19AF, 0x1AA6, 0x1BED};
+    return k;
+}
+
 // Lists the Aura devices of every controller found, WITHOUT taking control (only the
 // firmware / configuration are read; the lights keep whatever they are showing).
-std::vector<AuraDeviceInfo> ProbeDevices(const std::vector<uint16_t>& productIds = {0x1939},
+std::vector<AuraDeviceInfo> ProbeDevices(const std::vector<uint16_t>& productIds = MainboardProductIds(),
                                          int argbLeds = kDefaultArgbLeds);
 
 class UsbAura : public LightingBackend {
 public:
     // USB product ids of Aura motherboard controllers to look for.
-    explicit UsbAura(std::vector<uint16_t> productIds = {0x1939}, int argbLeds = kDefaultArgbLeds);
+    explicit UsbAura(std::vector<uint16_t> productIds = MainboardProductIds(), int argbLeds = kDefaultArgbLeds);
 
     bool Connect() override;
     void Disconnect(bool releaseControl) override;

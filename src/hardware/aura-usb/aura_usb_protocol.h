@@ -1,5 +1,6 @@
 // ASUS Aura USB lighting controller protocol (motherboard "AURA LED Controller",
-// USB 0B05:1939 on e.g. ROG STRIX B550-F), written from the publicly documented behaviour
+// USB 0B05:1939 on e.g. ROG STRIX B550-F, and its siblings: MainboardProductIds() in
+// usb_aura.h), written from the publicly documented behaviour
 // of this controller family. Pure packet building / parsing, unit tested; the HID transport
 // lives in aura_usb.cpp.
 //

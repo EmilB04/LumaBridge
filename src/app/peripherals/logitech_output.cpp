@@ -22,6 +22,42 @@ constexpr DWORD kFrameMs = 50;
 
 int Percent(uint8_t v) { return (v * 100 + 127) / 255; }
 
+// The device paths of every Logitech HID++ long-report interface (usage page 0xFF00, 20-byte
+// reports): receivers and devices on their cables.
+std::vector<std::wstring> HidppInterfaces() {
+    std::vector<std::wstring> out;
+    GUID hid;
+    HidD_GetHidGuid(&hid);
+    HDEVINFO set = SetupDiGetClassDevsW(&hid, nullptr, nullptr, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    if (set == INVALID_HANDLE_VALUE) return out;
+    SP_DEVICE_INTERFACE_DATA iface{};
+    iface.cbSize = sizeof iface;
+    for (DWORD i = 0; SetupDiEnumDeviceInterfaces(set, nullptr, &hid, i, &iface); ++i) {
+        DWORD need = 0;
+        SetupDiGetDeviceInterfaceDetailW(set, &iface, nullptr, 0, &need, nullptr);
+        std::vector<BYTE> buf(need);
+        auto* detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W*>(buf.data());
+        detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
+        if (!SetupDiGetDeviceInterfaceDetailW(set, &iface, detail, need, nullptr, nullptr)) continue;
+        HANDLE q = CreateFileW(detail->DevicePath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (q == INVALID_HANDLE_VALUE) continue;
+        HIDD_ATTRIBUTES a{};
+        a.Size = sizeof a;
+        bool match = HidD_GetAttributes(q, &a) && a.VendorID == hidpp::kVendor;
+        if (match) {
+            PHIDP_PREPARSED_DATA pre = nullptr;
+            HIDP_CAPS caps{};
+            match = HidD_GetPreparsedData(q, &pre) && HidP_GetCaps(pre, &caps) == HIDP_STATUS_SUCCESS &&
+                    caps.UsagePage == 0xFF00 && caps.OutputReportByteLength == 20;
+            if (pre) HidD_FreePreparsedData(pre);
+        }
+        CloseHandle(q);
+        if (match) out.push_back(detail->DevicePath);
+    }
+    SetupDiDestroyDeviceInfoList(set);
+    return out;
+}
+
 // A Logitech mouse that runs its own effects (HID++ RGB effects), reached through its
 // receiver or its cable, next to G HUB (which keeps its own connection).
 class HidppMouse {
@@ -34,40 +70,39 @@ public:
     // Looks through every Logitech HID++ interface for a device with RGB effects.
     bool Find() {
         Close();
-        GUID hid;
-        HidD_GetHidGuid(&hid);
-        HDEVINFO set = SetupDiGetClassDevsW(&hid, nullptr, nullptr, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
-        if (set == INVALID_HANDLE_VALUE) return false;
-        SP_DEVICE_INTERFACE_DATA iface{};
-        iface.cbSize = sizeof iface;
-        for (DWORD i = 0; !open() && SetupDiEnumDeviceInterfaces(set, nullptr, &hid, i, &iface); ++i) {
-            DWORD need = 0;
-            SetupDiGetDeviceInterfaceDetailW(set, &iface, nullptr, 0, &need, nullptr);
-            std::vector<BYTE> buf(need);
-            auto* detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W*>(buf.data());
-            detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
-            if (!SetupDiGetDeviceInterfaceDetailW(set, &iface, detail, need, nullptr, nullptr)) continue;
-            HANDLE q = CreateFileW(detail->DevicePath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
-            if (q == INVALID_HANDLE_VALUE) continue;
-            HIDD_ATTRIBUTES a{};
-            a.Size = sizeof a;
-            bool match = HidD_GetAttributes(q, &a) && a.VendorID == hidpp::kVendor;
-            if (match) {
-                PHIDP_PREPARSED_DATA pre = nullptr;
-                HIDP_CAPS caps{};
-                match = HidD_GetPreparsedData(q, &pre) && HidP_GetCaps(pre, &caps) == HIDP_STATUS_SUCCESS &&
-                        caps.UsagePage == 0xFF00 && caps.OutputReportByteLength == 20;
-                if (pre) HidD_FreePreparsedData(pre);
-            }
-            CloseHandle(q);
-            if (!match) continue;
-            h_ = CreateFileW(detail->DevicePath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                             OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
-            if (!open()) continue;
-            if (!Probe()) Close();
+        for (const std::wstring& path : HidppInterfaces()) {
+            if (!OpenPath(path)) continue;
+            if (Probe()) return true;
+            Close();
         }
-        SetupDiDestroyDeviceInfoList(set);
+        return false;
+    }
+
+    bool OpenPath(const std::wstring& path) {
+        Close();
+        h_ = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                         OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
         return open();
+    }
+
+    // Every device behind this interface (a receiver's paired devices, or the one on the cable).
+    void List(std::vector<LogitechDevice>* out) {
+        for (uint8_t dev : {hidpp::kWired, uint8_t{1}, uint8_t{2}, uint8_t{3}, uint8_t{4}, uint8_t{5}, uint8_t{6}}) {
+            hidpp::Report r;
+            // Root.GetFeature(name): only a HID++ 2.0 device answers.
+            if (!Send(hidpp::Request(dev, 0x00, 0, {hidpp::kFeatureName >> 8, hidpp::kFeatureName & 0xFF}), &r, 400))
+                continue;
+            LogitechDevice d;
+            if (const uint8_t nameFeature = r[4]) {
+                d.name = ReadName(dev, nameFeature);
+                if (Send(hidpp::Request(dev, nameFeature, 2, {}), &r)) d.type = r[4];
+            }
+            for (uint16_t id : hidpp::kLightingFeatures)
+                if (!d.rgb && Send(hidpp::Request(dev, 0x00, 0, {static_cast<uint8_t>(id >> 8), static_cast<uint8_t>(id)}), &r) &&
+                    r[4])
+                    d.rgb = true;
+            out->push_back(d);
+        }
     }
 
     bool Set(const hidpp::Effect& e) { return Send(hidpp::SetEffect(device_, feature_, layout_, e), nullptr); }
@@ -94,14 +129,8 @@ private:
             device_ = dev;
             feature_ = r[4];
             name_.clear();
-            if (Send(hidpp::Request(dev, 0x00, 0, {hidpp::kFeatureName >> 8, hidpp::kFeatureName & 0xFF}), &r) && r[4]) {
-                const uint8_t nameFeature = r[4];
-                if (Send(hidpp::Request(dev, nameFeature, 0, {}), &r)) {
-                    const uint8_t len = r[4];
-                    while (name_.size() < len && Send(hidpp::Request(dev, nameFeature, 1, {static_cast<uint8_t>(name_.size())}), &r))
-                        for (size_t k = 4; k < r.size() && name_.size() < len; ++k) name_ += static_cast<char>(r[k]);
-                }
-            }
+            if (Send(hidpp::Request(dev, 0x00, 0, {hidpp::kFeatureName >> 8, hidpp::kFeatureName & 0xFF}), &r) && r[4])
+                name_ = ReadName(dev, r[4]);
             layout_ = hidpp::Layout{};
             for (uint8_t e = 0; e < 16; ++e) {
                 if (!Send(hidpp::Request(dev, feature_, 0, {0x00, e}), &r)) break;
@@ -128,6 +157,16 @@ private:
             return true;
         }
         return false;
+    }
+
+    std::string ReadName(uint8_t dev, uint8_t nameFeature) {
+        std::string name;
+        hidpp::Report r;
+        if (!Send(hidpp::Request(dev, nameFeature, 0, {}), &r)) return name;
+        const uint8_t len = r[4];
+        while (name.size() < len && Send(hidpp::Request(dev, nameFeature, 1, {static_cast<uint8_t>(name.size())}), &r))
+            for (size_t k = 4; k < r.size() && name.size() < len; ++k) name += static_cast<char>(r[k]);
+        return name;
     }
 
     // Sends a request and waits for its answer (other reports are skipped).
@@ -171,6 +210,28 @@ private:
 };
 
 }  // namespace
+
+std::vector<LogitechDevice> ScanLogitechDevices() {
+    std::vector<LogitechDevice> out;
+    HidppMouse link;
+    for (const std::wstring& path : HidppInterfaces())
+        if (link.OpenPath(path)) link.List(&out);
+    // The same device by cable and through its receiver: once.
+    std::vector<LogitechDevice> unique;
+    for (const LogitechDevice& d : out) {
+        bool seen = false;
+        for (LogitechDevice& u : unique)
+            if (!d.name.empty() && u.name == d.name) {
+                u.rgb = u.rgb || d.rgb;
+                seen = true;
+            }
+        if (!seen) unique.push_back(d);
+    }
+    for (const LogitechDevice& d : unique)
+        LUMA_INFO("Logitech device: %s (%s, %s)", d.name.empty() ? "?" : d.name.c_str(), hidpp::DeviceTypeName(d.type),
+                  d.rgb ? "RGB lighting" : "no RGB lighting");
+    return unique;
+}
 
 void LogitechOutput::Start(const std::wstring& proxyPath) {
     if (thread_.joinable()) return;
