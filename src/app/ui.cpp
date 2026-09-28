@@ -221,6 +221,58 @@ bool PrimaryButton(const char* label, ImVec2 size = ImVec2(0, 0)) {
     return r;
 }
 
+// Which way moving effects run: a left and a right arrow, the chosen one lit. `*reversed`
+// false = right (the normal way). Returns true when it changed.
+bool DirectionArrows(const char* id, bool* reversed) {
+    bool changed = false;
+    ImGui::PushID(id);
+    const float pad = 3 * S();
+    const float h = ImGui::GetFrameHeight() + 2 * S();
+    const float bw = 44 * S(), bh = h - pad * 2;
+    const float total = bw * 2 + pad * 2;
+    ImGui::AlignTextToFramePadding();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    dl->AddRectFilled(p, ImVec2(p.x + total, p.y + h), Hex(kTrack), h / 2);
+    dl->AddRect(p, ImVec2(p.x + total, p.y + h), Hex(kBorder, 160), h / 2);
+    for (int i = 0; i < 2; ++i) {
+        const bool right = i == 1;
+        const ImVec2 a(p.x + pad + i * bw, p.y + pad);
+        ImGui::SetCursorScreenPos(a);
+        ImGui::PushID(i);
+        const bool clicked = ImGui::InvisibleButton("dir", ImVec2(bw, bh));
+        ImGui::PopID();
+        const bool sel = *reversed != right, hovered = ImGui::IsItemHovered();
+        if (hovered) ImGui::SetTooltip(right ? "Right" : "Left");
+        if (sel) dl->AddRectFilled(a, ImVec2(a.x + bw, a.y + bh), Hex(hovered ? kAccentHover : kAccent), bh / 2);
+        else if (hovered) dl->AddRectFilled(a, ImVec2(a.x + bw, a.y + bh), Hex(kCardHover), bh / 2);
+        // The arrow: a shaft and a head, pointing left or right.
+        const ImU32 col = sel ? Hex(0xFFFFFF) : hovered ? Hex(kText) : Hex(kMuted);
+        const ImVec2 c(a.x + bw / 2, a.y + bh / 2);
+        const float len = 9 * S(), head = 5 * S(), t = std::max(1.5f, 2 * S());
+        const float dir = right ? 1.f : -1.f;
+        dl->AddLine(ImVec2(c.x - dir * len, c.y), ImVec2(c.x + dir * (len - 1 * S()), c.y), col, t);
+        dl->AddTriangleFilled(ImVec2(c.x + dir * (len + 2 * S()), c.y), ImVec2(c.x + dir * (len - head), c.y - head),
+                              ImVec2(c.x + dir * (len - head), c.y + head), col);
+        if (clicked && !sel) {
+            *reversed = !right;
+            changed = true;
+        }
+    }
+    ImGui::SetCursorScreenPos(p);
+    ImGui::Dummy(ImVec2(total, h));
+    ImGui::PopID();
+    return changed;
+}
+
+// "Direction  [<-|->]" on one line.
+bool DirectionRow(const char* id, bool* reversed, const char* label = "Direction") {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(0, 12 * S());
+    return DirectionArrows(id, reversed);
+}
+
 bool Swatch(const char* id, Rgb c, float size, bool selected = false) {
     ImGui::PushID(id);
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -1547,21 +1599,19 @@ void DirectionCard(Controller& ctl, const Fonts& f) {
     if (ids.empty()) return;
     BeginCard("direction");
     CardTitle(f, "Direction", Icon::Leds);
-    Muted("Moving effects (waves, comets, gradients) run the same way on every device. Reverse a device that "
-          "runs the other way, e.g. mounted mirrored. Applies to games too.");
+    Muted("Which way moving effects (waves, comets, gradients) run on each device: left or right. All run "
+          "right unless you change it. Applies to games too.");
     ImGui::Dummy(ImVec2(0, 4 * S()));
     if (ImGui::BeginTable("dirs", ImGui::GetContentRegionAvail().x > 700 * S() ? 3 : 2)) {
         for (const char* id : ids) {
             ImGui::TableNextColumn();
             ImGui::PushID(id);
             bool& rev = ctl.prefs().deviceLighting[id].reverse;
-            if (Toggle("##rev", &rev)) ctl.Changed();
-            ImGui::SameLine();
-            IconItem(DeviceIcon(id), 16 * S(), rev ? Hex(kAccent) : Hex(kMuted));
+            if (DirectionArrows("dir", &rev)) ctl.Changed();
+            ImGui::SameLine(0, 10 * S());
+            IconItem(DeviceIcon(id), 16 * S(), Hex(kAccent));
             ImGui::SameLine();
             ImGui::TextUnformatted(device::Name(id));
-            ImGui::SameLine();
-            Muted("%s", rev ? "reversed" : "");
             ImGui::PopID();
         }
         ImGui::EndTable();
@@ -1595,9 +1645,9 @@ void BrightnessCard(Controller& ctl, const Fonts& f, const std::string& device =
               ctl.config().auraCorrection.brightness * 100.0);
         ImGui::Dummy(ImVec2(0, 4 * S()));
         bool& rev = ctl.prefs().deviceLighting[device].reverse;
-        if (Toggle("Reverse direction", &rev)) ctl.Changed();
-        Muted(rev ? "Moving effects run the other way on this device."
-                  : "Moving effects run the same way as on every other device.");
+        if (DirectionRow("dev-dir", &rev)) ctl.Changed();
+        Muted("Which way moving effects run on this device, games included. Every device runs right unless "
+              "you change it.");
     }
     EndCard();
     if (device.empty()) DirectionCard(ctl, f);
@@ -2078,7 +2128,7 @@ bool LookEditor(Controller& ctl, UiState& ui, const Fonts& f, Look& p) {
     }
     if (p.effect == ManualEffect::RainbowWave || p.effect == ManualEffect::Gradient || p.effect == ManualEffect::Comet) {
         ImGui::Dummy(ImVec2(0, 2 * S()));
-        if (Toggle("Reverse direction", &p.reverse)) changed = true;
+        if (DirectionRow("look-dir", &p.reverse)) changed = true;
     }
     EndCard();
 
@@ -2988,7 +3038,7 @@ void DeviceLightingCard(Controller& ctl, UiState& ui, const Fonts& f, const char
         Muted("It shows the main lighting, like the other devices.");
     }
     Muted("Brightness: %.0f%% of the overall %.0f%%.%s", DeviceBrightness(p, id) * 100.0,
-          ctl.config().auraCorrection.brightness * 100.0, DeviceReversed(p, id) ? " Direction: reversed." : "");
+          ctl.config().auraCorrection.brightness * 100.0, DeviceReversed(p, id) ? " Direction: left." : " Direction: right.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
     if (PrimaryButton("Change its lighting")) {
         ui.page = Page::Lighting;
