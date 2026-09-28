@@ -3773,48 +3773,7 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
     }
     const auto& lib = ctl.library();
 
-    // Built-in game lighting: the games LumaBridge lights through their official data.
     RefreshFeeds(ctl, ui);
-    ImGui::PushFont(f.bold);
-    ImGui::TextUnformatted("Built-in game lighting");
-    ImGui::PopFont();
-    Muted("These games light up through their own official data, no vendor software needed. Click one to set it up.");
-    ImGui::Dummy(ImVec2(0, 2 * S()));
-    static const char* kBuiltIn[] = {"cs2", "rocketleague", "warthunder", "dota2", "league", "forza", "msfs", "dcs"};
-    const float avail = ImGui::GetContentRegionAvail().x;
-    const int cols = avail > 700 * S() ? 3 : 1;
-    if (ImGui::BeginTable("builtin", cols, ImGuiTableFlags_SizingStretchSame)) {
-        for (const char* key : kBuiltIn) {
-            const games::GameProfile* p = games::ProfileByKey(key);
-            ImGui::TableNextColumn();
-            ImGui::PushID(key);
-            const ImVec2 a = ImGui::GetCursorScreenPos();
-            const float w = ImGui::GetContentRegionAvail().x, h = 80 * S();
-            const bool clicked = ImGui::InvisibleButton("tile", ImVec2(w, h));
-            const bool hovered = ImGui::IsItemHovered();
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), Hex(hovered ? kCardHover : kCard), 14 * S());
-            dl->AddRect(a, ImVec2(a.x + w, a.y + h), hovered ? Hex(kAccent, 180) : Hex(kBorder, 180), 14 * S());
-            ImGui::SetCursorScreenPos(ImVec2(a.x + 16 * S(), a.y + 14 * S()));
-            ImGui::BeginGroup();
-            IconItem(Icon::Game, 20 * S(), Hex(kAccent));
-            ImGui::SameLine(0, 10 * S());
-            ImGui::PushFont(f.bold);
-            ImGui::TextUnformatted(p->title);
-            ImGui::PopFont();
-            FeedPill(ctl, ui, key);
-            ImGui::EndGroup();
-            const char* more = "Customize  >";
-            const ImVec2 ms = ImGui::CalcTextSize(more);
-            dl->AddText(ImVec2(a.x + w - ms.x - 16 * S(), a.y + h - ms.y - 14 * S()), hovered ? Hex(kAccentHover) : Hex(kMuted), more);
-            ImGui::SetCursorScreenPos(ImVec2(a.x, a.y + h));
-            ImGui::Dummy(ImVec2(w, 4 * S()));
-            if (clicked) OpenGame(ui, p->title, key);
-            ImGui::PopID();
-        }
-        ImGui::EndTable();
-    }
-    ImGui::Dummy(ImVec2(0, 8 * S()));
 
     BeginCard("library-head");
     CardTitle(f, "Games on this PC", Icon::Game);
@@ -3925,6 +3884,48 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
         ImGui::EndTable();
     }
     EndCard();
+
+    // Built-in game lighting (below the list): the games LumaBridge lights through their official data.
+    ImGui::Dummy(ImVec2(0, 8 * S()));
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted("Built-in game lighting");
+    ImGui::PopFont();
+    Muted("These games light up through their own official data, no vendor software needed. Click one to set it up.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    static const char* kBuiltIn[] = {"cs2", "rocketleague", "warthunder", "dota2", "league", "forza", "msfs", "dcs"};
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const int cols = avail > 700 * S() ? 3 : 1;
+    if (ImGui::BeginTable("builtin", cols, ImGuiTableFlags_SizingStretchSame)) {
+        for (const char* key : kBuiltIn) {
+            const games::GameProfile* p = games::ProfileByKey(key);
+            ImGui::TableNextColumn();
+            ImGui::PushID(key);
+            const ImVec2 a = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x, h = 80 * S();
+            const bool clicked = ImGui::InvisibleButton("tile", ImVec2(w, h));
+            const bool hovered = ImGui::IsItemHovered();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), Hex(hovered ? kCardHover : kCard), 14 * S());
+            dl->AddRect(a, ImVec2(a.x + w, a.y + h), hovered ? Hex(kAccent, 180) : Hex(kBorder, 180), 14 * S());
+            ImGui::SetCursorScreenPos(ImVec2(a.x + 16 * S(), a.y + 14 * S()));
+            ImGui::BeginGroup();
+            IconItem(Icon::Game, 20 * S(), Hex(kAccent));
+            ImGui::SameLine(0, 10 * S());
+            ImGui::PushFont(f.bold);
+            ImGui::TextUnformatted(p->title);
+            ImGui::PopFont();
+            FeedPill(ctl, ui, key);
+            ImGui::EndGroup();
+            const char* more = "Customize  >";
+            const ImVec2 ms = ImGui::CalcTextSize(more);
+            dl->AddText(ImVec2(a.x + w - ms.x - 16 * S(), a.y + h - ms.y - 14 * S()), hovered ? Hex(kAccentHover) : Hex(kMuted), more);
+            ImGui::SetCursorScreenPos(ImVec2(a.x, a.y + h));
+            ImGui::Dummy(ImVec2(w, 4 * S()));
+            if (clicked) OpenGame(ui, p->title, key);
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
 }
 
 // Devices with Windows' lighting standard built in: nothing to install.
