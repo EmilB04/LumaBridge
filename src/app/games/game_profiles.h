@@ -16,7 +16,7 @@ enum class ProfileKind {
     NotAGame,   // a tool that looks like a game; ignored in Auto mode
 };
 
-enum class Feed { None, Cs2Gsi, RocketLeagueStats, WarThunderApi, Dota2Gsi, LeagueLiveClient, ForzaDataOut };
+enum class Feed { None, Cs2Gsi, RocketLeagueStats, WarThunderApi, Dota2Gsi, LeagueLiveClient, ForzaDataOut, FlightSimConnect, DcsExport };
 
 struct GameProfile {
     const char* key;        // stable id ("cs2")
@@ -61,6 +61,16 @@ inline const GameProfile* Profiles(size_t* count) {
          ProfileKind::BuiltIn, Feed::ForzaDataOut, "Built in: the game's Data Out telemetry",
          "Rev lights: blue at low revs, then green, yellow and red as the engine climbs, and a red "
          "flash at the limiter. Switch on Data Out in the game's settings (its page says how)."},
+        {"msfs", "Microsoft Flight Simulator", {"flightsimulator.exe", "flightsimulator2024.exe"},
+         {"microsoftflightsimulator", "microsoftflightsimulator2020", "microsoftflightsimulator2024"},
+         ProfileKind::BuiltIn, Feed::FlightSimConnect, "Built in: SimConnect, the sim's own add-on interface",
+         "The sky's color by time of day, your aircraft's beacon and strobe lights flashing, stall and overspeed "
+         "warnings, low fuel and crashes. Needs SimConnect.dll from Microsoft's free Flight Simulator SDK (its "
+         "page says how)."},
+        {"dcs", "DCS World", {"dcs.exe"}, {"dcsworld", "dcsworldsteamedition"}, ProfileKind::BuiltIn, Feed::DcsExport,
+         "Built in: DCS's export script (Export.lua)",
+         "The sky's color by the mission's time of day, three greens with the gear down, red as the G climbs, "
+         "and the master warning. Set up once on its page (adds a script to Saved Games\\DCS\\Scripts)."},
         {"overwatch", "Overwatch 2", {"overwatch.exe"}, {"overwatch", "overwatch2"}, ProfileKind::VendorSdk,
          Feed::None, "Razer Chroma (hero effects)",
          "Install Razer Chroma on the Integrations page. Blizzard's anti-cheat may refuse an "

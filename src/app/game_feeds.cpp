@@ -2,8 +2,10 @@
 
 #include <ws2tcpip.h>
 #include <winhttp.h>
+#include <shlobj.h>
 
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 #include "http_parser.h"
@@ -21,6 +23,14 @@ std::string ReadText(const std::wstring& path) {
     size_t n;
     while ((n = fread(buf, 1, sizeof buf, f)) > 0 && out.size() < (1u << 20)) out.append(buf, n);
     fclose(f);
+    return out;
+}
+
+std::string Narrow(const std::wstring& w) {
+    if (w.empty()) return {};
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), out.data(), n, nullptr, nullptr);
     return out;
 }
 
@@ -95,18 +105,20 @@ void GameFeeds::Start() {
     wtThread_ = std::thread(&GameFeeds::WarThunderLoop, this);
     leagueThread_ = std::thread(&GameFeeds::LeagueLoop, this);
     forzaThread_ = std::thread(&GameFeeds::ForzaLoop, this);
+    msfsThread_ = std::thread(&GameFeeds::FlightSimLoop, this);
+    dcsThread_ = std::thread(&GameFeeds::DcsLoop, this);
 }
 
 void GameFeeds::Stop() {
     if (!cs2Thread_.joinable() && !rlThread_.joinable() && !wtThread_.joinable() && !leagueThread_.joinable() &&
-        !forzaThread_.joinable())
+        !forzaThread_.joinable() && !msfsThread_.joinable() && !dcsThread_.joinable())
         return;
     stop_ = true;
     if (cs2Listen_ != INVALID_SOCKET) {
         closesocket(cs2Listen_);  // ends accept()
         cs2Listen_ = INVALID_SOCKET;
     }
-    for (std::thread* t : {&cs2Thread_, &rlThread_, &wtThread_, &leagueThread_, &forzaThread_})
+    for (std::thread* t : {&cs2Thread_, &rlThread_, &wtThread_, &leagueThread_, &forzaThread_, &msfsThread_, &dcsThread_})
         if (t->joinable()) t->join();
     if (wsa_) WSACleanup();
     wsa_ = false;
@@ -140,6 +152,16 @@ GameFeeds::Feed GameFeeds::League(uint64_t now) {
 GameFeeds::Feed GameFeeds::Forza(uint64_t now) {
     std::lock_guard<std::mutex> lock(mutex_);
     return Feed{forza_.Active(now), forza_.Current()};
+}
+
+GameFeeds::Feed GameFeeds::FlightSim(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{msfs_.Active(now), msfs_.Current()};
+}
+
+GameFeeds::Feed GameFeeds::Dcs(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{dcs_.Active(now), dcs_.Current()};
 }
 
 // ---- Counter-Strike 2 ----------------------------------------------------------------------
@@ -307,6 +329,203 @@ void GameFeeds::ForzaLoop() {
             std::lock_guard<std::mutex> lock(mutex_);
             if (forza_.OnPacket(buf, static_cast<size_t>(n), GetTickCount64()) && !forzaSeen_.exchange(true))
                 LUMA_INFO("games: Forza is sending its Data Out telemetry");
+        }
+    }
+    if (s != INVALID_SOCKET) closesocket(s);
+}
+
+// ---- Microsoft Flight Simulator (SimConnect) ------------------------------------------------
+// SimConnect.dll is loaded at run time from where Microsoft's free Flight Simulator SDK puts it
+// (or next to LumaBridge.exe), so nothing of it ships with LumaBridge.
+
+namespace {
+
+// The few SimConnect calls used (SimConnect.h, the SDK's C API).
+struct SimConnectApi {
+    HMODULE dll = nullptr;
+    HRESULT(__stdcall* open)(HANDLE*, LPCSTR, HWND, DWORD, HANDLE, DWORD) = nullptr;
+    HRESULT(__stdcall* close)(HANDLE) = nullptr;
+    HRESULT(__stdcall* addToDataDefinition)(HANDLE, DWORD, const char*, const char*, DWORD, float, DWORD) = nullptr;
+    HRESULT(__stdcall* requestDataOnSimObject)(HANDLE, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD) = nullptr;
+    HRESULT(__stdcall* subscribeToSystemEvent)(HANDLE, DWORD, const char*) = nullptr;
+    HRESULT(__stdcall* getNextDispatch)(HANDLE, void**, DWORD*) = nullptr;
+};
+
+// SimConnect.h's values.
+constexpr DWORD kScFloat64 = 4;             // SIMCONNECT_DATATYPE_FLOAT64
+constexpr DWORD kScUnused = 0xFFFFFFFF;     // SIMCONNECT_UNUSED
+constexpr DWORD kScUserObject = 0;          // SIMCONNECT_OBJECT_ID_USER
+constexpr DWORD kScPeriodSimFrame = 3;      // SIMCONNECT_PERIOD_SIM_FRAME
+constexpr DWORD kScRecvQuit = 3, kScRecvEvent = 4, kScRecvSimObjectData = 8;
+constexpr DWORD kScDataOffset = 40;         // SIMCONNECT_RECV_SIMOBJECT_DATA::dwData
+constexpr DWORD kScEventDataOffset = 20;    // SIMCONNECT_RECV_EVENT::dwData
+
+std::vector<std::wstring> SimConnectCandidates() {
+    std::vector<std::wstring> out;
+    wchar_t exe[MAX_PATH] = {};
+    if (GetModuleFileNameW(nullptr, exe, MAX_PATH)) {
+        std::wstring dir = exe;
+        dir = dir.substr(0, dir.find_last_of(L"\\/") + 1);
+        out.push_back(dir + L"SimConnect.dll");
+    }
+    for (const wchar_t* var : {L"MSFS2024_SDK", L"MSFS_SDK"}) {
+        wchar_t v[MAX_PATH] = {};
+        if (GetEnvironmentVariableW(var, v, MAX_PATH)) {
+            std::wstring d = v;
+            if (!d.empty() && d.back() != L'\\') d += L'\\';
+            out.push_back(d + L"SimConnect SDK\\lib\\SimConnect.dll");
+        }
+    }
+    out.push_back(L"C:\\MSFS 2024 SDK\\SimConnect SDK\\lib\\SimConnect.dll");
+    out.push_back(L"C:\\MSFS SDK\\SimConnect SDK\\lib\\SimConnect.dll");
+    return out;
+}
+
+bool LoadSimConnect(SimConnectApi* api) {
+    if (api->dll) return true;
+    for (const auto& path : SimConnectCandidates()) {
+        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+        HMODULE m = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (!m) continue;
+        // Through void*: GetProcAddress returns a generic function pointer.
+        auto get = [m](const char* name) { return reinterpret_cast<void*>(GetProcAddress(m, name)); };
+        api->open = reinterpret_cast<decltype(api->open)>(get("SimConnect_Open"));
+        api->close = reinterpret_cast<decltype(api->close)>(get("SimConnect_Close"));
+        api->addToDataDefinition = reinterpret_cast<decltype(api->addToDataDefinition)>(get("SimConnect_AddToDataDefinition"));
+        api->requestDataOnSimObject =
+            reinterpret_cast<decltype(api->requestDataOnSimObject)>(get("SimConnect_RequestDataOnSimObject"));
+        api->subscribeToSystemEvent =
+            reinterpret_cast<decltype(api->subscribeToSystemEvent)>(get("SimConnect_SubscribeToSystemEvent"));
+        api->getNextDispatch = reinterpret_cast<decltype(api->getNextDispatch)>(get("SimConnect_GetNextDispatch"));
+        if (api->open && api->close && api->addToDataDefinition && api->requestDataOnSimObject &&
+            api->subscribeToSystemEvent && api->getNextDispatch) {
+            api->dll = m;
+            LUMA_INFO("games: using %s for Flight Simulator", Narrow(path).c_str());
+            return true;
+        }
+        FreeLibrary(m);
+    }
+    return false;
+}
+
+}  // namespace
+
+void GameFeeds::FlightSimLoop() {
+    SimConnectApi api;
+    HANDLE sim = nullptr;
+    bool loggedMissing = false;
+    auto disconnect = [&] {
+        if (sim) api.close(sim);
+        sim = nullptr;
+        msfsConnected_ = false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        msfs_.OnDisconnected();
+    };
+    while (!stop_) {
+        if (!msfsRunning_) {
+            if (sim) disconnect();
+            Nap(stop_, 1000);
+            continue;
+        }
+        if (!LoadSimConnect(&api)) {
+            msfsDll_ = 0;
+            if (!loggedMissing) LUMA_INFO("games: Flight Simulator runs, but SimConnect.dll wasn't found (install the MSFS SDK)");
+            loggedMissing = true;
+            Nap(stop_, 5000);
+            continue;
+        }
+        msfsDll_ = 1;
+        if (!sim) {
+            if (FAILED(api.open(&sim, "LumaBridge", nullptr, 0, nullptr, 0))) {
+                sim = nullptr;  // still loading: try again
+                Nap(stop_, 3000);
+                continue;
+            }
+            int count = 0;
+            const games::SimVar* vars = games::FlightSimVars(&count);
+            for (int i = 0; i < count; ++i) api.addToDataDefinition(sim, 1, vars[i].name, vars[i].unit, kScFloat64, 0, kScUnused);
+            api.requestDataOnSimObject(sim, 1, 1, kScUserObject, kScPeriodSimFrame, 0, 0, 2, 0);
+            api.subscribeToSystemEvent(sim, 1, "Sim");
+            msfsConnected_ = true;
+            LUMA_INFO("games: connected to Flight Simulator (SimConnect)");
+        }
+        bool any = false;
+        for (int k = 0; k < 64 && sim; ++k) {
+            void* data = nullptr;
+            DWORD size = 0;
+            if (FAILED(api.getNextDispatch(sim, &data, &size)) || !data || size < 12) break;
+            any = true;
+            const auto* bytes = static_cast<const uint8_t*>(data);
+            DWORD id;
+            std::memcpy(&id, bytes + 8, 4);
+            if (id == kScRecvQuit) {
+                LUMA_INFO("games: Flight Simulator closed SimConnect");
+                disconnect();
+                break;
+            }
+            if (id == kScRecvEvent && size >= kScEventDataOffset + 4) {
+                DWORD running;
+                std::memcpy(&running, bytes + kScEventDataOffset, 4);
+                std::lock_guard<std::mutex> lock(mutex_);
+                msfs_.OnSimRunning(running != 0);
+            } else if (id == kScRecvSimObjectData) {
+                int count = 0;
+                games::FlightSimVars(&count);
+                if (size < kScDataOffset + 8u * static_cast<DWORD>(count)) continue;
+                double v[16];
+                std::memcpy(v, bytes + kScDataOffset, 8u * static_cast<size_t>(count));
+                std::lock_guard<std::mutex> lock(mutex_);
+                msfs_.OnState(games::FlightSimFromValues(v, count), GetTickCount64());
+                if (!msfsSeen_.exchange(true)) LUMA_INFO("games: Flight Simulator is sending your aircraft's state");
+            }
+        }
+        if (!any) Sleep(20);
+    }
+    if (sim) api.close(sim);
+    if (api.dll) FreeLibrary(api.dll);
+}
+
+// ---- DCS World ------------------------------------------------------------------------------
+
+void GameFeeds::DcsLoop() {
+    SOCKET s = INVALID_SOCKET;
+    while (!stop_) {
+        if (!dcsRunning_) {
+            if (s != INVALID_SOCKET) closesocket(s);
+            s = INVALID_SOCKET;
+            dcsBusy_ = false;
+            Nap(stop_, 1000);
+            continue;
+        }
+        if (s == INVALID_SOCKET) {
+            s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            BOOL exclusive = TRUE;
+            setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&exclusive), sizeof exclusive);
+            sockaddr_in a{};
+            a.sin_family = AF_INET;
+            a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            a.sin_port = htons(static_cast<u_short>(games::DcsLighting::kPort));
+            if (bind(s, reinterpret_cast<sockaddr*>(&a), sizeof a) != 0) {
+                if (!dcsBusy_.exchange(true))
+                    LUMA_WARN("games: UDP port %d is taken - DCS World lighting unavailable", games::DcsLighting::kPort);
+                closesocket(s);
+                s = INVALID_SOCKET;
+                Nap(stop_, 3000);
+                continue;
+            }
+            dcsBusy_ = false;
+            DWORD timeout = 500;
+            setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof timeout);
+            LUMA_INFO("games: listening for DCS World on 127.0.0.1:%d", games::DcsLighting::kPort);
+        }
+        char buf[2048];
+        const int n = recv(s, buf, sizeof buf - 1, 0);
+        if (n > 0) {
+            Json j;
+            if (!Json::Parse(std::string(buf, static_cast<size_t>(n)), &j)) continue;
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (dcs_.OnPacket(j, GetTickCount64()) && !dcsSeen_.exchange(true))
+                LUMA_INFO("games: DCS World is sending your aircraft's state");
         }
     }
     if (s != INVALID_SOCKET) closesocket(s);
@@ -544,6 +763,52 @@ bool WriteTextFile(const std::wstring& path, const std::string& text) {
     CloseHandle(f);
     SetLastError(err);
     return ok;
+}
+
+
+// ---- DCS World setup ------------------------------------------------------------------------
+
+std::vector<std::wstring> DcsSavedGames() {
+    std::vector<std::wstring> out;
+    PWSTR saved = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_SavedGames, 0, nullptr, &saved)) || !saved) return out;
+    const std::wstring base = saved;
+    CoTaskMemFree(saved);
+    for (const wchar_t* name : {L"DCS", L"DCS.openbeta", L"DCS.release"}) {
+        const std::wstring dir = base + L"\\" + name;
+        const DWORD attr = GetFileAttributesW(dir.c_str());
+        if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) out.push_back(dir);
+    }
+    return out;
+}
+
+bool DcsSetUp() {
+    for (const auto& dir : DcsSavedGames())
+        if (games::DcsHasHook(ReadText(dir + L"\\Scripts\\Export.lua")) &&
+            GetFileAttributesW((dir + L"\\Scripts\\LumaBridge.lua").c_str()) != INVALID_FILE_ATTRIBUTES)
+            return true;
+    return false;
+}
+
+std::string DcsSetUpScripts(bool remove) {
+    const auto dirs = DcsSavedGames();
+    if (dirs.empty()) return "DCS World's Saved Games folder wasn't found. Start DCS once, then try again.";
+    for (const auto& dir : dirs) {
+        const std::wstring scripts = dir + L"\\Scripts";
+        const std::wstring exportLua = scripts + L"\\Export.lua", ours = scripts + L"\\LumaBridge.lua";
+        const std::string text = ReadText(exportLua);
+        if (remove) {
+            if (games::DcsHasHook(text) && !WriteTextFile(exportLua, games::DcsExportWithoutHook(text)))
+                return "Couldn't write " + Narrow(exportLua);
+            DeleteFileW(ours.c_str());
+            continue;
+        }
+        if (!WriteTextFile(ours, games::DcsScriptText())) return "Couldn't write " + Narrow(ours);
+        if (!games::DcsHasHook(text) && !WriteTextFile(exportLua, games::DcsExportWithHook(text)))
+            return "Couldn't write " + Narrow(exportLua);
+        LUMA_INFO("games: DCS World export set up in %s", Narrow(scripts).c_str());
+    }
+    return "";
 }
 
 }  // namespace luma::app

@@ -9,6 +9,9 @@
 //   League of Legends Riot's Live Client Data API, https://127.0.0.1:2999 (always on in a match).
 //   Forza             the games' "Data Out" UDP telemetry, to 127.0.0.1:forzaPort (switched on
 //                     in the game's settings).
+//   Flight Simulator  SimConnect, the sim's own add-on interface (SimConnect.dll from Microsoft's
+//                     free Flight Simulator SDK, or next to LumaBridge.exe).
+//   DCS World         LumaBridge.lua, loaded from DCS's Export.lua, sends UDP to 127.0.0.1:49717.
 // The polled / listened feeds are only attempted while their games run.
 #pragma once
 
@@ -19,9 +22,12 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "cs2_lighting.h"
+#include "dcs_lighting.h"
 #include "dota2_lighting.h"
+#include "flight_sim_lighting.h"
 #include "forza_lighting.h"
 #include "league_lighting.h"
 #include "effects.h"
@@ -44,13 +50,15 @@ public:
     int forzaPort() const { return forzaPort_; }
     // Which of the polled games are running (from the game detector).
     struct Running {
-        bool rocketLeague = false, warThunder = false, league = false, forza = false;
+        bool rocketLeague = false, warThunder = false, league = false, forza = false, flightSim = false, dcs = false;
     };
     void SetRunning(const Running& r) {
         rlRunning_ = r.rocketLeague;
         wtRunning_ = r.warThunder;
         leagueRunning_ = r.league;
         forzaRunning_ = r.forza;
+        msfsRunning_ = r.flightSim;
+        dcsRunning_ = r.dcs;
     }
 
     struct Feed {
@@ -63,6 +71,8 @@ public:
     Feed Dota2(uint64_t now);
     Feed League(uint64_t now);
     Feed Forza(uint64_t now);
+    Feed FlightSim(uint64_t now);
+    Feed Dcs(uint64_t now);
 
     bool Cs2Listening() const { return cs2Listen_ != INVALID_SOCKET; }
     bool Cs2Seen() const { return cs2Seen_; }            // CS2 has sent at least once
@@ -72,6 +82,12 @@ public:
     bool LeagueSeen() const { return leagueSeen_; }
     bool ForzaSeen() const { return forzaSeen_; }
     bool ForzaPortBusy() const { return forzaBusy_; }
+    bool FlightSimSeen() const { return msfsSeen_; }
+    // SimConnect.dll: 1 found, 0 not found, -1 not looked yet (the sim hasn't run).
+    int FlightSimDll() const { return msfsDll_; }
+    bool FlightSimConnected() const { return msfsConnected_; }
+    bool DcsSeen() const { return dcsSeen_; }
+    bool DcsPortBusy() const { return dcsBusy_; }
 
 private:
     void Cs2Accept();
@@ -80,16 +96,20 @@ private:
     void WarThunderLoop();
     void LeagueLoop();
     void ForzaLoop();
+    void FlightSimLoop();
+    void DcsLoop();
     void RlHandle(std::string* buffer);
 
     std::atomic<bool> stop_{false};
     bool wsa_ = false;
     SOCKET cs2Listen_ = INVALID_SOCKET;
-    std::thread cs2Thread_, rlThread_, wtThread_, leagueThread_, forzaThread_;
-    std::atomic<bool> rlRunning_{false}, wtRunning_{false}, leagueRunning_{false}, forzaRunning_{false};
+    std::thread cs2Thread_, rlThread_, wtThread_, leagueThread_, forzaThread_, msfsThread_, dcsThread_;
+    std::atomic<bool> rlRunning_{false}, wtRunning_{false}, leagueRunning_{false}, forzaRunning_{false},
+        msfsRunning_{false}, dcsRunning_{false};
     std::atomic<int> rlPort_{49123}, forzaPort_{games::ForzaLighting::kDefaultPort};
     std::atomic<bool> cs2Seen_{false}, rlConnected_{false}, wtSeen_{false}, dotaSeen_{false}, leagueSeen_{false},
-        forzaSeen_{false}, forzaBusy_{false};
+        forzaSeen_{false}, forzaBusy_{false}, msfsSeen_{false}, msfsConnected_{false}, dcsSeen_{false}, dcsBusy_{false};
+    std::atomic<int> msfsDll_{-1};
 
     std::mutex mutex_;  // guards the engines
     games::Cs2Lighting cs2_;
@@ -99,6 +119,8 @@ private:
     games::Dota2Lighting dota_;
     games::LeagueLighting league_;
     games::ForzaLighting forza_;
+    games::FlightSimLighting msfs_;
+    games::DcsLighting dcs_;
 };
 
 // Setup helpers (Integrations page). `gameDir` is the game's install folder. They return an
@@ -119,6 +141,14 @@ std::string Cs2ConfigText();
 std::wstring Dota2ConfigPath(const std::wstring& gameDir);
 bool Dota2ConfigInstalled(const std::wstring& gameDir);
 std::string Dota2ConfigText();
+
+// DCS World: its Saved Games folders (Saved Games\DCS, DCS.openbeta, ...) that exist.
+std::vector<std::wstring> DcsSavedGames();
+// Whether Export.lua in any of them loads LumaBridge.lua.
+bool DcsSetUp();
+// Adds (or with `remove`, takes out) LumaBridge.lua and its line in Export.lua, in every DCS
+// Saved Games folder. "" on success, else what went wrong.
+std::string DcsSetUpScripts(bool remove);
 
 // Writes `text` to `path` (UTF-8, no BOM). False with GetLastError() set on failure
 // (ERROR_ACCESS_DENIED under Program Files: the caller then retries elevated).

@@ -1308,6 +1308,8 @@ void TopGame(DashCtx& c) {
         case games::Feed::Dota2Gsi: return feeds.Dota2Seen();
         case games::Feed::LeagueLiveClient: return feeds.LeagueSeen();
         case games::Feed::ForzaDataOut: return feeds.ForzaSeen();
+        case games::Feed::FlightSimConnect: return feeds.FlightSimSeen();
+        case games::Feed::DcsExport: return feeds.DcsSeen();
         default: return false;
         }
     };
@@ -3466,6 +3468,8 @@ void RefreshFeeds(Controller& ctl, UiState& ui) {
     ui.dotaInstalled = Dota2ConfigInstalled(ui.dotaDir);
     ui.rlIniFound = !RocketLeagueStatsText(ui.rlDir, true).empty();
     ui.rlEnabled = RocketLeagueStatsEnabled(ui.rlDir);
+    ui.dcsFolders = !DcsSavedGames().empty();
+    ui.dcsInstalled = DcsSetUp();
     ctl.RefreshFeedSettings();
 }
 
@@ -3488,6 +3492,14 @@ void FeedPill(const Controller& ctl, const UiState& ui, const std::string& key) 
     } else if (key == "forza") {
         if (feeds.ForzaPortBusy()) Pill("Port busy", kRed);
         else Pill(feeds.ForzaSeen() ? "Receiving" : "Switch on in the game", feeds.ForzaSeen() ? kGreen : kAmber);
+    } else if (key == "msfs") {
+        if (feeds.FlightSimSeen()) Pill("Receiving", kGreen);
+        else if (feeds.FlightSimDll() == 0) Pill("Needs SimConnect", kAmber);
+        else Pill("Ready", kGreen);
+    } else if (key == "dcs") {
+        if (feeds.DcsPortBusy()) Pill("Port busy", kRed);
+        else if (feeds.DcsSeen()) Pill("Receiving", kGreen);
+        else Pill(ui.dcsInstalled ? "Set up" : "Not set up", ui.dcsInstalled ? kGreen : kAmber);
     } else {
         Pill(feeds.WarThunderSeen() ? "Receiving" : "Ready", kGreen);
     }
@@ -3579,6 +3591,42 @@ void FeedSetup(Controller& ctl, Integrations& in, UiState& ui, const std::string
                                             "the game."
                     : feeds.ForzaSeen() ? "Receiving while you drive."
                                         : "Works while you drive, once Data Out is on.");
+    } else if (key == "msfs") {
+        if (feeds.FlightSimSeen())
+            Muted("Flight Simulator is sending your aircraft's state.");
+        else if (feeds.FlightSimDll() == 0)
+            Muted("LumaBridge talks to the sim through SimConnect, whose SimConnect.dll comes with Microsoft's free "
+                  "Flight Simulator SDK. In the sim: Options > General Options > Developers > Developer Mode on, "
+                  "then in the Developer menu: Help > SDK Installer. Or copy SimConnect.dll next to LumaBridge.exe. "
+                  "LumaBridge finds it by itself; nothing to set up in the sim.");
+        else
+            Muted("%s", feeds.FlightSimConnected() ? "Connected. It lights up once you're in a flight."
+                                                   : "Nothing to set up: it connects while the sim runs.");
+    } else if (key == "dcs") {
+        if (!ui.dcsFolders) {
+            Muted("DCS World's Saved Games folder wasn't found. Start DCS once, then come back.");
+        } else if (ui.dcsInstalled) {
+            Muted("%s", feeds.DcsPortBusy() ? "UDP port 49717 is taken by another program."
+                        : feeds.DcsSeen() ? "DCS is sending your aircraft's state."
+                                          : "Set up. It lights up in your next mission (restart DCS if it's running).");
+            if (ImGui::Button("Remove##dcs")) {
+                const std::string err = DcsSetUpScripts(true);
+                ui.feedMessageId = "dcs";
+                ui.feedMessage = err.empty() ? "Done: DCS World export removed" : "Failed: " + err;
+                ui.feedCheckAt = 0;
+            }
+        } else {
+            if (PrimaryButton("Set up##dcs")) {
+                const std::string err = DcsSetUpScripts(false);
+                ui.feedMessageId = "dcs";
+                ui.feedMessage = err.empty() ? "Done: DCS World export set up - restart DCS if it's running"
+                                             : "Failed: " + err;
+                ui.feedCheckAt = 0;
+            }
+            ImGui::SameLine();
+            Muted("Adds LumaBridge.lua and one line to Export.lua in Saved Games\\DCS\\Scripts (DCS's own place "
+                  "for export scripts; other scripts there keep working).");
+        }
     } else {
         Muted("%s", feeds.WarThunderSeen() ? "Seen War Thunder's status page this session."
                                            : "Nothing to set up: it works as soon as you're in a battle.");
@@ -3732,7 +3780,7 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
     ImGui::PopFont();
     Muted("These games light up through their own official data, no vendor software needed. Click one to set it up.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
-    static const char* kBuiltIn[] = {"cs2", "rocketleague", "warthunder", "dota2", "league", "forza"};
+    static const char* kBuiltIn[] = {"cs2", "rocketleague", "warthunder", "dota2", "league", "forza", "msfs", "dcs"};
     const float avail = ImGui::GetContentRegionAvail().x;
     const int cols = avail > 700 * S() ? 3 : 1;
     if (ImGui::BeginTable("builtin", cols, ImGuiTableFlags_SizingStretchSame)) {
@@ -4897,6 +4945,110 @@ void SetupGuide(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
     ImGui::EndChild();
 }
 
+// The Auto / Manual switch in the header: a track with a thumb that glides to the chosen
+// side, each side with its icon. Returns true when it changed.
+bool ModeSwitch(int* mode, float w) {
+    ImGui::PushID("mode-switch");
+    const float h = 38 * S(), pad = 4 * S();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const bool clicked = ImGui::InvisibleButton("sw", ImVec2(w, h));
+    const bool hovered = ImGui::IsItemHovered();
+    bool changed = false;
+    if (clicked) {
+        // A click on either half picks it (a click on the chosen one does nothing).
+        const int want = ImGui::GetIO().MousePos.x >= p.x + w / 2 ? 1 : 0;
+        if (want != *mode) {
+            *mode = want;
+            changed = true;
+        }
+    }
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    // Thumb position eases towards the chosen side.
+    ImGuiStorage* st = ImGui::GetStateStorage();
+    const ImGuiID id = ImGui::GetItemID();
+    float t = st->GetFloat(id, static_cast<float>(*mode));
+    t += (static_cast<float>(*mode) - t) * std::min(1.f, ImGui::GetIO().DeltaTime * 14.f);
+    st->SetFloat(id, t);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 b(p.x + w, p.y + h);
+    dl->AddRectFilled(p, b, Hex(kTrack), h / 2);
+    dl->AddRect(p, b, Hex(hovered ? kAccent : kBorder, hovered ? 140 : 170), h / 2, 0, 1.2f * S());
+    const float half = (w - pad * 2) / 2;
+    const ImVec2 ta(p.x + pad + t * half, p.y + pad), tb(ta.x + half, b.y - pad);
+    const float r = (h - pad * 2) / 2;
+    dl->AddRectFilled(ImVec2(ta.x - 2 * S(), ta.y - 2 * S()), ImVec2(tb.x + 2 * S(), tb.y + 2 * S()), Hex(kAccent, 40), r + 2 * S());
+    dl->AddRectFilled(ta, tb, Hex(kAccent), r);
+    // A soft highlight along the thumb's top, towards the second accent color.
+    dl->AddRectFilled(ImVec2(ta.x + r * 0.6f, ta.y + 1 * S()), ImVec2(tb.x - r * 0.6f, ta.y + (tb.y - ta.y) * 0.45f),
+                      Hex(kAccent2, 36), r * 0.8f);
+    const Icon icons[] = {Icon::Game, Icon::Palette};
+    const char* labels[] = {"Auto", "Manual"};
+    for (int i = 0; i < 2; ++i) {
+        // How much of the thumb sits under this side (1 = all of it): its text turns white.
+        const float on = 1.f - std::min(1.f, std::fabs(t - static_cast<float>(i)));
+        const ImVec4 off = V4(hovered ? kText : kMuted), white = V4(0xFFFFFF);
+        const ImU32 col = ImGui::ColorConvertFloat4ToU32(ImVec4(off.x + (white.x - off.x) * on, off.y + (white.y - off.y) * on,
+                                                                off.z + (white.z - off.z) * on, 1.f));
+        const float icon = 16 * S(), gap = 7 * S();
+        const ImVec2 ts = ImGui::CalcTextSize(labels[i]);
+        const float x0 = p.x + pad + i * half + (half - icon - gap - ts.x) / 2, cy = p.y + h / 2;
+        DrawIcon(icons[i], ImVec2(x0 + icon / 2, cy), icon, col);
+        dl->AddText(ImVec2(x0 + icon + gap, cy - ts.y / 2), col, labels[i]);
+    }
+    ImGui::PopID();
+    return changed;
+}
+
+// A small round "?" that explains something when hovered.
+void HelpBadge(const char* id, float size, void (*explain)()) {
+    ImGui::PushID(id);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("help", ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 c(p.x + size / 2, p.y + size / 2);
+    if (hovered) dl->AddCircleFilled(c, size / 2, Hex(kAccent, 60), 24);
+    dl->AddCircle(c, size / 2 - 0.5f, Hex(hovered ? kAccent : kMuted, hovered ? 255 : 150), 24, 1.3f * S());
+    const ImVec2 ts = ImGui::CalcTextSize("?");
+    dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), Hex(hovered ? kText : kMuted), "?");
+    if (hovered) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16 * S(), 14 * S()));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12 * S());
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, V4(kCard));
+        ImGui::PushStyleColor(ImGuiCol_Border, V4(kAccent, 0.5f));
+        ImGui::BeginTooltip();
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 340 * S());
+        explain();
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(2);
+    }
+    ImGui::PopID();
+}
+
+const Fonts* g_fonts = nullptr;  // for help texts drawn from plain callbacks
+
+void ExplainModes() {
+    auto section = [](Icon icon, const char* title, const char* text) {
+        IconItem(icon, 16 * S(), Hex(kAccent));
+        ImGui::SameLine();
+        if (g_fonts) ImGui::PushFont(g_fonts->bold);
+        ImGui::TextUnformatted(title);
+        if (g_fonts) ImGui::PopFont();
+        Muted("%s", text);
+    };
+    section(Icon::Game, "Auto",
+            "Your games drive the lights: team colors, health, bombs, kills and more, on every device at once. "
+            "Between games your idle choice shows (Lighting page): your own look, a rainbow, off, or Armoury Crate.");
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    section(Icon::Palette, "Manual",
+            "Your own look on every device, all the time: pick an effect and colors on the Lighting page, for all "
+            "devices or each one. Games don't change it.");
+}
+
 void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui, const Fonts& f) {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -4942,11 +5094,16 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
     ImGui::PopFont();
     ImGui::EndGroup();
     {
+        g_fonts = &f;
         int mode = ctl.prefs().mode == Mode::Manual ? 1 : 0;
-        const char* labels[] = {"Auto", "Manual"};
-        const float w = 220 * S();
-        ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - w);
-        if (Segmented("mode", &mode, labels, 2, w)) {
+        const float w = 250 * S(), help = 20 * S(), gap = 10 * S();
+        ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - w - gap - help);
+        const float y = ImGui::GetCursorPosY();
+        ImGui::SetCursorPosY(y + (38 * S() - help) / 2);
+        HelpBadge("modes-help", help, ExplainModes);
+        ImGui::SameLine(0, gap);
+        ImGui::SetCursorPosY(y);
+        if (ModeSwitch(&mode, w)) {
             ctl.prefs().mode = mode ? Mode::Manual : Mode::Auto;
             ctl.Changed();
         }

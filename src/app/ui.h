@@ -47,6 +47,7 @@ struct UiState {
     // Built-in game feed setup state (Integrations page), re-checked every couple of seconds.
     unsigned long long feedCheckAt = 0;
     bool cs2Installed = false, rlIniFound = false, rlEnabled = false, dotaInstalled = false;
+    bool dcsFolders = false, dcsInstalled = false;  // DCS World: Saved Games folder found, export set up
     std::wstring cs2Dir, rlDir, dotaDir;
     std::string feedMessage, feedMessageId;  // result of the last direct (non-elevated) write
     bool integrationsLoaded = false;

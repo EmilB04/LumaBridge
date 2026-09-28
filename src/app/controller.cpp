@@ -582,6 +582,8 @@ void Controller::UpdateFeeds(uint64_t now) {
             running.warThunder |= g.profile->feed == games::Feed::WarThunderApi;
             running.league |= g.profile->feed == games::Feed::LeagueLiveClient;
             running.forza |= g.profile->feed == games::Feed::ForzaDataOut;
+            running.flightSim |= g.profile->feed == games::Feed::FlightSimConnect;
+            running.dcs |= g.profile->feed == games::Feed::DcsExport;
         }
     feeds_.SetRunning(running);
     struct {
@@ -595,6 +597,8 @@ void Controller::UpdateFeeds(uint64_t now) {
         {feeds_.Dota2(now), "Game State Integration", "Dota 2"},
         {feeds_.League(now), "Live Client Data API", "League of Legends"},
         {feeds_.Forza(now), "Data Out telemetry", "Forza"},
+        {feeds_.FlightSim(now), "SimConnect", "Microsoft Flight Simulator"},
+        {feeds_.Dcs(now), "export script", "DCS World"},
     };
     static_assert(sizeof(feeds) / sizeof(feeds[0]) == sizeof(feedActive_) / sizeof(feedActive_[0]), "one flag per feed");
     for (size_t i = 0; i < std::size(feeds); ++i) {

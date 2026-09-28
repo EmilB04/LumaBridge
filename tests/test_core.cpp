@@ -25,6 +25,8 @@
 #include "dota2_lighting.h"
 #include "league_lighting.h"
 #include "forza_lighting.h"
+#include "flight_sim_lighting.h"
+#include "dcs_lighting.h"
 #include "war_thunder_lighting.h"
 #include "screen_colors.h"
 #include "smbios.h"
@@ -754,6 +756,76 @@ static void TestLeague() {
     l.OnGameData(data(900, "false", R"({"EventID":5,"EventName":"GameEnd","Result":"Win"})"), 9000);
     CHECK(l.Current(9000).kind == Kind::RainbowWave);
     CHECK(!l.Active(9000 + LeagueLighting::kStaleMs + 1));
+}
+
+static void TestFlightSim() {
+    using namespace luma::app::games;
+    using luma::fx::Kind;
+    CHECK(FindProfile("FlightSimulator.exe", "")->feed == Feed::FlightSimConnect);
+    CHECK(FindProfile("", "Microsoft Flight Simulator (2020)")->feed == Feed::FlightSimConnect);
+    CHECK(FindProfile("FlightSimulator2024.exe", "")->kind == ProfileKind::BuiltIn);
+    int n = 0;
+    FlightSimVars(&n);
+    CHECK(n == 10);
+    // SimConnect's values, in FlightSimVars() order.
+    double v[10] = {0, 0, 0, 0, 1, 0, 1, 40, 100, 1};  // flying by day, beacon on
+    FlightSimLighting f;
+    CHECK(!f.Active(1000));
+    f.OnState(FlightSimFromValues(v, 10), 1000);
+    CHECK(f.Active(1500) && !f.Active(1000 + FlightSimLighting::kStaleMs));
+    CHECK(f.Current().kind == Kind::Beat && f.Current().color1 == (Rgb{255, 0, 0}));  // beacon flashes red
+    v[5] = 1;  // strobes on: white flashes win
+    f.OnState(FlightSimFromValues(v, 10), 1000);
+    CHECK(f.Current().color1 == (Rgb{255, 255, 255}) && f.Current().color2 == (Rgb{60, 150, 255}));
+    v[7] = 5;  // 5 of 100 gallons left
+    f.OnState(FlightSimFromValues(v, 10), 1000);
+    CHECK(f.Current().kind == Kind::Breathing);
+    v[1] = 1;  // stall warning above all
+    f.OnState(FlightSimFromValues(v, 10), 1000);
+    CHECK(f.Current().kind == Kind::Strobe && f.Current().color1 == (Rgb{255, 0, 0}));
+    double parked[10] = {1, 0, 0, 0, 0, 0, 0, 40, 100, 3};  // on the ground at night, engines off
+    f.OnState(FlightSimFromValues(parked, 10), 1000);
+    CHECK(f.Current().kind == Kind::Static && f.Current().color1 == Scale(Rgb{20, 30, 110}, 0.35));
+    f.OnSimRunning(false);  // back in the menus
+    CHECK(!f.Active(1100));
+}
+
+static void TestDcs() {
+    using namespace luma::app::games;
+    using luma::fx::Kind;
+    CHECK(FindProfile("DCS.exe", "")->feed == Feed::DcsExport);
+    DcsLighting d;
+    Json j;
+    CHECK(Json::Parse(R"({"alive":1,"tod":43200,"g":1.0,"agl":1500,"gear":0,"rpm":85,"mw":0})", &j));
+    CHECK(d.OnPacket(j, 1000) && d.Active(1200) && !d.Active(1000 + DcsLighting::kStaleMs));
+    CHECK(d.Current().kind == Kind::Static && d.Current().color1 == (Rgb{60, 150, 255}));  // noon sky
+    Json::Parse(R"({"alive":1,"tod":43200,"g":1.0,"agl":300,"gear":1,"rpm":70,"mw":0})", &j);
+    d.OnPacket(j, 1000);
+    CHECK(d.Current().color1 == (Rgb{0, 255, 60}));  // three greens
+    Json::Parse(R"({"alive":1,"tod":43200,"g":9.2,"agl":300,"gear":1,"rpm":70,"mw":0})", &j);
+    d.OnPacket(j, 1000);
+    CHECK(d.Current().color1 == (Rgb{255, 0, 0}));  // pulling 9 G
+    Json::Parse(R"({"alive":1,"tod":43200,"g":9.2,"agl":300,"gear":1,"rpm":70,"mw":1})", &j);
+    d.OnPacket(j, 1000);
+    CHECK(d.Current().kind == Kind::Strobe);  // master warning above all
+    Json::Parse(R"({"alive":0,"tod":0,"g":1,"agl":0,"gear":0,"rpm":0,"mw":0})", &j);
+    d.OnPacket(j, 1000);
+    CHECK(!d.Active(1100));  // spectating / no aircraft
+    Json::Parse(R"({"stop":1})", &j);
+    d.OnPacket(j, 1000);
+    CHECK(!d.Active(1100));
+
+    // Export.lua: our line is added once, at the end, and taken out again leaving the rest.
+    const std::string srs = "local dcsSr=require('lfs');dofile(dcsSr.writedir()..[[Mods\\Services\\DCS-SRS\\x.lua]])\r\n";
+    const std::string with = DcsExportWithHook(srs);
+    CHECK(DcsHasHook(with) && with.rfind(srs, 0) == 0);
+    CHECK(DcsExportWithHook(with) == with);
+    CHECK(DcsExportWithoutHook(with) == srs);
+    CHECK(DcsHasHook(DcsExportWithHook("")) && DcsExportWithoutHook(DcsExportWithHook("")).empty());
+    CHECK(DcsHasHook(DcsExportWithHook("-- no newline")));
+    const std::string script = DcsScriptText();
+    CHECK(script.find("LuaExportAfterNextFrame") != std::string::npos && script.find("49717") != std::string::npos);
+    CHECK(script.find("prevAfter") != std::string::npos);  // chains the scripts loaded before it
 }
 
 static void TestForza() {
@@ -1543,6 +1615,8 @@ int main() {
     TestDota2();
     TestLeague();
     TestForza();
+    TestFlightSim();
+    TestDcs();
     TestDeviceCatalog();
     TestHyperXRam();
     TestHwSensors();
