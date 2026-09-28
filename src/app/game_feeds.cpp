@@ -181,6 +181,17 @@ void GameFeeds::RlHandle(std::string* buffer) {
         if (!Json::Parse(m, &j)) continue;
         std::lock_guard<std::mutex> lock(mutex_);
         rl_.OnMessage(j, GetTickCount64());
+        // Which team is yours (the camera's target), in the log; if the game never says, the
+        // fields it does send, once, to see why.
+        if (rl_.myTeam() != rlLoggedTeam_) {
+            rlLoggedTeam_ = rl_.myTeam();
+            if (rlLoggedTeam_ >= 0) LUMA_INFO("games: Rocket League: your team is %s", rlLoggedTeam_ ? "orange" : "blue");
+            rlUpdatesWithoutTeam_ = 0;
+        }
+        if (rlLoggedTeam_ < 0 && m.find("UpdateState") != std::string::npos && ++rlUpdatesWithoutTeam_ == 300)
+            LUMA_INFO("games: Rocket League doesn't say which team is yours (no Game.Target) - both team colors. "
+                      "An update: %.600s",
+                      m.c_str());
     }
 }
 

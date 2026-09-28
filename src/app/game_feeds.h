@@ -70,6 +70,7 @@ private:
     std::mutex mutex_;  // guards the engines
     games::Cs2Lighting cs2_;
     games::RocketLeagueLighting rl_;
+    int rlLoggedTeam_ = -1, rlUpdatesWithoutTeam_ = 0;  // for the log (RlHandle)
     games::WarThunderLighting wt_;
 };
 

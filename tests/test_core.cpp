@@ -641,7 +641,21 @@ static void TestRocketLeague() {
     CHECK(rl.OnMessage(J(R"({"Event":"MatchEnded","Data":{"WinnerTeamNum":0}})"), 10000));
     CHECK((rl.Current(10000).kind == Kind::Breathing && rl.Current(10000).color1 == luma::Rgb{24, 115, 255}));
     CHECK(rl.OnMessage(J(R"({"Event":"MatchDestroyed","Data":{}})"), 11000));
-    CHECK(!rl.Active(11000));
+    CHECK(!rl.Active(11000) && rl.myTeam() == -1);
+
+    // Your team (the camera's target): orange -> orange, bright to dim, not blue.
+    RocketLeagueLighting me;
+    CHECK(me.OnMessage(J(R"({"Event":"UpdateState","Data":{"Game":{"bHasTarget":true,"Target":{"Name":"me","TeamNum":1},)"
+                         R"("Teams":[{"TeamNum":0,"ColorPrimary":"1873FF"},{"TeamNum":1,"ColorPrimary":"FF6E00"}]}}})"),
+                       1000));
+    CHECK(me.myTeam() == 1);
+    CHECK((me.Current(1000).kind == Kind::Gradient && me.Current(1000).color1 == luma::Rgb{255, 110, 0} &&
+           me.Current(1000).color2 == luma::Rgb{89, 38, 0}));
+    // No target (spectating): the team stays; a new match forgets it.
+    CHECK(me.OnMessage(J(R"({"Event":"UpdateState","Data":{"Game":{"bHasTarget":false,"Teams":[]}}})"), 2000));
+    CHECK(me.myTeam() == 1);
+    CHECK(me.OnMessage(J(R"({"Event":"MatchCreated","Data":{}})"), 3000));
+    CHECK((me.myTeam() == -1 && me.Current(3000).color2 == luma::Rgb{255, 110, 0}));
 }
 
 static void TestWarThunder() {
@@ -1205,6 +1219,13 @@ static void TestAzothKeys() {
     CHECK(std::memcmp(r[0].data(), head, sizeof head) == 0);
     CHECK(r[1][3] == 2 && r[1][5] == 15 && r[1][9] == 16 && r[1][13] == 0);
     CHECK(KeyColors(kc, Link::Wireless)[0][0] == 0x02 && !IsSave(r[0]));
+    // Through the Omni receiver a report is 64 bytes: 14 keys, so every key's blue fits
+    // (with 15, the 15th key - 1, Q, S, X, space - lost its blue).
+    const auto w = KeyColors(kc, Link::Wireless);
+    CHECK(KeysPerReport(Link::Wired) == 15 && KeysPerReport(Link::Wireless) == 14);
+    CHECK(w.size() == 2 && w[0][3] == 14 && w[1][3] == 3 && w[1][5] == 14);
+    for (const auto& rep : w)
+        for (size_t k = 0; k < rep[3]; ++k) CHECK(8 + k * 4 < ReportSize(Link::Wireless) && rep[8 + k * 4] == 3);
     luma::fx::Params p;
     p.kind = luma::fx::Kind::Static;
     p.color1 = luma::Rgb{200, 100, 50};

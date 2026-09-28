@@ -2,9 +2,12 @@
 // ({"Event": "...", "Data": {...}}, Data sometimes itself a JSON string) on a local port once
 // PacketSendRate is set in TAGame\Config\DefaultStatsAPI.ini. Pure C++, tested.
 //
-// In a match both team colors run around each fan; a goal flashes the scoring team's color,
-// then a comet of it chases around; overtime speeds things up; the winner's color breathes
-// when the match ends. Unknown events are ignored (and counted, for the log).
+// In a match your team's color runs around each fan (bright to dim); a goal flashes the
+// scoring team's color, then a comet of it chases around; overtime speeds things up; the
+// winner's color breathes when the match ends. Your team is the camera's target
+// (Game.Target.TeamNum while Game.bHasTarget): the car the camera follows, yours while you
+// play. Without one (spectating, or before the first update) both team colors run instead.
+// Unknown events are ignored (and counted, for the log).
 #pragma once
 
 #include <cctype>
@@ -109,6 +112,11 @@ public:
             if (game.IsObject()) {
                 inMatch_ = true;
                 overtime_ = game["bOvertime"].Bool(false);
+                const Json& target = game["Target"];
+                if (game["bHasTarget"].Bool(target.IsObject())) {
+                    const int t = static_cast<int>(target["TeamNum"].Number(-1));
+                    if (t == 0 || t == 1) myTeam_ = t;
+                }
                 const Json& teams = game["Teams"];
                 for (size_t i = 0; i < teams.size() && i < 2; ++i) {
                     const int num = static_cast<int>(teams[i]["TeamNum"].Number(static_cast<double>(i)));
@@ -123,8 +131,11 @@ public:
                 goalTeam_ = team;
                 goalAt_ = now;
             }
-        } else if (event == "MatchCreated" || event == "MatchInitialized" || event == "RoundStarted" ||
-                   event == "CountdownBegin") {
+        } else if (event == "MatchCreated" || event == "MatchInitialized") {
+            inMatch_ = true;
+            endedAt_ = 0;
+            myTeam_ = -1;  // a new match: the team comes with the next update
+        } else if (event == "RoundStarted" || event == "CountdownBegin") {
             inMatch_ = true;
             endedAt_ = 0;
         } else if (event == "MatchEnded") {
@@ -134,6 +145,7 @@ public:
         } else if (event == "MatchDestroyed") {
             inMatch_ = false;
             endedAt_ = 0;
+            myTeam_ = -1;
         } else {
             ++unknown_;
         }
@@ -148,10 +160,14 @@ public:
             return Make(Kind::Breathing, teamColor_[winner_], {}, 0.8);
         if (goalAt_ && now - goalAt_ < 2500) return Make(Kind::Strobe, teamColor_[goalTeam_], {}, 5);
         if (goalAt_ && now - goalAt_ < 6000) return Make(Kind::Comet, teamColor_[goalTeam_], {}, 1.2);
+        if (myTeam_ >= 0)
+            return Make(Kind::Gradient, teamColor_[myTeam_], Dim(teamColor_[myTeam_]), overtime_ ? 0.5 : 0.08);
         return Make(Kind::Gradient, teamColor_[0], teamColor_[1], overtime_ ? 0.5 : 0.08);
     }
 
     int unknownEvents() const { return unknown_; }
+    // Your team: 0 blue, 1 orange, -1 not known (yet).
+    int myTeam() const { return myTeam_; }
 
 private:
     static fx::Params Make(fx::Kind k, Rgb c1, Rgb c2 = {}, double speed = 0) {
@@ -161,6 +177,10 @@ private:
         p.color2 = c2;
         p.speed = speed;
         return p;
+    }
+    static Rgb Dim(Rgb c) {
+        return Rgb{static_cast<uint8_t>(c.r * 35 / 100), static_cast<uint8_t>(c.g * 35 / 100),
+                   static_cast<uint8_t>(c.b * 35 / 100)};
     }
     static bool ParseHex(const std::string& in, Rgb* out) {
         std::string s = in;
@@ -179,7 +199,7 @@ private:
 
     uint64_t lastSeen_ = 0, goalAt_ = 0, endedAt_ = 0;
     bool inMatch_ = false, overtime_ = false;
-    int goalTeam_ = 0, winner_ = -1, unknown_ = 0;
+    int goalTeam_ = 0, winner_ = -1, unknown_ = 0, myTeam_ = -1;
     Rgb teamColor_[2] = {kBlue, kOrange};
 };
 

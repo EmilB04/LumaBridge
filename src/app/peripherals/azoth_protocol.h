@@ -144,16 +144,19 @@ inline Effect Simple(Mode m, Rgb c, bool random, uint8_t speed, uint8_t brightne
 }
 
 // Per-key colors (not in Armoury Crate's captures; the command ASUS ROG keyboards take,
-// tested on a wired Azoth): C0 81 <n> 00, then n (up to 15) x <LED number> <R> <G> <B>. The
-// LED numbers are in azoth_layout.h.
+// tested on a wired Azoth): C0 81 <n> 00, then n x <LED number> <R> <G> <B>. The LED numbers
+// are in azoth_layout.h. As many keys as fit the link's report: 15 by cable (65 bytes), 14
+// through the Omni receiver (64 bytes: a 15th key would lose its blue).
+constexpr size_t KeysPerReport(Link l) { return (ReportSize(l) - 5) / 4; }
 struct KeyColor {
     uint8_t led;
     Rgb color;
 };
 inline std::vector<Report> KeyColors(const std::vector<KeyColor>& keys, Link link = Link::Wired) {
     std::vector<Report> out;
-    for (size_t first = 0; first < keys.size(); first += 15) {
-        const size_t n = std::min<size_t>(15, keys.size() - first);
+    const size_t per = KeysPerReport(link);
+    for (size_t first = 0; first < keys.size(); first += per) {
+        const size_t n = std::min(per, keys.size() - first);
         Report r{};
         r[0] = link == Link::Wired ? 0x00 : 0x02;
         r[1] = 0xC0;

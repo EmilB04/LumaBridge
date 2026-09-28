@@ -41,7 +41,7 @@ inline const GameProfile* Profiles(size_t* count) {
          "kills, headshots and round results. Set up once on its page in the Games List, then restart CS2."},
         {"rocketleague", "Rocket League", {"rocketleague.exe"}, {"rocketleague"}, ProfileKind::BuiltIn,
          Feed::RocketLeagueStats, "Built in: Psyonix's Stats API",
-         "Both team colors around the fans, a burst in the scoring team's color on every goal, "
+         "Your team's color around the fans, a burst in the scoring team's color on every goal, "
          "overtime and the winner. Switch the Stats API on once on its page in the Games List, then "
          "restart Rocket League."},
         {"warthunder", "War Thunder", {"aces.exe"}, {"warthunder"}, ProfileKind::BuiltIn, Feed::WarThunderApi,
