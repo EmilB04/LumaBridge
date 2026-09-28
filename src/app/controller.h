@@ -30,6 +30,7 @@
 #include "logitech_output.h"
 #include "azoth_output.h"
 #include "openrgb_output.h"
+#include "lamparray_output.h"
 #include "hardware_helper.h"
 #include "gamesense_server.h"
 #include "ipc.h"
@@ -146,8 +147,8 @@ public:
     struct Presence {
         bool scanned = false;  // the first scan has finished
         bool azoth = false;    // ROG Azoth, by cable or its Omni receiver
-        // RGB brands plugged in by USB that LumaBridge doesn't light itself (device_catalog.h).
-        std::vector<std::string> otherBrands;
+        // Every USB device, as (vendor, product): for naming RGB brands (device_catalog.h).
+        std::vector<std::pair<uint16_t, uint16_t>> usb;
         std::vector<LogitechDevice> logitech;  // with and without RGB lighting
         // Logitech devices with RGB lighting.
         std::vector<LogitechDevice> LogitechRgb() const {
@@ -163,6 +164,14 @@ public:
     // ASUS ROG Azoth over USB (wired).
     const AzothOutput& azoth() const { return azoth_; }
     void SetAzothEnabled(bool on);
+
+    // Devices with Windows' lighting standard built in (HID LampArray), lit directly.
+    const LampArrayOutput& lampArray() const { return lampArray_; }
+    void SetLampArrayEnabled(bool on);
+    // Whether LumaBridge lights this LampArray device: the user's choice, else on unless
+    // LumaBridge already lights it another way (Aura, Logitech, the Azoth).
+    bool LampArrayOn(const LampArrayDevice& d) const;
+    bool LampArrayDefaultOn(const LampArrayDevice& d) const;
 
     // Devices OpenRGB supports, through its SDK server (optional).
     const OpenRgbOutput& openRgb() const { return openRgb_; }
@@ -227,6 +236,7 @@ private:
     LogitechOutput logitech_;
     AzothOutput azoth_;
     OpenRgbOutput openRgb_;
+    LampArrayOutput lampArray_;
     HardwareHelper hardware_;
     uint64_t sensorsPushedAt_ = 0;
     std::string logitechNote_;

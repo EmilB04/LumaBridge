@@ -28,6 +28,7 @@
 #include "azoth_layout.h"
 #include "logitech_hidpp.h"
 #include "openrgb_protocol.h"
+#include "lamparray.h"
 #include "device_catalog.h"
 
 namespace luma::app {
@@ -812,10 +813,22 @@ std::vector<OpenRgbDevice> OpenRgbLit(Controller& ctl) {
     return out;
 }
 
-// RGB hardware found that LumaBridge doesn't light itself: brands on USB, RGB memory by part
-// number. Lit through OpenRGB, if it runs.
+// LampArray devices LumaBridge lights (switched on, and not lit another way).
+std::vector<LampArrayDevice> LampArrayLit(Controller& ctl) {
+    std::vector<LampArrayDevice> out;
+    if (!ctl.prefs().lampArray) return out;
+    for (const auto& d : ctl.lampArray().devices())
+        if (ctl.LampArrayOn(d)) out.push_back(d);
+    return out;
+}
+
+// RGB hardware found that LumaBridge can't light directly: brands on USB (except what it
+// lights itself: ASUS Aura, Logitech, and devices with Windows' lighting standard), RGB
+// memory by part number.
 std::vector<std::string> AlsoFound(const Controller& ctl, const sensors::SystemSnapshot& snap) {
-    std::vector<std::string> out = ctl.presence().otherBrands;
+    std::vector<uint16_t> native{0x046D, 0x0B05};
+    for (const auto& d : ctl.lampArray().devices()) native.push_back(d.vid);
+    std::vector<std::string> out = catalog::RgbBrands(ctl.presence().usb, native);
     for (const auto& m : snap.smbios.memory) {
         const std::string line = catalog::RgbMemory(m.manufacturer, m.part);
         if (!line.empty() && std::find(out.begin(), out.end(), line + " memory") == out.end()) out.push_back(line + " memory");
@@ -879,6 +892,13 @@ void WDevices(DashCtx& c) {
                     : st == AzothOutput::State::NotFound ? "not connected"
                                                          : "Armoury Crate's lighting");
     }
+    for (const auto& d : LampArrayLit(c.ctl)) {
+        IconItem(Icon::Leds, 18 * S(), c.ctl.output().stopped ? Hex(kMuted) : Hex(kAccent));
+        ImGui::SameLine();
+        ImGui::TextUnformatted(d.name.c_str());
+        ImGui::SameLine();
+        Muted("%u lamps", d.lamps);
+    }
     for (const auto& d : OpenRgbLit(c.ctl)) {
         IconItem(Icon::Leds, 18 * S(), c.ctl.output().stopped ? Hex(kMuted) : Hex(kAccent));
         ImGui::SameLine();
@@ -919,6 +939,15 @@ void WConnections(DashCtx& c) {
         ImGui::Dummy(ImVec2(12 * S(), ImGui::GetTextLineHeight()));
         ImGui::SameLine();
         ImGui::TextUnformatted("OpenRGB");
+    }
+    {
+        const bool on = c.ctl.prefs().lampArray && !LampArrayLit(c.ctl).empty();
+        ImGui::GetWindowDrawList()->AddCircleFilled(
+            ImVec2(ImGui::GetCursorScreenPos().x + 5 * S(), ImGui::GetCursorScreenPos().y + ImGui::GetTextLineHeight() / 2),
+            4 * S(), Hex(on ? kGreen : kMuted));
+        ImGui::Dummy(ImVec2(12 * S(), ImGui::GetTextLineHeight()));
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Windows Dynamic Lighting devices");
     }
     const auto& feeds = c.ctl.feeds();
     const struct {
@@ -2039,7 +2068,7 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
         if ((id == std::string(device::kRam) && !(p.ramLighting && HasRgbRam(ctl, snap))) ||
             (id == std::string(device::kMouse) && !(p.logitechDevices && HasLogitechRgb(ctl))) ||
             (id == std::string(device::kKeyboard) && !(p.azothKeyboard && HasAzoth(ctl))) ||
-            (id == std::string(device::kOther) && OpenRgbLit(ctl).empty()))
+            (id == std::string(device::kOther) && OpenRgbLit(ctl).empty() && LampArrayLit(ctl).empty()))
             continue;
         ids.push_back(id);
         labels.push_back(device::Name(id));
@@ -2073,7 +2102,8 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
         if (ui.lightTarget == device::kKeyboard)
             Muted("The Azoth shows the effect key by key, by cable or through its Omni receiver.");
         else if (ui.lightTarget == device::kOther)
-            Muted("Every device lit through OpenRGB shows this lighting, each zone along its LEDs.");
+            Muted("Devices with Windows' lighting standard (and OpenRGB's, if you use it) show this lighting, "
+                  "across each device from left to right.");
         else if (ui.lightTarget == device::kMouse)
             Muted("%s", ctl.logitech().mouseEffect() ? "It shows the effect LED by LED."
                                                       : "Through G HUB it shows one color: the effect's first LED.");
@@ -2142,6 +2172,15 @@ DeviceStatus OpenRgbStatus(const Controller& ctl, const OpenRgbDevice& d) {
         return ctl.OpenRgbDefaultOn(d) ? DeviceStatus{"Off", kMuted}
                                        : DeviceStatus{"Lit by LumaBridge itself", kMuted,
                                                       "LumaBridge lights this device directly, so it's left out here."};
+    return ctl.output().stopped ? DeviceStatus{"Its own effect", kMuted} : DeviceStatus{"Following LumaBridge", kGreen};
+}
+
+DeviceStatus LampArrayStatus(const Controller& ctl, const LampArrayDevice& d) {
+    if (!d.problem.empty()) return {"Can't light it", kAmber, d.problem};
+    if (!ctl.LampArrayOn(d))
+        return ctl.LampArrayDefaultOn(d) ? DeviceStatus{"Off", kMuted}
+                                         : DeviceStatus{"Lit by LumaBridge itself", kMuted,
+                                                        "LumaBridge lights this device another way, so it's left out here."};
     return ctl.output().stopped ? DeviceStatus{"Its own effect", kMuted} : DeviceStatus{"Following LumaBridge", kGreen};
 }
 
@@ -2477,6 +2516,44 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         DeviceLightingCard(ctl, ui, f, device::kKeyboard);
         return;
     }
+    if (id.rfind("lamparray:", 0) == 0) {
+        const std::string name = id.substr(10);
+        for (const auto& d : ctl.lampArray().devices()) {
+            if (d.name != name) continue;
+            char vidpid[16];
+            snprintf(vidpid, sizeof vidpid, "%04X:%04X", d.vid, d.pid);
+            const std::string detail = std::string(lamparray::KindName(d.kind)) + ", " + std::to_string(d.lamps) +
+                                       " lamps, Windows lighting standard (USB " + vidpid + ")";
+            if (!DeviceHeader(ui, f, Icon::Leds, d.name, LampArrayStatus(ctl, d), false, detail)) return;
+            BeginCard("lamparray-device");
+            CardTitle(f, "Settings", Icon::Gear);
+            if (!d.problem.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, V4(kAmber));
+                ImGui::TextWrapped("%s.", d.problem.c_str());
+                ImGui::PopStyleColor();
+                Muted("If Windows' own Dynamic Lighting (Settings > Personalization > Dynamic Lighting) controls it, "
+                      "turn that off for this device.");
+            } else {
+                bool on = ctl.LampArrayOn(d);
+                if (Toggle("Light it", &on)) {
+                    ctl.prefs().lampArrayDevices[d.name] = on;
+                    ctl.Changed();
+                }
+                if (!ctl.LampArrayDefaultOn(d))
+                    Muted("LumaBridge lights this device another way, so it's off here by default: both at once would "
+                          "fight.");
+                else
+                    Muted("Switched off, it runs its own effect again. If Windows' own Dynamic Lighting (Settings > "
+                          "Personalization > Dynamic Lighting) also lights it, turn that off so the two don't take turns.");
+            }
+            EndCard();
+            DeviceLightingCard(ctl, ui, f, device::kOther);
+            return;
+        }
+        if (ImGui::Button("<  All devices")) ui.deviceDetail.clear();
+        Muted("This device isn't there any more.");
+        return;
+    }
     if (id.rfind("openrgb:", 0) == 0) {
         const std::string name = id.substr(8);
         for (const auto& d : ctl.openRgb().devices()) {
@@ -2572,6 +2649,10 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
         rows.push_back({device::kMouse, LogitechName(ctl), LogitechKinds(ctl) + ", through G HUB", Icon::Mouse,
                         LogitechStatus(ctl)});
     if (HasAzoth(ctl)) rows.push_back({device::kKeyboard, "ASUS ROG Azoth", "Keyboard", Icon::Keyboard, AzothStatus(ctl)});
+    if (ctl.prefs().lampArray)
+        for (const auto& d : ctl.lampArray().devices())
+            rows.push_back({"lamparray:" + d.name, d.name, std::string(lamparray::KindName(d.kind)) + ", Windows lighting standard",
+                            Icon::Leds, LampArrayStatus(ctl, d), d.lamps ? static_cast<int>(d.lamps) : -1});
     if (ctl.prefs().openRgb)
         for (const auto& d : ctl.openRgb().devices())
             rows.push_back({"openrgb:" + d.name, d.name, std::string(openrgb::TypeName(d.type)) + ", through OpenRGB",
@@ -2588,7 +2669,9 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
           aura.empty() ? " No Aura devices found: click Rescan devices; if it stays empty, the log (Settings) says why." : "");
     if (!unlit.empty()) Muted("Also found, without RGB lighting: %s.", unlit.c_str());
     if (const auto also = AlsoFound(ctl, snap); !also.empty() && ctl.openRgb().state() != OpenRgbOutput::State::Connected)
-        Muted("Also found: %s. LumaBridge can light these through OpenRGB (Integrations).", Join(also).c_str());
+        Muted("Also found: %s. LumaBridge can't light these directly yet: they don't use Windows' lighting standard. "
+              "Their own app lights them (or OpenRGB, if you use it: Integrations).",
+              Join(also).c_str());
     ImGui::Dummy(ImVec2(0, 2 * S()));
     if (rows.empty()) Muted("Nothing LumaBridge can light was found on this PC yet.");
     else if (ImGui::BeginTable("devices", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
@@ -3109,6 +3192,30 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
     EndCard();
 }
 
+// Devices with Windows' lighting standard built in: nothing to install.
+void LampArrayCard(Controller& ctl, const Fonts& f) {
+    BeginCard("lamparray");
+    IconItem(Icon::Plug, 18 * S(), Hex(kAccent));
+    ImGui::SameLine(0, 10 * S());
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted("Windows Dynamic Lighting devices");
+    ImGui::PopFont();
+    ImGui::SameLine();
+    const auto lit = LampArrayLit(ctl);
+    char pill[48];
+    snprintf(pill, sizeof pill, "%d device%s", static_cast<int>(lit.size()), lit.size() == 1 ? "" : "s");
+    if (!ctl.prefs().lampArray) Pill("Off", kMuted);
+    else if (!lit.empty()) Pill(pill, kGreen);
+    else Pill("None found", kMuted);
+    Muted("Built in: keyboards, mice, headsets, cases and light strips of any brand with Windows' lighting standard "
+          "(HID LampArray, the one Windows 11's Dynamic Lighting uses) in their firmware follow LumaBridge and your "
+          "games, lamp by lamp, with no software from their maker. New devices appear by themselves.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    bool on = ctl.prefs().lampArray;
+    if (Toggle("Enabled", &on)) ctl.SetLampArrayEnabled(on);
+    EndCard();
+}
+
 // OpenRGB: every device it supports, through its SDK server (optional; nothing to install
 // in LumaBridge).
 void OpenRgbCard(Controller& ctl, const Fonts& f) {
@@ -3126,10 +3233,9 @@ void OpenRgbCard(Controller& ctl, const Fonts& f) {
     if (!ctl.prefs().openRgb) Pill("Off", kMuted);
     else if (st == OpenRgbOutput::State::Connected) Pill(pill, kGreen);
     else Pill("OpenRGB isn't running", kAmber);
-    Muted("Lights every device OpenRGB supports (hundreds of keyboards, mice, fans, memory, graphics cards and "
-          "more) with LumaBridge's lighting and your games' lighting. Optional: it needs OpenRGB (openrgb.org) "
-          "running with its SDK server on - in OpenRGB, the SDK Server tab > Start Server (OpenRGB's settings can "
-          "start it automatically). Devices LumaBridge lights itself are left to LumaBridge.");
+    Muted("Only if you already use OpenRGB: LumaBridge then also lights what OpenRGB supports, while OpenRGB runs "
+          "with its SDK server on (its SDK Server tab > Start Server). LumaBridge doesn't need it. Devices LumaBridge "
+          "lights itself are left to LumaBridge.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
     bool on = ctl.prefs().openRgb;
     if (Toggle("Enabled", &on)) ctl.SetOpenRgbEnabled(on);
@@ -3231,6 +3337,7 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
         EndCard();
     }
 
+    LampArrayCard(ctl, f);
     OpenRgbCard(ctl, f);
 
     Muted("Counter-Strike 2, Rocket League and War Thunder light up through their own official data "
@@ -3579,6 +3686,12 @@ void SetupDevicesStep(Controller& ctl, UiState& ui, const Fonts& f) {
                  std::string(hidpp::DeviceTypeName(d.type)) + (d.rgb ? ", RGB lighting" : " - no RGB lighting, left out"));
         if (pres.azoth) line(Icon::Keyboard, true, "ASUS ROG Azoth", "Keyboard, every key its own color");
     }
+    for (const auto& d : ctl.lampArray().devices())
+        line(Icon::Leds, ctl.LampArrayOn(d), d.name,
+             std::string(lamparray::KindName(d.kind)) +
+                 (!d.problem.empty()           ? " - " + d.problem
+                  : ctl.LampArrayOn(d)         ? ", " + std::to_string(d.lamps) + " lamps, Windows lighting standard"
+                                               : " - lit by LumaBridge another way"));
     for (const auto& d : ctl.openRgb().devices())
         line(Icon::Leds, ctl.OpenRgbOn(d), d.name,
              std::string(openrgb::TypeName(d.type)) + (ctl.OpenRgbOn(d) ? ", through OpenRGB" : " - lit by LumaBridge itself"));
@@ -3595,9 +3708,8 @@ void SetupDevicesStep(Controller& ctl, UiState& ui, const Fonts& f) {
         ImGui::PushStyleColor(ImGuiCol_Text, V4(connected ? kMuted : kAmber));
         ImGui::TextWrapped("Also found: %s. %s", Join(also).c_str(),
                            connected ? "OpenRGB lists what it supports of these above."
-                                     : "LumaBridge lights these through OpenRGB: install OpenRGB (openrgb.org), start it and "
-                                       "turn on its SDK server (SDK Server tab > Start Server). Keep OpenRGB devices on "
-                                       "in the next step.");
+                                     : "LumaBridge can't light these directly yet: they don't use Windows' lighting "
+                                       "standard. Their own app lights them (or OpenRGB, if you already use it).");
         ImGui::PopStyleColor();
     }
     EndCard();
@@ -3722,6 +3834,17 @@ bool ChoiceTile(const Fonts& f, const char* id, const char* title, const char* s
     return clicked;
 }
 
+// OpenRGB installed or running (checked at most every few seconds: it lists processes).
+bool OpenRgbOnPc() {
+    static double checkedAt = -100;
+    static bool present = false;
+    if (ImGui::GetTime() - checkedAt > 5) {
+        present = OpenRgbPresent();
+        checkedAt = ImGui::GetTime();
+    }
+    return present;
+}
+
 const Integration* FindIntegration(const Integrations& in, const char* id) {
     for (const auto& it : in.list())
         if (it.id == id) return &it;
@@ -3733,13 +3856,13 @@ void SetupDefaults(Controller& ctl, const Integrations& in, UiState& ui) {
     for (int i = 0; i < setup::kConns; ++i) {
         const Conn c = static_cast<Conn>(i);
         bool on = setup::DefaultOn(c, ui.setupAnswers);
+        if (c == Conn::OpenRgb) on = ctl.prefs().openRgb || OpenRgbOnPc();
         if (const Integration* it = FindIntegration(in, setup::Info(c).integration)) {
             if (it->state == IntegrationState::Active) on = true;
             if (it->state == IntegrationState::Conflict) on = false;  // a vendor runtime would be replaced
         }
         ui.setupConns[i] = on;
     }
-    (void)ctl;
 }
 
 // Applies the switches, then installs the ticked connections one after another.
@@ -3764,6 +3887,9 @@ void SetupRun(Controller& ctl, Integrations& in, UiState& ui) {
             case Conn::RamLighting: ctl.SetRamEnabled(on); break;
             case Conn::OpenRgb:
                 if (ctl.prefs().openRgb != on) ctl.SetOpenRgbEnabled(on);
+                break;
+            case Conn::LampArray:
+                if (ctl.prefs().lampArray != on) ctl.SetLampArrayEnabled(on);
                 break;
             default: break;
             }
@@ -3948,9 +4074,9 @@ void SetupGuide(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
             }
             Muted("%s", ci.why);
             if (!on && !already) {
-                const char* why = it && it->state == IntegrationState::Conflict
-                                      ? it->detail.c_str()
-                                      : setup::OffReason(c, ui.setupAnswers);
+                const char* why = it && it->state == IntegrationState::Conflict ? it->detail.c_str()
+                                  : c == Conn::OpenRgb && OpenRgbOnPc()                ? ""
+                                                                                          : setup::OffReason(c, ui.setupAnswers);
                 if (*why) {
                     ImGui::PushStyleColor(ImGuiCol_Text, V4(kAmber));
                     ImGui::TextWrapped("%s", why);

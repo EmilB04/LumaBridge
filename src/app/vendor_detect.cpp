@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <setupapi.h>
+#include <tlhelp32.h>
 
 #include <string>
 #include <utility>
@@ -62,6 +63,21 @@ std::vector<std::pair<uint16_t, uint16_t>> UsbDevices() {
     }
     SetupDiDestroyDeviceInfoList(set);
     return out;
+}
+
+bool OpenRgbPresent() {
+    if (AnyFolder({L"%ProgramFiles%\\OpenRGB", L"%ProgramFiles(x86)%\\OpenRGB", L"%LOCALAPPDATA%\\Programs\\OpenRGB"}))
+        return true;
+    bool running = false;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32W pe{};
+        pe.dwSize = sizeof pe;
+        for (BOOL ok = Process32FirstW(snap, &pe); ok && !running; ok = Process32NextW(snap, &pe))
+            running = _wcsicmp(pe.szExeFile, L"OpenRGB.exe") == 0;
+        CloseHandle(snap);
+    }
+    return running;
 }
 
 bool UsbDevicePresent(uint16_t vid, std::initializer_list<uint16_t> pids) {

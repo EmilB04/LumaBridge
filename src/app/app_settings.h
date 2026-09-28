@@ -73,8 +73,13 @@ struct Prefs {
     bool azothKeyboard = true;
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper.
     bool ramLighting = true;
-    // Light the devices OpenRGB supports, through its SDK server (when OpenRGB runs).
-    bool openRgb = true;
+    // Light devices with Windows' lighting standard built in (HID LampArray), directly.
+    bool lampArray = true;
+    // Per LampArray device (by name): switched on or off by the user; the rest follow
+    // Controller::LampArrayDefaultOn.
+    std::map<std::string, bool> lampArrayDevices;
+    // Light the devices OpenRGB supports, through its SDK server (only if OpenRGB runs).
+    bool openRgb = false;
     int openRgbPort = 6742;
     // Per OpenRGB device (by name): switched on or off by the user; the rest follow
     // Controller::OpenRgbDefaultOn.

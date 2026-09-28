@@ -249,9 +249,29 @@ The same helper reads the dashboard's fan speeds and CPU / board temperatures
 - Each read holds the shared ISA-bus or PCI lock. Other monitoring chips aren't supported yet;
   LibreHardwareMonitor's web server still works as a fallback.
 
-## Everything else: OpenRGB (optional)
+## Any brand: Windows' lighting standard (HID LampArray)
 
-Devices LumaBridge doesn't light itself can follow it through OpenRGB, when OpenRGB runs with
+Devices that implement HID LampArray in their firmware (the standard Windows 11's Dynamic
+Lighting uses: usage page 0x59, "Lighting And Illumination") are lit directly, with nothing
+installed (`src/app/peripherals/lamparray_output.cpp`). LumaBridge finds every HID interface
+whose top-level collection is a LampArray, reads the array's attributes (lamp count, kind,
+minimum update interval) and each lamp's attributes (position, color levels), turns off the
+device's own effect (AutonomousMode = 0) and sends every lamp's color in multi-update reports
+(as many lamps per report as the device's descriptor allows; the last one of a frame marked
+complete). Effects run across a device left to right, by the lamps' X positions. When
+LumaBridge lets go, AutonomousMode goes back to 1 and the device runs its own effect again.
+
+The reports are addressed by usage through Windows' HidP_* functions, so the layout comes
+from each device's own descriptor. Devices LumaBridge lights another way (the ROG Azoth,
+Logitech through G HUB, the Aura controller) are off here by default. If Windows' own
+Dynamic Lighting also controls a device, the two take turns: turn it off for that device
+(Settings > Personalization > Dynamic Lighting). Not yet tried on a real LampArray device.
+
+## OpenRGB (only if it's already on the PC)
+
+LumaBridge never needs OpenRGB, and the connection is off unless OpenRGB is installed or
+running (the setup guide checks). When it's on, devices LumaBridge doesn't light itself can
+follow it through OpenRGB, while OpenRGB runs with
 its SDK server on (OpenRGB's SDK Server tab > Start Server; port 6742 by default, changeable
 on the Integrations page). LumaBridge is a client of OpenRGB's documented network protocol
 (`src/app/peripherals/openrgb_protocol.h`): it asks for protocol version 1, lists the
@@ -278,4 +298,5 @@ SteelSeries, Corsair, NZXT, Cooler Master, Thermaltake, MSI, Keychron, Alienware
 Gigabyte's RGB Fusion controllers by product, plus RGB memory by part number (Corsair
 Vengeance RGB / Dominator Platinum RGB, G.Skill Trident Z RGB / Neo / Royal / Z5). Vendors
 whose IDs also cover everyday devices (USB sticks, printers, card readers, generic chips)
-are left out, so nothing is named wrongly. These light through OpenRGB.
+are left out, so nothing is named wrongly. A brand whose device has Windows' lighting
+standard is lit directly instead of named here; the rest need their own app (or OpenRGB).

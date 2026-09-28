@@ -1,8 +1,8 @@
 # LumaBridge
 
 Dynamic game lighting on ASUS Aura Sync devices (motherboard, RAM, fans, GPU, Aura
-keyboards like the ROG Azoth), including in games that only support other brands. No
-middleware needed; if OpenRGB runs, LumaBridge can light everything it supports too.
+keyboards like the ROG Azoth), plus any brand's devices with Windows' lighting standard
+built in, including in games that only support other brands. No middleware needed.
 
 ![LumaBridge, Lighting page in Auto mode](docs/images/app-auto.png)
 
@@ -30,8 +30,11 @@ middleware needed; if OpenRGB runs, LumaBridge can light everything it supports 
 - **Devices:** only what your PC has (a mouse without RGB is left out); switch devices on or
   off, and set up your fans (count, LEDs per fan, test pattern). Other RGB brands are
   recognised and named.
-- **OpenRGB (optional):** with OpenRGB running and its SDK server on, every device it
-  supports follows LumaBridge and your games; devices LumaBridge lights itself stay with it.
+- **Windows Dynamic Lighting devices:** keyboards, mice, headsets, cases and strips of any
+  brand with Windows 11's lighting standard (HID LampArray) in their firmware follow
+  LumaBridge lamp by lamp, with no software from their maker.
+- **OpenRGB (only if you already use it):** off unless OpenRGB is on the PC; then what it
+  supports can follow LumaBridge too. LumaBridge never needs it.
 - **Games List:** every game on the PC; open one to set up its built-in lighting (CS2,
   Rocket League, War Thunder) or choose what it shows without lighting, including its own color.
 - **Integrations:** one-click setup per SDK, with live status.

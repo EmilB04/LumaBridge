@@ -16,6 +16,9 @@ struct SetupHardware;
 // `hw`: the SMBIOS scan (board, memory); `auraFound`: the Aura probe found devices.
 setup::Answers DetectVendors(const SetupHardware& hw, bool auraFound);
 
+// Whether OpenRGB is installed (its usual folders) or running.
+bool OpenRgbPresent();
+
 // Every USB device plugged in, as (vendor, product).
 std::vector<std::pair<uint16_t, uint16_t>> UsbDevices();
 

@@ -34,6 +34,7 @@
 #include "setup_plan.h"
 #include "device_catalog.h"
 #include "openrgb_protocol.h"
+#include "lamparray.h"
 #include "hyperx_ram.h"
 #include "hw_sensors.h"
 #include "lightfx_state.h"
@@ -961,6 +962,23 @@ static void TestDeviceLighting() {
     for (const char* id : device::All()) CHECK(device::Name(id)[0] != 0);
 }
 
+static void TestLampArray() {
+    namespace la = luma::app::lamparray;
+    // Levels: 256 or more pass through; fewer are scaled; 0 / 1 level is on or off.
+    CHECK(la::Level(200, 256) == 200 && la::Level(255, 255) == 254 && la::Level(0, 255) == 0);
+    CHECK(la::Level(255, 16) == 15 && la::Level(128, 16) == 8 && la::Level(9, 1) == 1 && la::Level(0, 0) == 0);
+    // Columns by X: left edge 0, right edge the last, a single lamp 0.
+    CHECK(la::Column(1000, 1000, 5000, 32) == 0 && la::Column(5000, 1000, 5000, 32) == 31);
+    CHECK(la::Column(3000, 1000, 5000, 32) == 16 && la::Column(7, 7, 7, 32) == 0 && la::Column(500, 1000, 5000, 32) == 0);
+    // A frame of 10 lamps in reports of 4: 4 + 4 + 2, in order.
+    std::vector<std::pair<uint16_t, luma::Rgb>> lamps;
+    for (uint16_t i = 0; i < 10; ++i) lamps.emplace_back(i, luma::Rgb{static_cast<uint8_t>(i), 0, 0});
+    const auto b = la::Batches(lamps, 4);
+    CHECK(b.size() == 3 && b[0].size() == 4 && b[2].size() == 2 && b[1][0].first == 4 && b[2][1].first == 9);
+    CHECK(la::Batches(lamps, 0).empty() && la::Batches({}, 4).empty());
+    CHECK(std::strcmp(la::KindName(1), "Keyboard") == 0 && std::strcmp(la::KindName(99), "Device") == 0);
+}
+
 static void TestOpenRgb() {
     namespace o = luma::app::openrgb;
     // A packet: "ORGB", device, ID, size, data.
@@ -1253,6 +1271,7 @@ int main() {
     TestSetupHardware();
     TestSetupPlan();
     TestOpenRgb();
+    TestLampArray();
     TestDeviceCatalog();
     TestHyperXRam();
     TestHwSensors();

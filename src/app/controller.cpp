@@ -12,6 +12,7 @@
 #include "azoth_protocol.h"
 #include "vendor_detect.h"
 #include "device_catalog.h"
+#include "logitech_hidpp.h"
 
 namespace luma::app {
 namespace {
@@ -52,6 +53,7 @@ bool Controller::Init() {
     if (prefs_.logitechDevices) logitech_.Start(AppDirectory() + L"\\integrations\\LumaBridge_x64.dll");
     if (prefs_.azothKeyboard) azoth_.Start();
     if (prefs_.openRgb) openRgb_.Start(static_cast<uint16_t>(prefs_.openRgbPort));
+    if (prefs_.lampArray) lampArray_.Start();
     hardware_.Start();
     return true;
 }
@@ -60,6 +62,31 @@ void Controller::SetRamEnabled(bool on) {
     prefs_.ramLighting = on;
 
     Changed();
+}
+
+void Controller::SetLampArrayEnabled(bool on) {
+    prefs_.lampArray = on;
+    if (on) lampArray_.Start();
+    else lampArray_.Stop();  // each device runs its own effect again
+    Changed();
+}
+
+bool Controller::LampArrayDefaultOn(const LampArrayDevice& d) const {
+    if (!d.problem.empty()) return false;
+    if (d.vid == azoth::kVendor) {
+        if (d.pid == azoth::Product(azoth::Link::Wired) || d.pid == azoth::Product(azoth::Link::Wireless))
+            return !prefs_.azothKeyboard;
+        for (uint16_t pid : aurausb::MainboardProductIds())
+            if (d.pid == pid) return false;  // the Aura controller: LumaBridge's own Aura connection
+    }
+    if (d.vid == hidpp::kVendor && prefs_.logitechDevices) return false;
+    return true;
+}
+
+bool Controller::LampArrayOn(const LampArrayDevice& d) const {
+    if (!d.problem.empty()) return false;
+    auto it = prefs_.lampArrayDevices.find(d.name);
+    return it != prefs_.lampArrayDevices.end() ? it->second : LampArrayDefaultOn(d);
 }
 
 void Controller::SetOpenRgbEnabled(bool on) {
@@ -190,7 +217,7 @@ void Controller::RescanPresence() {
         Presence p;
         p.azoth = UsbDevicePresent(azoth::kVendor, {azoth::Product(azoth::Link::Wired), azoth::Product(azoth::Link::Wireless)});
         p.logitech = ScanLogitechDevices();
-        p.otherBrands = catalog::RgbBrands(UsbDevices(), {0x046D, 0x0B05});  // Logitech, ASUS: lit natively
+        p.usb = UsbDevices();
         p.scanned = true;
         return p;
     });
@@ -240,6 +267,7 @@ void Controller::Shutdown(bool handBack) {
     logitech_.Stop();
     azoth_.Stop();
     openRgb_.Stop();
+    lampArray_.Stop();
     hardware_.Stop();
     const bool wasControlling = mirror_.IsRunning();
     mirror_.Stop();
@@ -586,6 +614,13 @@ void Controller::Tick() {
     }
     output_ = next;
     UpdateLogitech();
+    {
+        std::vector<std::string> skip;
+        for (const LampArrayDevice& d : lampArray_.devices())
+            if (!LampArrayOn(d)) skip.push_back(d.name);
+        lampArray_.Set(output_.For(device::kOther), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kOther),
+                       prefs_.lampArray && !output_.stopped, skip);
+    }
     {
         std::vector<std::string> skip;
         for (const OpenRgbDevice& d : openRgb_.devices())

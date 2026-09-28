@@ -15,7 +15,7 @@ enum class Brand { Asus, Logitech, Razer, SteelSeries, Corsair, Azoth, FuryRam, 
 // Lighting software the guide asks about.
 enum class App { ArmouryCrate, GHub, Synapse, SteelSeriesGG, Icue, AlienwareCC, Count };
 // LumaBridge's connections, in the order the guide lists them.
-enum class Conn { Lightsync, Chroma, GameSense, AlienFx, LogitechDevices, Azoth, Helper, RamLighting, OpenRgb, Handback, Count };
+enum class Conn { Lightsync, Chroma, GameSense, AlienFx, LogitechDevices, Azoth, Helper, RamLighting, LampArray, OpenRgb, Handback, Count };
 
 constexpr int kBrands = static_cast<int>(Brand::Count);
 constexpr int kApps = static_cast<int>(App::Count);
@@ -77,7 +77,10 @@ inline const ConnInfo& Info(Conn c) {
         {"Hardware access", "Memory lighting, fan speeds and temperatures (the signed PawnIO driver).", true, true,
          "helper"},
         {"Memory lighting", "Kingston FURY / HyperX RGB sticks (needs Hardware access).", false, false, ""},
-        {"OpenRGB devices", "Everything OpenRGB supports, while OpenRGB runs with its SDK server on.", false, false, ""},
+        {"Windows Dynamic Lighting devices", "Any brand's device with Windows' lighting standard built in, lit directly.",
+         false, false, ""},
+        {"OpenRGB devices", "Only if you use OpenRGB: what it supports, while it runs with its SDK server on.", false, false,
+         ""},
         {"Armoury Crate hand-back", "Gives the lights back to Armoury Crate silently when LumaBridge lets go.", true,
          true, "handback"},
     };
@@ -95,6 +98,7 @@ inline bool DefaultOn(Conn c, const Answers& a) {
     case Conn::LogitechDevices: return a.has(Brand::Logitech);
     case Conn::Azoth: return a.has(Brand::Azoth);
     case Conn::RamLighting: return a.has(Brand::FuryRam);
+    case Conn::OpenRgb: return false;  // only if OpenRGB is on the PC (the guide checks)
     default: return true;
     }
 }
@@ -106,6 +110,7 @@ inline const char* OffReason(Conn c, const Answers& a) {
     case Conn::Chroma: return "Razer Synapse is installed: this would replace its Chroma runtime, and your Razer "
                               "devices would stop getting game lighting from Synapse.";
     case Conn::AlienFx: return "Alienware Command Center is installed: this would replace its AlienFX runtime.";
+    case Conn::OpenRgb: return "OpenRGB isn't on this PC - LumaBridge doesn't need it.";
     default: return "Off because you said you don't have this hardware.";
     }
 }
