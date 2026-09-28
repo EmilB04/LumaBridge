@@ -1888,6 +1888,48 @@ void DrawKeyboard(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>&
 }
 
 // The canvas. `selectable`: clicking a device selects it for editing (Manual mode).
+// The memory slots drawn filled: as set by hand, else as the system scan says, else a guess.
+std::array<bool, 4> RamSlotsShown(Controller& ctl, const SetupHardware& hw) {
+    const int mask = ctl.prefs().ramSlots;
+    if (mask >= 0) return {(mask & 1) != 0, (mask & 2) != 0, (mask & 4) != 0, (mask & 8) != 0};
+    return hw.slotsKnown ? hw.slots : GuessSlots(hw.sticks ? hw.sticks : std::max(ctl.hardware().sticks(), 2));
+}
+
+// Which slots hold a stick, for boards whose firmware doesn't say it clearly: A1 A2 B1 B2
+// from the CPU outward, as printed on the board.
+void RamSlotsCard(Controller& ctl, const Fonts& f) {
+    const SetupHardware hw = DetectSetup(ctl.monitor().Snapshot().smbios);
+    BeginCard("ramslots");
+    CardTitle(f, "Memory slots", Icon::Memory);
+    Muted("%s Click a slot to change it (from the CPU outward, as printed on the board).",
+          ctl.prefs().ramSlots >= 0 ? "Set by you."
+          : hw.slotsKnown         ? "As your board reports them."
+                                  : "Your board doesn't say which slots are used, so this is a guess.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    std::array<bool, 4> slots = RamSlotsShown(ctl, hw);
+    static const char* kNames[] = {"A1", "A2", "B1", "B2"};
+    for (int i = 0; i < 4; ++i) {
+        if (i) ImGui::SameLine();
+        ImGui::PushID(i);
+        char label[24];
+        snprintf(label, sizeof label, "%s  %s", kNames[i], slots[static_cast<size_t>(i)] ? "stick" : "empty");
+        if (slots[static_cast<size_t>(i)] ? PrimaryButton(label, ImVec2(96 * S(), 0)) : ImGui::Button(label, ImVec2(96 * S(), 0))) {
+            slots[static_cast<size_t>(i)] = !slots[static_cast<size_t>(i)];
+            ctl.prefs().ramSlots = (slots[0] ? 1 : 0) | (slots[1] ? 2 : 0) | (slots[2] ? 4 : 0) | (slots[3] ? 8 : 0);
+            ctl.Changed();
+        }
+        ImGui::PopID();
+    }
+    if (ctl.prefs().ramSlots >= 0) {
+        ImGui::SameLine(0, 16 * S());
+        if (ImGui::Button("As the board says")) {
+            ctl.prefs().ramSlots = -1;
+            ctl.Changed();
+        }
+    }
+    EndCard();
+}
+
 void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
     Prefs& prefs = ctl.prefs();
     const float W = ImGui::GetContentRegionAvail().x;
@@ -1912,8 +1954,7 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
     // slots (and selected by clicking the sticks); lit only when RAM lighting is on.
     const SetupHardware hw = DetectSetup(ctl.monitor().Snapshot().smbios);
     const bool ramOn = prefs.ramLighting;
-    const std::array<bool, 4> slots =
-        hw.slotsKnown ? hw.slots : GuessSlots(hw.sticks ? hw.sticks : std::max(ctl.hardware().sticks(), 2));
+    const std::array<bool, 4> slots = RamSlotsShown(ctl, hw);
     if (prefs.azothKeyboard && HasAzoth(ctl))
         items.push_back({device::kKeyboard, device::kKeyboard, ImVec2(330 * S(), 138 * S())});
     if (prefs.logitechDevices && HasLogitechRgb(ctl))
@@ -2539,6 +2580,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         if (hw.sticks) detail += ", " + std::to_string(hw.sticks) + " stick" + (hw.sticks == 1 ? "" : "s") + " found";
         if (!DeviceHeader(ui, f, Icon::Memory, "Memory (RAM)", RamStatus(ctl, setUp), true, detail)) return;
         MemoryCard(ctl, in, ui, f);
+        RamSlotsCard(ctl, f);
         HardwareCard(ctl, in, ui, f);
         DeviceLightingCard(ctl, ui, f, device::kRam);
         return;
@@ -3861,6 +3903,7 @@ void SetupDevicesStep(Controller& ctl, UiState& ui, const Fonts& f) {
         if (ctl.fanTest()) LightsPreview(ctl.output(), l, 0);
         EndCard();
     }
+    if (!snap.smbios.memory.empty()) RamSlotsCard(ctl, f);
 }
 
 void SetupStepper(int step, float width) {

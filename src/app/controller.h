@@ -253,6 +253,7 @@ private:
     std::future<std::vector<InstalledGame>> libraryJob_;
     Presence presence_;
     uint64_t logitechInputAt_ = 0, azothInputAt_ = 0;  // last used (GetTickCount64)
+    bool memoryLogged_ = false;  // the memory slots' names are in the log
     bool logitechAsleep_ = false, azothAsleep_ = false;
     // The mouse's and the keyboard's sleep timeouts right now (0: they don't sleep).
     uint64_t LogitechSleepMs() const;

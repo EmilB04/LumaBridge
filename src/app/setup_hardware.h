@@ -44,9 +44,10 @@ inline std::string Upper(std::string s) {
 }  // namespace detail
 
 // A module's slot (0 A1, 1 A2, 2 B1, 3 B2) from its SMBIOS locator: "DIMM_A2", "A2",
-// "ChannelB-DIMM0", "P0 CHANNEL A / DIMM 1".
-// -1 if it can't tell.
-inline int SlotIndex(const std::string& locator) {
+// "ChannelB-DIMM0", "P0 CHANNEL A / DIMM 1" (the bank locator, then the device locator).
+// "DIMM0" / "DIMM1" count from zero; "DIMM 1" / "DIMM 2" from one, unless `zeroBased` (the
+// board also has a "DIMM 0"). -1 if it can't tell.
+inline int SlotIndex(const std::string& locator, bool zeroBased = false) {
     const std::string s = detail::Upper(locator);
     int channel = -1, dimm = -1;
     const size_t ch = s.find("CHANNEL");
@@ -56,10 +57,9 @@ inline int SlotIndex(const std::string& locator) {
                 channel = s[i] - 'A';
                 break;
             }
-        // "DIMM0" / "DIMM1" count from zero; "DIMM 1" / "DIMM 2" from one.
         const size_t d = s.find("DIMM", ch);
         if (d != std::string::npos && d + 4 < s.size()) {
-            const bool spaced = s[d + 4] == ' ';
+            const bool spaced = s[d + 4] == ' ' && !zeroBased;
             for (size_t i = d + 4; i < s.size(); ++i)
                 if (std::isdigit(static_cast<unsigned char>(s[i]))) {
                     dimm = s[i] - '0' - (spaced ? 1 : 0);
@@ -92,8 +92,14 @@ inline SetupHardware DetectSetup(const sensors::SmbiosInfo& info) {
 
     h.sticks = static_cast<int>(info.memory.size());
     bool allKnown = !info.memory.empty();
+    // Some boards (AMD) name the channel in the bank locator ("P0 CHANNEL A") and the slot in
+    // the device locator ("DIMM 0" / "DIMM 1"); a "DIMM 0" anywhere means they count from zero.
+    bool zeroBased = false;
+    for (const auto& m : info.memory)
+        zeroBased = zeroBased || detail::Upper(m.slot + " " + m.bank).find("DIMM 0") != std::string::npos;
     for (const auto& m : info.memory) {
-        const int slot = SlotIndex(m.slot);
+        int slot = SlotIndex(m.slot, zeroBased);
+        if (slot < 0 && !m.bank.empty()) slot = SlotIndex(m.bank + " / " + m.slot, zeroBased);
         if (slot < 0 || h.slots[static_cast<size_t>(slot)]) allKnown = false;
         else h.slots[static_cast<size_t>(slot)] = true;
     }

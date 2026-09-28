@@ -189,6 +189,8 @@ Prefs LoadPrefs(const std::wstring& ini) {
             pos = bar + 1;
         }
     }
+    v = Read(ini, L"App", L"RamSlots");
+    if (!v.empty()) p.ramSlots = v == L"auto" ? -1 : (_wtoi(v.c_str()) & 15);
     v = Read(ini, L"App", L"RamRelease");
     if (v == L"off") p.ramRelease = 1;
     if (v == L"keep") p.ramRelease = 2;
@@ -287,6 +289,7 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"Sleep", L"Azoth", p.azothSleep ? L"1" : L"0");
     WriteConfigValue(ini, L"Sleep", L"AzothSeconds", Num(p.azothSleepSec));
     WriteConfigValue(ini, L"App", L"RamLighting", p.ramLighting ? L"1" : L"0");
+    WriteConfigValue(ini, L"App", L"RamSlots", p.ramSlots < 0 ? L"auto" : Num(p.ramSlots));
     WriteConfigValue(ini, L"App", L"RamRelease", p.ramRelease == 1 ? L"off" : p.ramRelease == 2 ? L"keep" : L"rainbow");
 
     for (const auto& [id, d] : p.deviceLighting)

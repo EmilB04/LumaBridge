@@ -1290,6 +1290,22 @@ static void TestSetupHardware() {
     CHECK(SlotIndex("ChannelA-DIMM0") == 0 && SlotIndex("ChannelB-DIMM1") == 3);
     CHECK(SlotIndex("P0 CHANNEL A / DIMM 1") == 0 && SlotIndex("P0 CHANNEL B / DIMM 2") == 3);
     CHECK(SlotIndex("BANK 0") == -1 && SlotIndex("") == -1);
+    // AMD boards: the channel in the bank locator, "DIMM 0" / "DIMM 1" counted from zero.
+    CHECK(SlotIndex("P0 CHANNEL B / DIMM 0", true) == 2 && SlotIndex("P0 CHANNEL A / DIMM 1", true) == 1);
+    {
+        luma::app::sensors::SmbiosInfo amd;
+        for (auto [slot, bank] : {std::pair<const char*, const char*>{"DIMM 0", "P0 CHANNEL A"}, {"DIMM 1", "P0 CHANNEL A"},
+                                  {"DIMM 0", "P0 CHANNEL B"}}) {
+            luma::app::sensors::MemoryModule m;
+            m.slot = slot;
+            m.bank = bank;
+            m.manufacturer = "Kingston";
+            m.part = "KF3600C17D4/8GX";
+            amd.memory.push_back(m);
+        }
+        const SetupHardware three = DetectSetup(amd);  // three sticks in the first three slots
+        CHECK(three.slotsKnown && three.slots[0] && three.slots[1] && three.slots[2] && !three.slots[3]);
+    }
 
     luma::app::sensors::SmbiosInfo info;
     info.boardMaker = "ASUSTeK COMPUTER INC.";

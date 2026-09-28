@@ -10,7 +10,8 @@
 namespace luma::app::sensors {
 
 struct MemoryModule {
-    std::string slot;          // "DIMM_A2"
+    std::string slot;          // "DIMM_A2" (device locator)
+    std::string bank;          // "P0 CHANNEL A", "BANK 0" (bank locator; some boards name the channel here)
     std::string manufacturer;  // "Kingston"
     std::string part;          // "KF3600C17D4/8GX"
     uint32_t sizeMb = 0;
@@ -89,6 +90,7 @@ inline SmbiosInfo ParseSmbios(const std::vector<uint8_t>& raw) {
                 MemoryModule m;
                 m.sizeMb = size;
                 m.slot = str(0x10);
+                m.bank = str(0x11);
                 m.manufacturer = str(0x17);
                 m.part = str(0x1A);
                 const uint32_t configured = word(0x20), rated = word(0x15);

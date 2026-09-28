@@ -92,6 +92,9 @@ struct Prefs {
     // Per OpenRGB device (by name): switched on or off by the user; the rest follow
     // Controller::OpenRgbDefaultOn.
     std::map<std::string, bool> openRgbDevices;
+    // Which memory slots hold a stick (bit 0 A1 .. bit 3 B2, from the CPU outward), set by hand
+    // on the Memory page; -1: as the system scan says.
+    int ramSlots = -1;
     // What the RAM shows when LumaBridge lets go of it: 0 its own rainbow, 1 off, 2 the last color.
     int ramRelease = 0;
     // Per device (device::kFans, ...): its own look, or following the main one.

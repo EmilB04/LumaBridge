@@ -11,6 +11,7 @@
 #include "usb_aura.h"
 #include "azoth_protocol.h"
 #include "vendor_detect.h"
+#include "setup_hardware.h"
 #include "device_catalog.h"
 #include "logitech_hidpp.h"
 #include "ghub_settings.h"
@@ -645,6 +646,18 @@ void Controller::Tick() {
         }
     }
 
+    // Once: how the firmware names the memory slots, and where LumaBridge draws each stick.
+    if (!memoryLogged_) {
+        const auto snap = monitor_.Snapshot();
+        if (!snap.smbios.memory.empty()) {
+            memoryLogged_ = true;
+            const SetupHardware hw = DetectSetup(snap.smbios);
+            for (const auto& m : snap.smbios.memory)
+                LUMA_INFO("memory: \"%s\" (bank \"%s\"): %s %s", m.slot.c_str(), m.bank.c_str(), m.manufacturer.c_str(),
+                          m.part.c_str());
+            LUMA_INFO("memory: slots %s", hw.slotsKnown ? "read from the firmware" : "not understood - drawn as a guess");
+        }
+    }
     Output next = Decide();
     // One clock for every device: an effect keeps its start while it runs (colors may change),
     // so fans, board, keyboard and mouse render the same moment of it. A source that sets its
