@@ -85,6 +85,49 @@ inline const GameProfile* Profiles(size_t* count) {
          "The game lights Logitech gear itself through G HUB (LIGHTSYNC), and LumaBridge hands your Logitech gear "
          "to it while it runs. EA's anti-cheat keeps LumaBridge out of the game, so your other devices show your "
          "idle choice, or the screen's colors if you pick them on this page.", true},
+        {"ets2", "Euro Truck Simulator 2", {"eurotrucks2.exe"}, {"eurotrucksimulator2"}, ProfileKind::VendorSdk,
+         Feed::None, "Logitech LIGHTSYNC",
+         "The game lights Logitech gear itself through G HUB (LIGHTSYNC). With Logitech LIGHTSYNC set up on the "
+         "Integrations page, LumaBridge catches that lighting and shows it on every device; otherwise it hands "
+         "your Logitech gear to the game while it runs."},
+        {"tlou1", "The Last of Us Part I", {"tlou-i.exe", "tlou-i-l.exe"}, {"thelastofusparti", "thelastofuspart1"},
+         ProfileKind::VendorSdk, Feed::None, "Logitech LIGHTSYNC",
+         "The game lights Logitech gear itself through G HUB (LIGHTSYNC). With Logitech LIGHTSYNC set up on the "
+         "Integrations page, LumaBridge catches that lighting and shows it on every device; otherwise it hands "
+         "your Logitech gear to the game while it runs."},
+        {"sims4", "The Sims 4", {"ts4_x64.exe"}, {"thesims4"}, ProfileKind::VendorSdk, Feed::None, "Logitech LIGHTSYNC",
+         "The game lights Logitech gear itself through G HUB (LIGHTSYNC). With Logitech LIGHTSYNC set up on the "
+         "Integrations page, LumaBridge catches that lighting and shows it on every device; otherwise it hands "
+         "your Logitech gear to the game while it runs."},
+        {"apex", "Apex Legends", {"r5apex.exe", "r5apex_dx12.exe"}, {"apexlegends"}, ProfileKind::VendorSdk, Feed::None,
+         "Razer Chroma",
+         "Install Razer Chroma on the Integrations page, and switch the game's Razer Chroma option on if it has "
+         "one. Its anti-cheat may refuse LumaBridge's DLL; if nothing happens, use Screen colors."},
+        {"pubg", "PUBG: BATTLEGROUNDS", {"tslgame.exe"}, {"pubgbattlegrounds", "playerunknownsbattlegrounds"},
+         ProfileKind::VendorSdk, Feed::None, "Razer Chroma",
+         "Install Razer Chroma on the Integrations page, and switch the game's Razer Chroma option on if it has "
+         "one. Its anti-cheat may refuse LumaBridge's DLL; if nothing happens, use Screen colors."},
+        {"marvelrivals", "Marvel Rivals", {"marvel-win64-shipping.exe"}, {"marvelrivals"}, ProfileKind::VendorSdk,
+         Feed::None, "Razer Chroma (switch on in its launcher)",
+         "Turn on Razer Chroma RGB in the Marvel Rivals launcher's settings (off by default). It talks to Razer's "
+         "own Chroma app, so it lights Razer gear through Razer Synapse; your other devices show your idle choice, "
+         "or the screen's colors if you pick them on this page."},
+        {"hitman3", "HITMAN World of Assassination", {"hitman3.exe"}, {"hitmanworldofassassination", "hitman3"},
+         ProfileKind::VendorSdk, Feed::None, "Razer Chroma",
+         "Install Razer Chroma on the Integrations page and switch on Razer Chroma in the game's options. If the "
+         "game crashes at start with it on, switch it off there and use Screen colors."},
+        {"destiny2", "Destiny 2", {"destiny2.exe"}, {"destiny2"}, ProfileKind::NoSupport, Feed::None,
+         "No known lighting support", "No dynamic lighting of its own (only fixed profiles made by fans). Use Screen colors."},
+        {"r6siege", "Rainbow Six Siege", {"rainbowsix.exe", "rainbowsix_vulkan.exe"},
+         {"tomclancysrainbowsixsiege", "rainbowsixsiege", "tomclancysrainbowsixsiegex"}, ProfileKind::NoSupport, Feed::None,
+         "No known lighting support", "No dynamic lighting of its own (only fixed profiles made by fans). Use Screen colors."},
+        {"rdr2", "Red Dead Redemption 2", {"rdr2.exe"}, {"reddeadredemption2"}, ProfileKind::NoSupport, Feed::None,
+         "No known lighting support", "No dynamic lighting of its own (only fixed profiles made by fans). Use Screen colors."},
+        {"cod", "Call of Duty", {"cod.exe"}, {"callofduty"}, ProfileKind::NoSupport, Feed::None,
+         "No known lighting support",
+         "Only fixed iCUE / Chroma profiles in the game's colors, nothing that follows the game. Use Screen colors."},
+        {"wallpaperengine", "Wallpaper Engine", {"wallpaper32.exe", "wallpaper64.exe"}, {"wallpaperengine"},
+         ProfileKind::NotAGame, Feed::None, "Not a game (animated wallpapers)", "Ignored in Auto mode."},
         {"bombanana", "BOMBANANA!", {nullptr}, {"bombanana"}, ProfileKind::NoSupport, Feed::None,
          "No known lighting support", "Use Screen colors."},
         {"nobackup", "NO BACKUP", {nullptr}, {"nobackup"}, ProfileKind::NoSupport, Feed::None,

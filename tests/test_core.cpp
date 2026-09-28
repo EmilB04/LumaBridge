@@ -594,6 +594,11 @@ static void TestGameProfiles() {
     CHECK(FindProfile("DSX.exe", "DSX")->kind == ProfileKind::NotAGame);
     CHECK(FindProfile("bf1.exe", "")->kind == ProfileKind::VendorSdk);
     CHECK(FindProfile("bf2042.exe", "")->blocked && FindProfile("bf1.exe", "")->blocked);
+    CHECK(FindProfile("", "Euro Truck Simulator 2")->kind == ProfileKind::VendorSdk);
+    CHECK(FindProfile("", "The Last of Us\xE2\x84\xA2 Part I")->kind == ProfileKind::VendorSdk);  // with the TM sign
+    CHECK(FindProfile("r5apex.exe", "")->kind == ProfileKind::VendorSdk);
+    CHECK(FindProfile("", "Tom Clancy's Rainbow Six Siege")->kind == ProfileKind::NoSupport);
+    CHECK(FindProfile("wallpaper64.exe", "")->kind == ProfileKind::NotAGame);
     CHECK(FindProfile("bf6.exe", "")->kind == ProfileKind::VendorSdk && FindProfile("bf6.exe", "")->blocked);
     CHECK(!FindProfile("overwatch.exe", "")->blocked && !FindProfile("cs2.exe", "")->blocked);
     // Blocked games light Logitech gear through G HUB: LumaBridge hands the gear to them.
