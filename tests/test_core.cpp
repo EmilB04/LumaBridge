@@ -142,7 +142,29 @@ static void TestEffects() {
     CHECK((Render(p, 0.0, 0, 3) == Rgb{255, 0, 0}));
     CHECK((Render(p, 0.0, 1, 3) == Rgb{0, 255, 0}));
     CHECK((Render(p, 0.0, 2, 3) == Rgb{0, 0, 255}));
-    CHECK((Render(p, 1.0 / 3.0, 0, 3) == Rgb{0, 255, 0}));  // rotated one step
+    CHECK((Render(p, 1.0 / 3.0, 1, 3) == Rgb{255, 0, 0}));  // one step on: red moved right
+    CHECK((Render(p, 1.0 / 3.0, 0, 3) == Rgb{0, 0, 255}));
+    {
+        // Every moving effect travels the same way: towards higher LED numbers (right), and
+        // left when reversed. Follow color1's peak for a tenth of a cycle.
+        auto peak = [](Params q, double t) {
+            int best = 0, bestR = -1;
+            for (int i = 0; i < 20; ++i)
+                if (Render(q, t, i, 20).r > bestR) bestR = Render(q, t, best = i, 20).r;
+            return best;
+        };
+        for (Kind k : {Kind::Gradient, Kind::Comet}) {
+            Params q;
+            q.kind = k;
+            q.color1 = {255, 0, 0};
+            q.color2 = {0, 0, 0};
+            q.speed = 1;
+            CHECK(peak(q, 0.1) > peak(q, 0.0));
+            q.reverse = true;
+            CHECK(peak(q, 0.1) != peak(q, 0.0));
+            CHECK((peak(q, 0.1) - peak(q, 0.0) + 20) % 20 > 10);  // moved left (wrapping)
+        }
+    }
 
     // Customized rainbows.
     Params rb;

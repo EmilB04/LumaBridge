@@ -112,6 +112,7 @@ inline Rgb Render(const Params& p, double t, int i, int count) {
     using namespace detail;
     if (count < 1) count = 1;
     // 0..1 around the ring; mirrored when reversed, so moving patterns turn the other way.
+    // Unreversed, every moving pattern travels towards higher LED numbers (to the right).
     const double pos = static_cast<double>(p.reverse && i % count ? count - i % count : i % count) / count;
     const double phase = t * p.speed;
     switch (p.kind) {
@@ -122,10 +123,10 @@ inline Rgb Render(const Params& p, double t, int i, int count) {
     case Kind::ColorCycle:
         return RainbowAt(p, phase);
     case Kind::RainbowWave:
-        return RainbowAt(p, pos * (p.spread > 0.1 ? p.spread : 0.1) + phase);
+        return RainbowAt(p, pos * (p.spread > 0.1 ? p.spread : 0.1) - phase);
     case Kind::Gradient: {
         // Triangle wave so the ring is seamless: color1 at 0, color2 at 0.5, color1 at 1.
-        const double x = Frac(pos + phase);
+        const double x = Frac(pos - phase);
         return Lerp(p.color1, p.color2, 1.0 - std::fabs(2.0 * x - 1.0));
     }
     case Kind::Comet: {
