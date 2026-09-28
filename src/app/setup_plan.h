@@ -15,7 +15,7 @@ enum class Brand { Asus, Logitech, Razer, SteelSeries, Corsair, Azoth, FuryRam, 
 // Lighting software the guide asks about.
 enum class App { ArmouryCrate, GHub, Synapse, SteelSeriesGG, Icue, AlienwareCC, Count };
 // LumaBridge's connections, in the order the guide lists them.
-enum class Conn { Lightsync, Chroma, GameSense, AlienFx, LogitechDevices, Azoth, Helper, RamLighting, Handback, Count };
+enum class Conn { Lightsync, Chroma, GameSense, AlienFx, LogitechDevices, Azoth, Helper, RamLighting, OpenRgb, Handback, Count };
 
 constexpr int kBrands = static_cast<int>(Brand::Count);
 constexpr int kApps = static_cast<int>(App::Count);
@@ -77,6 +77,7 @@ inline const ConnInfo& Info(Conn c) {
         {"Hardware access", "Memory lighting, fan speeds and temperatures (the signed PawnIO driver).", true, true,
          "helper"},
         {"Memory lighting", "Kingston FURY / HyperX RGB sticks (needs Hardware access).", false, false, ""},
+        {"OpenRGB devices", "Everything OpenRGB supports, while OpenRGB runs with its SDK server on.", false, false, ""},
         {"Armoury Crate hand-back", "Gives the lights back to Armoury Crate silently when LumaBridge lets go.", true,
          true, "handback"},
     };

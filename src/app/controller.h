@@ -29,6 +29,7 @@
 #include "system_monitor.h"
 #include "logitech_output.h"
 #include "azoth_output.h"
+#include "openrgb_output.h"
 #include "hardware_helper.h"
 #include "gamesense_server.h"
 #include "ipc.h"
@@ -145,6 +146,8 @@ public:
     struct Presence {
         bool scanned = false;  // the first scan has finished
         bool azoth = false;    // ROG Azoth, by cable or its Omni receiver
+        // RGB brands plugged in by USB that LumaBridge doesn't light itself (device_catalog.h).
+        std::vector<std::string> otherBrands;
         std::vector<LogitechDevice> logitech;  // with and without RGB lighting
         // Logitech devices with RGB lighting.
         std::vector<LogitechDevice> LogitechRgb() const {
@@ -160,6 +163,14 @@ public:
     // ASUS ROG Azoth over USB (wired).
     const AzothOutput& azoth() const { return azoth_; }
     void SetAzothEnabled(bool on);
+
+    // Devices OpenRGB supports, through its SDK server (optional).
+    const OpenRgbOutput& openRgb() const { return openRgb_; }
+    void SetOpenRgbEnabled(bool on);
+    // Whether LumaBridge lights this OpenRGB device: the user's choice, else on unless
+    // LumaBridge already lights it itself (Aura, Logitech, the Azoth, FURY / HyperX memory).
+    bool OpenRgbOn(const OpenRgbDevice& d) const;
+    bool OpenRgbDefaultOn(const OpenRgbDevice& d) const;
     // HyperX / Kingston FURY RGB memory, through the elevated RAM helper.
     // The hardware helper: RAM lighting and the built-in sensors.
     HardwareHelper& hardware() { return hardware_; }
@@ -215,6 +226,7 @@ private:
     sensors::SystemMonitor monitor_;
     LogitechOutput logitech_;
     AzothOutput azoth_;
+    OpenRgbOutput openRgb_;
     HardwareHelper hardware_;
     uint64_t sensorsPushedAt_ = 0;
     std::string logitechNote_;

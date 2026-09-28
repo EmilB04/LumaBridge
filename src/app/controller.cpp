@@ -11,6 +11,7 @@
 #include "usb_aura.h"
 #include "azoth_protocol.h"
 #include "vendor_detect.h"
+#include "device_catalog.h"
 
 namespace luma::app {
 namespace {
@@ -50,6 +51,7 @@ bool Controller::Init() {
     monitor_.Start(prefs_.lhmPort);
     if (prefs_.logitechDevices) logitech_.Start(AppDirectory() + L"\\integrations\\LumaBridge_x64.dll");
     if (prefs_.azothKeyboard) azoth_.Start();
+    if (prefs_.openRgb) openRgb_.Start(static_cast<uint16_t>(prefs_.openRgbPort));
     hardware_.Start();
     return true;
 }
@@ -58,6 +60,37 @@ void Controller::SetRamEnabled(bool on) {
     prefs_.ramLighting = on;
 
     Changed();
+}
+
+void Controller::SetOpenRgbEnabled(bool on) {
+    prefs_.openRgb = on;
+    if (on) openRgb_.Start(static_cast<uint16_t>(prefs_.openRgbPort));
+    else openRgb_.Stop();  // each device gets its own effect back
+    Changed();
+}
+
+namespace {
+bool Has(const std::string& s, const char* part) {
+    std::string a = s, b = part;
+    for (auto& c : a) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (auto& c : b) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return a.find(b) != std::string::npos;
+}
+}  // namespace
+
+bool Controller::OpenRgbDefaultOn(const OpenRgbDevice& d) const {
+    const std::string who = d.name + " " + d.vendor;
+    // ASUS Aura: the motherboard and its headers (LumaBridge's own Aura connection).
+    if (!knownDevices_.empty() && Has(who, "asus") && (d.type == 0 || d.type == 4)) return false;
+    if (prefs_.logitechDevices && Has(who, "logitech")) return false;
+    if (prefs_.azothKeyboard && Has(who, "azoth")) return false;
+    if (prefs_.ramLighting && d.type == 1 && (Has(who, "kingston") || Has(who, "hyperx") || Has(who, "fury"))) return false;
+    return true;
+}
+
+bool Controller::OpenRgbOn(const OpenRgbDevice& d) const {
+    auto it = prefs_.openRgbDevices.find(d.name);
+    return it != prefs_.openRgbDevices.end() ? it->second : OpenRgbDefaultOn(d);
 }
 
 void Controller::SetAzothEnabled(bool on) {
@@ -157,6 +190,7 @@ void Controller::RescanPresence() {
         Presence p;
         p.azoth = UsbDevicePresent(azoth::kVendor, {azoth::Product(azoth::Link::Wired), azoth::Product(azoth::Link::Wireless)});
         p.logitech = ScanLogitechDevices();
+        p.otherBrands = catalog::RgbBrands(UsbDevices(), {0x046D, 0x0B05});  // Logitech, ASUS: lit natively
         p.scanned = true;
         return p;
     });
@@ -205,6 +239,7 @@ void Controller::Shutdown(bool handBack) {
     monitor_.Stop();
     logitech_.Stop();
     azoth_.Stop();
+    openRgb_.Stop();
     hardware_.Stop();
     const bool wasControlling = mirror_.IsRunning();
     mirror_.Stop();
@@ -551,6 +586,13 @@ void Controller::Tick() {
     }
     output_ = next;
     UpdateLogitech();
+    {
+        std::vector<std::string> skip;
+        for (const OpenRgbDevice& d : openRgb_.devices())
+            if (!OpenRgbOn(d)) skip.push_back(d.name);
+        openRgb_.Set(output_.For(device::kOther), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kOther),
+                     prefs_.openRgb && !output_.stopped, skip);
+    }
     azoth_.Set(output_.For(device::kKeyboard), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kKeyboard), prefs_.azothKeyboard && !output_.stopped);
     hardware_.SetRam(output_.For(device::kRam), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kRam), prefs_.ramLighting, !output_.stopped, prefs_.ramRelease);
     if (now - sensorsPushedAt_ >= 500) {

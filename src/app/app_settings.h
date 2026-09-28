@@ -73,6 +73,12 @@ struct Prefs {
     bool azothKeyboard = true;
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper.
     bool ramLighting = true;
+    // Light the devices OpenRGB supports, through its SDK server (when OpenRGB runs).
+    bool openRgb = true;
+    int openRgbPort = 6742;
+    // Per OpenRGB device (by name): switched on or off by the user; the rest follow
+    // Controller::OpenRgbDefaultOn.
+    std::map<std::string, bool> openRgbDevices;
     // What the RAM shows when LumaBridge lets go of it: 0 its own rainbow, 1 off, 2 the last color.
     int ramRelease = 0;
     // Per device (device::kFans, ...): its own look, or following the main one.

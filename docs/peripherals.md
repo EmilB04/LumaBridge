@@ -248,3 +248,34 @@ The same helper reads the dashboard's fan speeds and CPU / board temperatures
   CPU optional, AIO pump); check them against your BIOS.
 - Each read holds the shared ISA-bus or PCI lock. Other monitoring chips aren't supported yet;
   LibreHardwareMonitor's web server still works as a fallback.
+
+## Everything else: OpenRGB (optional)
+
+Devices LumaBridge doesn't light itself can follow it through OpenRGB, when OpenRGB runs with
+its SDK server on (OpenRGB's SDK Server tab > Start Server; port 6742 by default, changeable
+on the Integrations page). LumaBridge is a client of OpenRGB's documented network protocol
+(`src/app/peripherals/openrgb_protocol.h`): it asks for protocol version 1, lists the
+devices, puts each one in its direct mode and sends every LED's color (~30 times a second,
+only when something changed; each zone shows the effect along its LEDs). When LumaBridge
+lets go (Stop, a game handing back, the device switched off), each device gets its original
+mode back, byte for byte as OpenRGB described it.
+
+Devices LumaBridge already lights itself are off in OpenRGB by default, so the two never
+fight: ASUS Aura (motherboard and LED strips), Logitech, the ROG Azoth and Kingston FURY /
+HyperX memory. Each OpenRGB device has its own page (Devices) to switch it on or off, and all
+of them share the "Other devices" lighting.
+
+Tested against a stand-in server built on the openrgb-python library's encoder (the
+controller description and the mode sent back matched byte for byte); not yet with OpenRGB
+itself. Note: openrgb-python's own encoder pads matrix zones (native struct alignment), so it
+isn't a reference for those; OpenRGB writes them unpadded.
+
+## Recognised, not lit natively
+
+The setup guide and the Devices page name RGB hardware LumaBridge doesn't light itself
+(`src/app/device_catalog.h`): USB vendors that make RGB gear almost only (Razer,
+SteelSeries, Corsair, NZXT, Cooler Master, Thermaltake, MSI, Keychron, Alienware) and
+Gigabyte's RGB Fusion controllers by product, plus RGB memory by part number (Corsair
+Vengeance RGB / Dominator Platinum RGB, G.Skill Trident Z RGB / Neo / Royal / Z5). Vendors
+whose IDs also cover everyday devices (USB sticks, printers, card readers, generic chips)
+are left out, so nothing is named wrongly. These light through OpenRGB.

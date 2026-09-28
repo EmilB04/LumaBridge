@@ -153,6 +153,21 @@ Prefs LoadPrefs(const std::wstring& ini) {
     v = Read(ini, L"App", L"RamLighting");
     if (!v.empty()) p.ramLighting = v != L"0";
     p.setupDone = Read(ini, L"App", L"SetupDone") == L"1";
+    v = Read(ini, L"OpenRGB", L"Enabled");
+    if (!v.empty()) p.openRgb = v != L"0";
+    v = Read(ini, L"OpenRGB", L"Port");
+    if (!v.empty() && _wtoi(v.c_str()) > 0) p.openRgbPort = _wtoi(v.c_str());
+    {
+        const std::string list = Narrow(Read(ini, L"OpenRGB", L"Devices"));  // "name=1|name=0"
+        for (size_t pos = 0; pos < list.size();) {
+            size_t bar = list.find('|', pos);
+            const std::string item = list.substr(pos, bar - pos);
+            const size_t eq = item.rfind('=');
+            if (eq != std::string::npos && eq > 0) p.openRgbDevices[item.substr(0, eq)] = item.substr(eq + 1) == "1";
+            if (bar == std::string::npos) break;
+            pos = bar + 1;
+        }
+    }
     v = Read(ini, L"App", L"RamRelease");
     if (v == L"off") p.ramRelease = 1;
     if (v == L"keep") p.ramRelease = 2;
@@ -203,6 +218,13 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"LightingStopped", p.lightingStopped ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"StartMinimized", p.startMinimized ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"SetupDone", p.setupDone ? L"1" : L"0");
+    WriteConfigValue(ini, L"OpenRGB", L"Enabled", p.openRgb ? L"1" : L"0");
+    WriteConfigValue(ini, L"OpenRGB", L"Port", Num(p.openRgbPort));
+    {
+        std::string list;
+        for (const auto& [name, on] : p.openRgbDevices) list += (list.empty() ? "" : "|") + name + (on ? "=1" : "=0");
+        WriteConfigValue(ini, L"OpenRGB", L"Devices", Widen(list));
+    }
     std::string recent;
     for (size_t i = 0; i < p.recentColors.size(); ++i) recent += (i ? "," : "") + ToHex(p.recentColors[i]);
     WriteConfigValue(ini, L"App", L"RecentColors", Widen(recent));

@@ -32,6 +32,8 @@
 #include "device_lighting.h"
 #include "setup_hardware.h"
 #include "setup_plan.h"
+#include "device_catalog.h"
+#include "openrgb_protocol.h"
 #include "hyperx_ram.h"
 #include "hw_sensors.h"
 #include "lightfx_state.h"
@@ -959,6 +961,99 @@ static void TestDeviceLighting() {
     for (const char* id : device::All()) CHECK(device::Name(id)[0] != 0);
 }
 
+static void TestOpenRgb() {
+    namespace o = luma::app::openrgb;
+    // A packet: "ORGB", device, ID, size, data.
+    const o::Bytes pk = o::Packet(3, o::kUpdateLeds, {1, 2});
+    CHECK(pk.size() == 18 && pk[0] == 'O' && pk[3] == 'B' && pk[4] == 3 && pk[8] == 0x1A && pk[9] == 0x04 && pk[12] == 2);
+    auto h = o::ParseHeader(pk.data(), pk.size());
+    CHECK(h && h->device == 3 && h->id == o::kUpdateLeds && h->size == 2);
+    CHECK(!o::ParseHeader(pk.data(), 10));
+    // UpdateLEDs: size of everything, count, colors (R | G << 8 | B << 16).
+    const o::Bytes up = o::UpdateLeds({luma::Rgb{1, 2, 3}, luma::Rgb{255, 0, 0}});
+    CHECK(up.size() == 14 && up[0] == 14 && up[4] == 2 && up[6] == 1 && up[7] == 2 && up[8] == 3 && up[10] == 255);
+
+    // A controller as OpenRGB describes it (protocol 1): two modes (the second active), a
+    // linear zone of 3 LEDs and a matrix zone of 2, 5 LEDs.
+    o::Bytes c;
+    auto str = [&](const std::string& t) {
+        o::PutU16(&c, static_cast<uint16_t>(t.size() + 1));
+        c.insert(c.end(), t.begin(), t.end());
+        c.push_back(0);
+    };
+    auto mode = [&](const std::string& name, uint16_t colors) {
+        str(name);
+        for (int i = 0; i < 9; ++i) o::PutU32(&c, static_cast<uint32_t>(i));
+        o::PutU16(&c, colors);
+        for (uint16_t i = 0; i < colors; ++i) o::PutU32(&c, 0x00FF00);
+    };
+    o::PutU32(&c, 0);  // size, filled in below
+    o::PutU32(&c, 6);  // mouse
+    str("Corsair Harpoon RGB");
+    str("Corsair");
+    str("desc");
+    str("1.0");
+    str("serial");
+    str("HID: /dev/x");
+    o::PutU16(&c, 2);
+    o::PutU32(&c, 1);  // active mode
+    mode("Direct", 0);
+    const size_t activeAt = c.size();
+    mode("Static", 1);
+    const size_t activeEnd = c.size();
+    o::PutU16(&c, 2);  // zones
+    str("Logo");
+    o::PutU32(&c, 1);
+    o::PutU32(&c, 3);
+    o::PutU32(&c, 3);
+    o::PutU32(&c, 3);
+    o::PutU16(&c, 0);  // no matrix
+    str("Keys");
+    o::PutU32(&c, 2);
+    o::PutU32(&c, 2);
+    o::PutU32(&c, 2);
+    o::PutU32(&c, 2);
+    o::PutU16(&c, 16);  // matrix: height 1, width 2, map of 2
+    for (uint32_t v : {1u, 2u, 0u, 1u}) o::PutU32(&c, v);
+    o::PutU16(&c, 5);  // LEDs
+    for (int i = 0; i < 5; ++i) {
+        str("LED " + std::to_string(i));
+        o::PutU32(&c, static_cast<uint32_t>(i));
+    }
+    o::PutU16(&c, 5);  // colors
+    for (int i = 0; i < 5; ++i) o::PutU32(&c, 0);
+    const uint32_t size = static_cast<uint32_t>(c.size());
+    for (int i = 0; i < 4; ++i) c[static_cast<size_t>(i)] = static_cast<uint8_t>(size >> (8 * i));
+
+    auto ctl = o::ParseController(c.data(), c.size(), 1);
+    CHECK(ctl && ctl->type == 6 && ctl->name == "Corsair Harpoon RGB" && ctl->vendor == "Corsair");
+    CHECK(ctl->location == "HID: /dev/x" && ctl->zones.size() == 2 && ctl->zones[0].leds == 3 && ctl->zones[1].leds == 2);
+    CHECK(ctl->leds == 5 && ctl->activeMode == 1);
+    CHECK(ctl->activeModeData == o::Bytes(c.begin() + static_cast<long>(activeAt), c.begin() + static_cast<long>(activeEnd)));
+    const o::Bytes um = o::UpdateMode(1, ctl->activeModeData);
+    CHECK(um.size() == 8 + ctl->activeModeData.size() && um[0] == um.size() && um[4] == 1);
+    // Cut short: not parsed (skipped, not a crash).
+    CHECK(!o::ParseController(c.data(), c.size() - 3, 1));
+    CHECK(!o::ParseController(c.data(), 3, 1));
+    CHECK(std::strcmp(o::TypeName(6), "Mouse") == 0 && std::strcmp(o::TypeName(99), "Device") == 0);
+}
+
+static void TestDeviceCatalog() {
+    namespace c = luma::app::catalog;
+    CHECK(std::string(c::RgbBrand(0x1B1C, 0x1234)) == "Corsair");
+    CHECK(std::string(c::RgbBrand(0x048D, 0x5702)) == "Gigabyte RGB Fusion");
+    CHECK(c::RgbBrand(0x048D, 0x1234) == nullptr);  // ITE makes more than RGB controllers
+    CHECK(c::RgbBrand(0x0951, 0x1666) == nullptr);  // a Kingston USB stick isn't RGB gear
+    const auto brands = c::RgbBrands({{0x1B1C, 1}, {0x1B1C, 2}, {0x046D, 3}, {0x1E71, 4}, {0x8086, 5}}, {0x046D});
+    CHECK(brands.size() == 2 && brands[0] == "Corsair" && brands[1] == "NZXT");
+    CHECK(c::RgbMemory("Corsair", "CMW16GX4M2D3600C18") == "Corsair Vengeance RGB");
+    CHECK(c::RgbMemory("Corsair", "CMK16GX4M2B3200C16").empty());  // Vengeance LPX: no RGB
+    CHECK(c::RgbMemory("G Skill Intl", "F4-3600C16-8GTZNC") == "G.Skill Trident Z Neo");
+    CHECK(c::RgbMemory("G Skill Intl", "F4-3200C16-8GTZR") == "G.Skill Trident Z RGB");
+    CHECK(c::RgbMemory("G Skill Intl", "F4-3200C16-8GVKB").empty());
+    CHECK(c::RgbMemory("Kingston", "KF3600C17D4/8GX").empty());  // FURY: setup_hardware.h
+}
+
 static void TestSetupPlan() {
     using namespace luma::app::setup;
     uint16_t vid = 0, pid = 0;
@@ -1157,6 +1252,8 @@ int main() {
     TestDeviceLighting();
     TestSetupHardware();
     TestSetupPlan();
+    TestOpenRgb();
+    TestDeviceCatalog();
     TestHyperXRam();
     TestHwSensors();
     TestIpc();

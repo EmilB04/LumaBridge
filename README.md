@@ -2,7 +2,7 @@
 
 Dynamic game lighting on ASUS Aura Sync devices (motherboard, RAM, fans, GPU, Aura
 keyboards like the ROG Azoth), including in games that only support other brands. No
-OpenRGB, Artemis or other middleware.
+middleware needed; if OpenRGB runs, LumaBridge can light everything it supports too.
 
 ![LumaBridge, Lighting page in Auto mode](docs/images/app-auto.png)
 
@@ -25,8 +25,13 @@ OpenRGB, Artemis or other middleware.
   shows fan speeds and CPU / board temperatures by itself: one click on the Devices page
   (Hardware access) sets it up, with the signed PawnIO driver included
   ([third_party/pawnio](third_party/pawnio/README.md)). No LibreHardwareMonitor needed.
-- **Devices:** switch individual Aura devices on or off, and set up your fans (count, LEDs
-  per fan, test pattern).
+- **Setup guide:** on first start, LumaBridge finds your RGB hardware and lighting software,
+  asks you to confirm it and your fans, and sets up its connections to match.
+- **Devices:** only what your PC has (a mouse without RGB is left out); switch devices on or
+  off, and set up your fans (count, LEDs per fan, test pattern). Other RGB brands are
+  recognised and named.
+- **OpenRGB (optional):** with OpenRGB running and its SDK server on, every device it
+  supports follows LumaBridge and your games; devices LumaBridge lights itself stay with it.
 - **Games List:** every game on the PC; open one to set up its built-in lighting (CS2,
   Rocket League, War Thunder) or choose what it shows without lighting, including its own color.
 - **Integrations:** one-click setup per SDK, with live status.

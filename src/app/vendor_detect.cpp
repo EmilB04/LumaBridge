@@ -16,23 +16,6 @@ namespace {
 using setup::App;
 using setup::Brand;
 
-// Every USB device present, as (vendor, product) (its instance ID holds both).
-std::vector<std::pair<uint16_t, uint16_t>> UsbDevices() {
-    std::vector<std::pair<uint16_t, uint16_t>> out;
-    HDEVINFO set = SetupDiGetClassDevsW(nullptr, L"USB", nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
-    if (set == INVALID_HANDLE_VALUE) return out;
-    SP_DEVINFO_DATA info{};
-    info.cbSize = sizeof info;
-    for (DWORD i = 0; SetupDiEnumDeviceInfo(set, i, &info); ++i) {
-        wchar_t id[512] = {};
-        if (!SetupDiGetDeviceInstanceIdW(set, &info, id, 512, nullptr)) continue;
-        uint16_t vid = 0, pid = 0;
-        if (setup::ParseVidPid(id, &vid, &pid)) out.emplace_back(vid, pid);
-    }
-    SetupDiDestroyDeviceInfoList(set);
-    return out;
-}
-
 void AddUsbDevices(setup::Answers* a) {
     for (const auto& [vid, pid] : UsbDevices()) setup::AddUsbDevice(a, vid, pid);
 }
@@ -63,6 +46,23 @@ bool AnyService(std::initializer_list<const wchar_t*> names) {
 }
 
 }  // namespace
+
+// Every USB device present, as (vendor, product) (its instance ID holds both).
+std::vector<std::pair<uint16_t, uint16_t>> UsbDevices() {
+    std::vector<std::pair<uint16_t, uint16_t>> out;
+    HDEVINFO set = SetupDiGetClassDevsW(nullptr, L"USB", nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
+    if (set == INVALID_HANDLE_VALUE) return out;
+    SP_DEVINFO_DATA info{};
+    info.cbSize = sizeof info;
+    for (DWORD i = 0; SetupDiEnumDeviceInfo(set, i, &info); ++i) {
+        wchar_t id[512] = {};
+        if (!SetupDiGetDeviceInstanceIdW(set, &info, id, 512, nullptr)) continue;
+        uint16_t vid = 0, pid = 0;
+        if (setup::ParseVidPid(id, &vid, &pid)) out.emplace_back(vid, pid);
+    }
+    SetupDiDestroyDeviceInfoList(set);
+    return out;
+}
 
 bool UsbDevicePresent(uint16_t vid, std::initializer_list<uint16_t> pids) {
     for (const auto& [v, p] : UsbDevices())

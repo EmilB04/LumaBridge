@@ -147,6 +147,7 @@ if(LUMA_ARCH STREQUAL "x64")
         src/app/sensors/system_monitor.cpp
         src/app/peripherals/logitech_output.cpp
         src/app/peripherals/azoth_output.cpp src/app/peripherals/hardware_helper.cpp
+        src/app/peripherals/openrgb_output.cpp
         src/integrations/logitech/real_logiled.cpp
         src/app/res/app.rc)
     target_include_directories(lumabridge_app PRIVATE src/app src/app/games src/app/sensors src/app/peripherals
