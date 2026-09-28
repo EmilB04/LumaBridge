@@ -25,6 +25,8 @@ public:
     // `brightness` 0..1 (LumaBridge's brightness slider); `own = false` stops sending (the
     // keyboard keeps the last color until it restarts; its saved lighting is untouched).
     void Set(const fx::Params& effect, double brightness, bool own);
+    // Asleep (device_sleep.h): nothing more goes to the keyboard until it's used again.
+    void SetAsleep(bool asleep) { asleep_ = asleep; }
     State state() const { return state_; }
     // How it was last found (meaningful while Active).
     bool wireless() const { return link_ == azoth::Link::Wireless; }
@@ -35,6 +37,7 @@ private:
     std::thread thread_;
     std::atomic<bool> stop_{false};
     std::atomic<State> state_{State::Off};
+    std::atomic<bool> asleep_{false};
     std::atomic<azoth::Link> link_{azoth::Link::Wired};
     std::mutex mutex_;
     fx::Params effect_;

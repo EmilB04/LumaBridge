@@ -14,6 +14,7 @@
 #include <exception>
 #include <cwchar>
 #include <iterator>
+#include <map>
 #include <vector>
 
 #include "controller.h"
@@ -24,6 +25,7 @@
 #include "integrations.h"
 #include "ipc.h"
 #include "ui.h"
+#include "setup_plan.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -348,6 +350,33 @@ void TrayMenu() {
 
 // ---- Windows -------------------------------------------------------------------------
 
+// Raw input from every mouse and keyboard, also while LumaBridge is in the tray: when each
+// device was last used, so one that isn't used for a while can sleep (device_sleep.h).
+void RegisterDeviceInput(HWND hwnd) {
+    RAWINPUTDEVICE r[2] = {{0x01, 0x02, RIDEV_INPUTSINK, hwnd}, {0x01, 0x06, RIDEV_INPUTSINK, hwnd}};
+    if (!RegisterRawInputDevices(r, 2, sizeof r[0])) LUMA_WARN("raw input: not registered (error %lu)", GetLastError());
+}
+
+void OnRawInput(LPARAM lp) {
+    RAWINPUTHEADER h{};
+    UINT size = sizeof h;
+    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lp), RID_HEADER, &h, &size, sizeof(RAWINPUTHEADER)) ==
+        static_cast<UINT>(-1))
+        return;
+    // Which device (vendor, product), from its name; remembered per handle.
+    static std::map<HANDLE, std::pair<uint16_t, uint16_t>> ids;
+    auto it = ids.find(h.hDevice);
+    if (it == ids.end()) {
+        std::pair<uint16_t, uint16_t> id{0, 0};
+        wchar_t name[512] = {};
+        UINT n = 512;
+        if (h.hDevice && GetRawInputDeviceInfoW(h.hDevice, RIDI_DEVICENAME, name, &n) > 0 && n <= 512)
+            setup::ParseVidPid(name, &id.first, &id.second);
+        it = ids.emplace(h.hDevice, id).first;
+    }
+    if (it->second.first) g_ctl.OnDeviceInput(it->second.first, it->second.second);
+}
+
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (ImGui::GetCurrentContext() && ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp)) return 1;
     if (msg == g_taskbarCreated && g_taskbarCreated) {  // Explorer restarted
@@ -355,6 +384,9 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     switch (msg) {
+    case WM_INPUT:
+        OnRawInput(lp);
+        break;  // DefWindowProc cleans up
     case WM_SIZE:
         if (wp != SIZE_MINIMIZED) {
             g_resizeW = LOWORD(lp);
@@ -474,6 +506,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     BOOL dark = TRUE;
     DwmSetWindowAttribute(g_main, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof dark);
     g_taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+    RegisterDeviceInput(g_main);
 
     if (!CreateDevice(g_main)) {
         MessageBoxW(nullptr, L"Direct3D 11 is not available.", L"LumaBridge", MB_ICONERROR);

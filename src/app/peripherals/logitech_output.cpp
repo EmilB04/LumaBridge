@@ -282,6 +282,8 @@ void LogitechOutput::Run() {
     bool perKeyOn = false;                  // the mouse shows LumaBridge's frames, LED by LED
     std::vector<Rgb> lastFrame;
     uint64_t lastFrameSent = 0;
+    bool wasAsleep = false;
+    uint64_t wokeAt = 0;
     while (!stop_) {
         Sleep(kFrameMs);
         fx::Params effect;
@@ -307,6 +309,25 @@ void LogitechOutput::Run() {
             mouseEffect_ = false;
             state_ = State::Released;
             continue;
+        }
+        // Asleep: nothing goes out, so the mouse can sleep (the dark frame went out before).
+        if (asleep_) {
+            if (!wasAsleep) LUMA_INFO("Logitech devices: not used for a while - asleep, nothing sent until they're used");
+            wasAsleep = true;
+            mouseEffect_ = false;
+            state_ = State::Active;
+            continue;
+        }
+        if (wasAsleep) {
+            // Used again: everything again, and a mouse that went quiet looked for right away
+            // (it may take a moment to reconnect).
+            wasAsleep = false;
+            wokeAt = now;
+            if (!mouse.open()) nextMouseFind = now;
+            onMouse.reset();
+            perKeyOn = false;
+            lastFrame.clear();
+            last[0] = last[1] = last[2] = -1;
         }
         if (!inited) {
             if (now < nextInitTry) continue;
@@ -334,7 +355,7 @@ void LogitechOutput::Run() {
         auto lostMouse = [&](const char* what) {
             LUMA_WARN("Logitech %s: %s - back to one color through G HUB", mouse.name().c_str(), what);
             mouse.Close();
-            nextMouseFind = now + 30000;
+            nextMouseFind = now + (now - wokeAt < 15000 ? 2000 : 30000);  // just woken: it's reconnecting
             onMouse.reset();
             perKeyOn = false;
             last[0] = last[1] = last[2] = -1;

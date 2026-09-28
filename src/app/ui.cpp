@@ -2188,6 +2188,8 @@ DeviceStatus LogitechStatus(Controller& ctl) {
     const auto& lg = ctl.logitech();
     using S_ = LogitechOutput::State;
     if (!ctl.prefs().logitechDevices) return {"Off", kMuted};
+    if (ctl.logitechAsleep() && lg.state() == LogitechOutput::State::Active)
+        return {"Asleep - not used for a while", kMuted, "It lights up again when you use it."};
     switch (lg.state()) {
     case S_::Active: return {lg.mouseEffect() ? "Following LumaBridge, every LED" : "Following LumaBridge", kGreen};
     case S_::NoGHub: return {"G HUB not found", kRed};
@@ -2200,11 +2202,37 @@ DeviceStatus AzothStatus(Controller& ctl) {
     const auto& az = ctl.azoth();
     using A_ = AzothOutput::State;
     if (!ctl.prefs().azothKeyboard) return {"Off", kMuted};
+    if (ctl.azothAsleep() && az.state() == AzothOutput::State::Active)
+        return {"Asleep - not used for a while", kMuted, "It lights up again with the next key press."};
     switch (az.state()) {
     case A_::Active: return {az.wireless() ? "Following LumaBridge, every key (wireless)" : "Following LumaBridge, every key", kGreen};
     case A_::NotFound: return {"Not connected", kAmber};
     default: return {"Armoury Crate's lighting", kMuted};
     }
+}
+
+// "Fade out when not used": the switch and the delay (seconds, shown in minutes from 1 minute).
+bool SleepControls(const char* id, bool* on, int* seconds) {
+    ImGui::PushID(id);
+    bool changed = Toggle("Fade out when you're not using it", on);
+    if (*on) {
+        ImGui::SameLine(0, 18 * S());
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("after");
+        ImGui::SameLine();
+        static const int kSteps[] = {30, 60, 120, 300, 600, 900, 1800};
+        static const char* kNames[] = {"30 s", "1 min", "2 min", "5 min", "10 min", "15 min", "30 min"};
+        int sel = 1;
+        for (int i = 0; i < 7; ++i)
+            if (kSteps[i] <= *seconds) sel = i;
+        ImGui::SetNextItemWidth(110 * S());
+        if (ImGui::Combo("##after", &sel, kNames, 7)) {
+            *seconds = kSteps[sel];
+            changed = true;
+        }
+    }
+    ImGui::PopID();
+    return changed;
 }
 
 void LogitechCard(Controller& ctl, const Fonts& f) {
@@ -2232,6 +2260,13 @@ void LogitechCard(Controller& ctl, const Fonts& f) {
     Muted("Off (the default): while a game lights Logitech gear itself (LIGHTSYNC through G HUB, like Battlefield), "
           "LumaBridge hands it to the game, so the mouse shows the game's own effects. On: your Logitech gear follows "
           "LumaBridge like the rest, games included.");
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    if (SleepControls("logisleep", &ctl.prefs().logitechSleep, &ctl.prefs().logitechSleepSec)) ctl.Changed();
+    const auto gh = ctl.ghubSleep();
+    Muted("Like G HUB: when you haven't used it for a while, its lighting fades out and LumaBridge stops sending, so a "
+          "wireless mouse can sleep; it lights up again when you use it. Whether it fades follows G HUB's \"turn off "
+          "lighting on inactivity\" (%s).",
+          !gh ? "G HUB didn't answer, so on" : *gh ? "on in G HUB" : "off in G HUB, so it stays lit");
     EndCard();
 }
 
@@ -2245,6 +2280,10 @@ void AzothCard(Controller& ctl, const Fonts& f) {
     ImGui::Dummy(ImVec2(0, 2 * S()));
     bool enabled = ctl.prefs().azothKeyboard;
     if (Toggle("Light the ROG Azoth", &enabled)) ctl.SetAzothEnabled(enabled);
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    if (SleepControls("azothsleep", &ctl.prefs().azothSleep, &ctl.prefs().azothSleepSec)) ctl.Changed();
+    Muted("When you haven't typed for a while, the keys fade out and LumaBridge stops sending, so the keyboard can "
+          "sleep (and save its battery wirelessly). The next key press lights it up again.");
     ImGui::SameLine();
     if (ImGui::SmallButton("Run the device probe")) {
         const std::wstring exe = AppDirectory() + L"\\tools\\device-probe.exe";

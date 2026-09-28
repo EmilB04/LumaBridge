@@ -69,6 +69,13 @@ struct Prefs {
     // LIGHTSYNC or G HUB); off: LumaBridge hands them to the game (e.g. Battlefield's own
     // lighting on the mouse).
     bool logitechForce = false;
+    // Devices going to sleep (device_sleep.h): after this long without being used, the device's
+    // lighting fades out and LumaBridge stops talking to it until it's used again. The mouse
+    // also follows G HUB's "turn off lighting on inactivity" when G HUB answers.
+    bool logitechSleep = true;
+    int logitechSleepSec = 60;
+    bool azothSleep = true;
+    int azothSleepSec = 300;
     // Light the ROG Azoth (by cable or its Omni receiver).
     bool azothKeyboard = true;
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper.

@@ -13,6 +13,8 @@
 #include "vendor_detect.h"
 #include "device_catalog.h"
 #include "logitech_hidpp.h"
+#include "ghub_settings.h"
+#include "device_sleep.h"
 
 namespace luma::app {
 namespace {
@@ -54,6 +56,7 @@ bool Controller::Init() {
     if (prefs_.azothKeyboard) azoth_.Start();
     if (prefs_.openRgb) openRgb_.Start(static_cast<uint16_t>(prefs_.openRgbPort));
     if (prefs_.lampArray) lampArray_.Start();
+    logitechInputAt_ = azothInputAt_ = GetTickCount64();  // awake at start
     hardware_.Start();
     return true;
 }
@@ -62,6 +65,23 @@ void Controller::SetRamEnabled(bool on) {
     prefs_.ramLighting = on;
 
     Changed();
+}
+
+void Controller::OnDeviceInput(uint16_t vid, uint16_t pid) {
+    const uint64_t now = GetTickCount64();
+    if (vid == hidpp::kVendor) logitechInputAt_ = now;
+    if (vid == azoth::kVendor && (pid == azoth::Product(azoth::Link::Wired) || pid == azoth::Product(azoth::Link::Wireless)))
+        azothInputAt_ = now;
+}
+
+uint64_t Controller::LogitechSleepMs() const {
+    // G HUB's own setting decides whether the mouse's lighting turns off; LumaBridge's decides when.
+    if (!prefs_.logitechSleep || !presence_.ghubSleep.value_or(true)) return 0;
+    return static_cast<uint64_t>(std::max(10, prefs_.logitechSleepSec)) * 1000;
+}
+
+uint64_t Controller::AzothSleepMs() const {
+    return prefs_.azothSleep ? static_cast<uint64_t>(std::max(10, prefs_.azothSleepSec)) * 1000 : 0;
 }
 
 void Controller::SetLampArrayEnabled(bool on) {
@@ -135,6 +155,13 @@ void Controller::SetLogitechEnabled(bool on) {
 }
 
 void Controller::UpdateLogitech() {
+    // Not used for a while: its lighting fades out, then nothing goes to it (device_sleep.h).
+    const uint64_t now = GetTickCount64();
+    const double awake = sleep::Level(now, logitechInputAt_, LogitechSleepMs());
+    const bool asleep = sleep::Asleep(now, logitechInputAt_, LogitechSleepMs());
+    if (asleep != logitechAsleep_) LUMA_INFO("Logitech devices: %s", asleep ? "asleep (not used for a while)" : "awake");
+    logitechAsleep_ = asleep;
+    logitech_.SetAsleep(asleep);
     if (!prefs_.logitechDevices) {
         logitechNote_ = "Turned off";
         return;
@@ -143,7 +170,7 @@ void Controller::UpdateLogitech() {
     logitechNote_ = own ? "" : "LumaBridge isn't controlling the lights - G HUB has them";
     if (own && prefs_.logitechForce) {
         logitech_.Set(output_.For(device::kMouse),
-                      cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse), true);
+                      cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, true);
         return;  // kept with LumaBridge even while a game lights Logitech gear
     }
     if (own)
@@ -159,8 +186,8 @@ void Controller::UpdateLogitech() {
                 logitechNote_ = g.game.name + " lights them through G HUB";
                 break;
             }
-    logitech_.Set(output_.For(device::kMouse), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse),
-                  own);
+    logitech_.Set(output_.For(device::kMouse),
+                  cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, own);
 }
 
 std::wstring Controller::GameDir(const char* profileKey) const {
@@ -217,6 +244,7 @@ void Controller::RescanPresence() {
         Presence p;
         p.azoth = UsbDevicePresent(azoth::kVendor, {azoth::Product(azoth::Link::Wired), azoth::Product(azoth::Link::Wireless)});
         p.logitech = ScanLogitechDevices();
+        p.ghubSleep = GHubTurnsOffOnInactivity();
         p.usb = UsbDevices();
         p.scanned = true;
         return p;
@@ -628,7 +656,17 @@ void Controller::Tick() {
         openRgb_.Set(output_.For(device::kOther), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kOther),
                      prefs_.openRgb && !output_.stopped, skip);
     }
-    azoth_.Set(output_.For(device::kKeyboard), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kKeyboard), prefs_.azothKeyboard && !output_.stopped);
+    {
+        const uint64_t now = GetTickCount64();
+        const bool asleep = sleep::Asleep(now, azothInputAt_, AzothSleepMs());
+        if (asleep != azothAsleep_) LUMA_INFO("ROG Azoth: %s", asleep ? "asleep (not used for a while)" : "awake");
+        azothAsleep_ = asleep;
+        azoth_.SetAsleep(asleep);
+        azoth_.Set(output_.For(device::kKeyboard),
+                   cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kKeyboard) *
+                       sleep::Level(now, azothInputAt_, AzothSleepMs()),
+                   prefs_.azothKeyboard && !output_.stopped);
+    }
     hardware_.SetRam(output_.For(device::kRam), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kRam), prefs_.ramLighting, !output_.stopped, prefs_.ramRelease);
     if (now - sensorsPushedAt_ >= 500) {
         sensorsPushedAt_ = now;

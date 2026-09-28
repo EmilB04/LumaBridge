@@ -92,6 +92,16 @@ to G HUB brings G HUB's lighting back. Code:
 [`logitech_hidpp.h`](../src/app/peripherals/logitech_hidpp.h) (packets, tested against the
 capture) and [`logitech_output.cpp`](../src/app/peripherals/logitech_output.cpp).
 
+**Sleep.** LumaBridge used to keep sending (frames ~20 times a second while an effect
+moves, the same frame every 5 s otherwise), which kept a wireless mouse awake: its lighting
+never faded and it never slept. Now it watches when the mouse is used (raw input from the
+Logitech receiver or cable, `src/app/device_sleep.h`): after the chosen time without use
+(1 minute by default, on the device's page) its lighting fades out over 2.5 s, then nothing
+more is sent until it's used again, so the mouse can sleep; the first movement lights it
+again. Whether it fades follows G HUB's "turn off lighting on inactivity"
+(`/lighting/turn_off_for_inactivity` over G HUB's local WebSocket), read in the background;
+without an answer from G HUB it fades. The ROG Azoth does the same (5 minutes by default).
+
 ## ASUS ROG Azoth (wired or wireless, experimental)
 
 Captured from Armoury Crate with USBPcap on a wired Azoth (USB `0B05:1A83`, firmware

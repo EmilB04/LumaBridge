@@ -106,6 +106,12 @@ void AzothOutput::Run() {
             lastSent = 0;
             continue;
         }
+        // Asleep: nothing goes out (the dark frame went out before), so the keyboard can sleep.
+        // Used again: every key again (lastSent 0 forces a full refresh).
+        if (asleep_) {
+            lastSent = 0;
+            continue;
+        }
         if (dev == INVALID_HANDLE_VALUE) {
             if (now < nextFind) continue;
             // The cable first: with both, the keyboard is plugged in and charging.

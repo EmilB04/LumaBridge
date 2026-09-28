@@ -72,6 +72,12 @@ public:
     void Shutdown(bool handBack = true);
 
     void OnIpc(const ipc::Frame& f);
+    // Input from a device (raw input, main.cpp): when it was last used, for letting it sleep.
+    void OnDeviceInput(uint16_t vid, uint16_t pid);
+    bool logitechAsleep() const { return logitechAsleep_; }
+    bool azothAsleep() const { return azothAsleep_; }
+    // G HUB's "turn off lighting on inactivity" (nullopt: G HUB didn't answer).
+    std::optional<bool> ghubSleep() const { return presence_.ghubSleep; }
     void Tick();  // call every ~50 ms
 
     // Settings: mutate, then call Changed() so they are applied and (debounced) saved.
@@ -149,6 +155,7 @@ public:
         bool azoth = false;    // ROG Azoth, by cable or its Omni receiver
         // Every USB device, as (vendor, product): for naming RGB brands (device_catalog.h).
         std::vector<std::pair<uint16_t, uint16_t>> usb;
+        std::optional<bool> ghubSleep;  // G HUB's "turn off lighting on inactivity"
         std::vector<LogitechDevice> logitech;  // with and without RGB lighting
         // Logitech devices with RGB lighting.
         std::vector<LogitechDevice> LogitechRgb() const {
@@ -244,6 +251,11 @@ private:
     bool feedActive_[3] = {};
     std::future<std::vector<InstalledGame>> libraryJob_;
     Presence presence_;
+    uint64_t logitechInputAt_ = 0, azothInputAt_ = 0;  // last used (GetTickCount64)
+    bool logitechAsleep_ = false, azothAsleep_ = false;
+    // The mouse's and the keyboard's sleep timeouts right now (0: they don't sleep).
+    uint64_t LogitechSleepMs() const;
+    uint64_t AzothSleepMs() const;
     std::future<Presence> presenceJob_;
     uint64_t presenceAt_ = 0;  // when the last presence scan started
     bool libraryRescanPending_ = false;  // the list changed while a scan was running

@@ -46,6 +46,10 @@ public:
     // `brightness` 0..1.
     void Set(const fx::Params& effect, double brightness, bool own);
 
+    // Asleep (device_sleep.h): nothing more goes to the devices until they're used again, so a
+    // wireless mouse can sleep.
+    void SetAsleep(bool asleep) { asleep_ = asleep; }
+
     State state() const { return state_; }
     // Whether the mouse shows the whole effect right now (its own effect or LED by LED),
     // not one color through G HUB.
@@ -60,6 +64,7 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<State> state_{State::Off};
     std::atomic<bool> mouseEffect_{false};
+    std::atomic<bool> asleep_{false};
     mutable std::mutex mutex_;
     fx::Params effect_;
     double brightness_ = 1.0;

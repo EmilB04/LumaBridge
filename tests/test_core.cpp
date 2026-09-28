@@ -1,5 +1,6 @@
 // Unit tests for the platform-independent core. Builds on any OS:
 //   g++ -std=c++17 -I src/core -I src/integrations/razer -I src/integrations/corsair -I src/integrations/alienware -I src/integrations/steelseries tests/test_core.cpp -o test_core && ./test_core
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -35,6 +36,7 @@
 #include "device_catalog.h"
 #include "openrgb_protocol.h"
 #include "lamparray.h"
+#include "device_sleep.h"
 #include "hyperx_ram.h"
 #include "hw_sensors.h"
 #include "lightfx_state.h"
@@ -962,6 +964,38 @@ static void TestDeviceLighting() {
     for (const char* id : device::All()) CHECK(device::Name(id)[0] != 0);
 }
 
+static void TestDeviceSleep() {
+    namespace sl = luma::app::sleep;
+    // Awake until the timeout, then a fade over kFadeMs, then dark; asleep once the dark frame is out.
+    CHECK(sl::Level(1000, 0, 60000) == 1.0 && sl::Level(60000, 0, 60000) == 1.0);
+    CHECK(std::fabs(sl::Level(60000 + sl::kFadeMs / 2, 0, 60000) - 0.5) < 1e-9);
+    CHECK(sl::Level(60000 + sl::kFadeMs, 0, 60000) == 0.0 && sl::Level(999999, 0, 60000) == 0.0);
+    CHECK(!sl::Asleep(60000 + sl::kFadeMs, 0, 60000) && sl::Asleep(60000 + sl::kFadeMs + sl::kQuietMs, 0, 60000));
+    CHECK(sl::Level(999999, 0, 0) == 1.0 && !sl::Asleep(999999, 0, 0));  // timeout 0: never sleeps
+    CHECK(sl::Level(10, 50, 1000) == 1.0);                                 // input after "now": awake
+    // G HUB's answer, as it came from a real G HUB (ghub-probe --scan).
+    const std::string on = R"({
+ "msgId": "probe-46",
+ "verb": "GET",
+ "path": "/lighting/turn_off_for_inactivity",
+ "origin": "backend",
+ "result": {
+  "code": "SUCCESS",
+  "what": ""
+ },
+ "payload": {
+  "@type": "type.googleapis.com/logi.protocol.util.Enable",
+  "enabled": true
+ }
+})";
+    CHECK(sl::ParseGHubEnabled(on) == std::optional<bool>(true));
+    std::string off = on;
+    off.replace(off.find("true"), 4, "false");
+    CHECK(sl::ParseGHubEnabled(off) == std::optional<bool>(false));
+    CHECK(!sl::ParseGHubEnabled(R"({"path": "/lighting/turn_off_for_inactivity", "result": {"code": "INVALID_ARG"}})"));
+    CHECK(!sl::ParseGHubEnabled(R"({"path": "/other", "result": {"code": "SUCCESS"}, "payload": {"enabled": true}})"));
+}
+
 static void TestLampArray() {
     namespace la = luma::app::lamparray;
     // Levels: 256 or more pass through; fewer are scaled; 0 / 1 level is on or off.
@@ -1272,6 +1306,7 @@ int main() {
     TestSetupPlan();
     TestOpenRgb();
     TestLampArray();
+    TestDeviceSleep();
     TestDeviceCatalog();
     TestHyperXRam();
     TestHwSensors();
