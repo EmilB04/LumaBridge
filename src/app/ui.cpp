@@ -1245,17 +1245,45 @@ void TopGame(DashCtx& c) {
         ImGui::PopID();
     }
     ImGui::Dummy(ImVec2(0, 4 * S()));
-    Muted("Built-in game lighting");
+    // Built-in lighting: the games on this PC first (green while their feed is live), the
+    // rest LumaBridge supports below.
     const auto& feeds = c.ctl.feeds();
-    const std::pair<const char*, bool> built[] = {{"CS2", feeds.Cs2Seen()},
-                                                  {"Rocket League", feeds.RocketLeagueConnected()},
-                                                  {"War Thunder", feeds.WarThunderSeen()},
-                                                  {"Dota 2", feeds.Dota2Seen()},
-                                                  {"League", feeds.LeagueSeen()},
-                                                  {"Forza", feeds.ForzaSeen()}};
-    std::vector<std::pair<std::string, unsigned>> pills;
-    for (const auto& b : built) pills.push_back({b.first, b.second ? kGreen : kMuted});
-    PillFlow(pills);
+    auto seen = [&](games::Feed feed) {
+        switch (feed) {
+        case games::Feed::Cs2Gsi: return feeds.Cs2Seen();
+        case games::Feed::RocketLeagueStats: return feeds.RocketLeagueConnected();
+        case games::Feed::WarThunderApi: return feeds.WarThunderSeen();
+        case games::Feed::Dota2Gsi: return feeds.Dota2Seen();
+        case games::Feed::LeagueLiveClient: return feeds.LeagueSeen();
+        case games::Feed::ForzaDataOut: return feeds.ForzaSeen();
+        default: return false;
+        }
+    };
+    auto installed = [&](const games::GameProfile& prof) {
+        for (const auto& g : c.ctl.library()) {
+            if (games::FindProfile("", Utf8(g.name)) == &prof) return true;
+            for (const auto& exe : g.exeNames)
+                if (games::FindProfile(exe, "") == &prof) return true;
+        }
+        return false;
+    };
+    std::vector<std::pair<std::string, unsigned>> mine;
+    std::string others;
+    size_t count = 0;
+    const games::GameProfile* all = games::Profiles(&count);
+    for (size_t i = 0; i < count; ++i) {
+        const games::GameProfile& prof = all[i];
+        if (prof.kind != games::ProfileKind::BuiltIn) continue;
+        if (installed(prof)) mine.push_back({prof.title, seen(prof.feed) ? kGreen : kAccent});
+        else others += (others.empty() ? "" : ", ") + std::string(prof.title);
+    }
+    Muted("Your games with built-in lighting");
+    if (mine.empty()) Muted("None found on this PC yet.");
+    else PillFlow(mine);
+    if (!others.empty()) {
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+        Muted("Also supported: %s", others.c_str());
+    }
     ImGui::Dummy(ImVec2(0, 2 * S()));
     if (ImGui::Button("Games list", ImVec2(120 * S(), 0))) c.ui.page = Page::GamesList;
 }
@@ -1488,6 +1516,59 @@ void DashboardPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
 
 // ---- Pages ---------------------------------------------------------------------------
 
+// The devices on this PC LumaBridge lights (device::kFans, ...), in the Lighting page's order.
+std::vector<const char*> LitDeviceIds(Controller& ctl) {
+    const Prefs& p = ctl.prefs();
+    const sensors::SystemSnapshot snap = ctl.monitor().Snapshot();
+    std::vector<const char*> out;
+    for (const char* id : device::All()) {
+        if ((id == std::string(device::kRam) && !(p.ramLighting && HasRgbRam(ctl, snap))) ||
+            (id == std::string(device::kMouse) && !(p.logitechDevices && HasLogitechRgb(ctl))) ||
+            (id == std::string(device::kKeyboard) && !(p.azothKeyboard && HasAzoth(ctl))) ||
+            (id == std::string(device::kOther) && OpenRgbLit(ctl).empty() && LampArrayLit(ctl).empty()))
+            continue;
+        out.push_back(id);
+    }
+    return out;
+}
+
+Icon DeviceIcon(const std::string& id) {
+    if (id == device::kFans) return Icon::Fan;
+    if (id == device::kBoard) return Icon::Board;
+    if (id == device::kRam) return Icon::Memory;
+    if (id == device::kMouse) return Icon::Mouse;
+    if (id == device::kKeyboard) return Icon::Keyboard;
+    return Icon::Leds;
+}
+
+// Which way moving effects run on each device: all the same way unless reversed here.
+void DirectionCard(Controller& ctl, const Fonts& f) {
+    const auto ids = LitDeviceIds(ctl);
+    if (ids.empty()) return;
+    BeginCard("direction");
+    CardTitle(f, "Direction", Icon::Leds);
+    Muted("Moving effects (waves, comets, gradients) run the same way on every device. Reverse a device that "
+          "runs the other way, e.g. mounted mirrored. Applies to games too.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    if (ImGui::BeginTable("dirs", ImGui::GetContentRegionAvail().x > 700 * S() ? 3 : 2)) {
+        for (const char* id : ids) {
+            ImGui::TableNextColumn();
+            ImGui::PushID(id);
+            bool& rev = ctl.prefs().deviceLighting[id].reverse;
+            if (Toggle("##rev", &rev)) ctl.Changed();
+            ImGui::SameLine();
+            IconItem(DeviceIcon(id), 16 * S(), rev ? Hex(kAccent) : Hex(kMuted));
+            ImGui::SameLine();
+            ImGui::TextUnformatted(device::Name(id));
+            ImGui::SameLine();
+            Muted("%s", rev ? "reversed" : "");
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    EndCard();
+}
+
 // The overall brightness, or with `device` set, that device's own on top of it.
 void BrightnessCard(Controller& ctl, const Fonts& f, const std::string& device = "") {
     BeginCard("brightness");
@@ -1519,6 +1600,7 @@ void BrightnessCard(Controller& ctl, const Fonts& f, const std::string& device =
                   : "Moving effects run the same way as on every other device.");
     }
     EndCard();
+    if (device.empty()) DirectionCard(ctl, f);
 }
 
 bool RainbowCard(Controller& ctl, const Fonts& f, Look& p, bool showSpread);
@@ -2491,13 +2573,7 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
     // Which lighting to edit: everything, or one device.
     std::vector<std::string> ids{""};
     std::vector<const char*> labels{"All devices"};
-    for (const char* id : device::All()) {
-        const sensors::SystemSnapshot snap = ctl.monitor().Snapshot();
-        if ((id == std::string(device::kRam) && !(p.ramLighting && HasRgbRam(ctl, snap))) ||
-            (id == std::string(device::kMouse) && !(p.logitechDevices && HasLogitechRgb(ctl))) ||
-            (id == std::string(device::kKeyboard) && !(p.azothKeyboard && HasAzoth(ctl))) ||
-            (id == std::string(device::kOther) && OpenRgbLit(ctl).empty() && LampArrayLit(ctl).empty()))
-            continue;
+    for (const char* id : LitDeviceIds(ctl)) {
         ids.push_back(id);
         labels.push_back(device::Name(id));
     }
