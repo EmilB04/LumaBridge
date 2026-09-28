@@ -48,6 +48,8 @@ struct Prefs {
     // "Stop controlling the lights": remembered across restarts until resumed.
     bool lightingStopped = false;
     bool startMinimized = true;
+    // The setup guide has been finished (or skipped); until then the window opens on it.
+    bool setupDone = false;
     std::vector<Rgb> recentColors;  // most recent first, max kMaxRecent
     // Exe names (lower case) of games that have sent lighting before: shown as supporting
     // dynamic lighting even before they start sending.
@@ -67,10 +69,10 @@ struct Prefs {
     // LIGHTSYNC or G HUB); off: LumaBridge hands them to the game (e.g. Battlefield's own
     // lighting on the mouse).
     bool logitechForce = false;
-    // Light the ROG Azoth over its cable (experimental, opt-in).
-    bool azothKeyboard = false;
-    // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper (experimental, opt-in).
-    bool ramLighting = false;
+    // Light the ROG Azoth (by cable or its Omni receiver).
+    bool azothKeyboard = true;
+    // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper.
+    bool ramLighting = true;
     // What the RAM shows when LumaBridge lets go of it: 0 its own rainbow, 1 off, 2 the last color.
     int ramRelease = 0;
     // Per device (device::kFans, ...): its own look, or following the main one.

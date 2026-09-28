@@ -148,8 +148,11 @@ Prefs LoadPrefs(const std::wstring& ini) {
             pos = comma + 1;
         }
     }
-    p.azothKeyboard = Read(ini, L"App", L"AzothKeyboard") == L"1";
-    p.ramLighting = Read(ini, L"App", L"RamLighting") == L"1";
+    v = Read(ini, L"App", L"AzothKeyboard");
+    if (!v.empty()) p.azothKeyboard = v != L"0";
+    v = Read(ini, L"App", L"RamLighting");
+    if (!v.empty()) p.ramLighting = v != L"0";
+    p.setupDone = Read(ini, L"App", L"SetupDone") == L"1";
     v = Read(ini, L"App", L"RamRelease");
     if (v == L"off") p.ramRelease = 1;
     if (v == L"keep") p.ramRelease = 2;
@@ -199,6 +202,7 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
                                                             : L"manual");
     WriteConfigValue(ini, L"App", L"LightingStopped", p.lightingStopped ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"StartMinimized", p.startMinimized ? L"1" : L"0");
+    WriteConfigValue(ini, L"App", L"SetupDone", p.setupDone ? L"1" : L"0");
     std::string recent;
     for (size_t i = 0; i < p.recentColors.size(); ++i) recent += (i ? "," : "") + ToHex(p.recentColors[i]);
     WriteConfigValue(ini, L"App", L"RecentColors", Widen(recent));

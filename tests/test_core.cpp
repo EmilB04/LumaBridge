@@ -31,6 +31,7 @@
 #include "logitech_hidpp.h"
 #include "device_lighting.h"
 #include "setup_hardware.h"
+#include "setup_plan.h"
 #include "hyperx_ram.h"
 #include "hw_sensors.h"
 #include "lightfx_state.h"
@@ -955,6 +956,33 @@ static void TestDeviceLighting() {
     for (const char* id : device::All()) CHECK(device::Name(id)[0] != 0);
 }
 
+static void TestSetupPlan() {
+    using namespace luma::app::setup;
+    uint16_t vid = 0, pid = 0;
+    CHECK(ParseVidPid(L"USB\\VID_046D&PID_C547\\5&1A2B", &vid, &pid) && vid == 0x046D && pid == 0xC547);
+    CHECK(ParseVidPid(L"usb\\vid_0b05&pid_1ace&mi_02", &vid, &pid) && vid == 0x0B05 && pid == 0x1ACE);
+    CHECK(!ParseVidPid(L"ROOT\\SYSTEM\\0000", &vid, &pid));
+    CHECK(!ParseVidPid(L"USB\\VID_04", &vid, &pid));
+
+    Answers a;
+    AddUsbDevice(&a, 0x046D, 0xC547);
+    AddUsbDevice(&a, 0x0B05, 0x1ACE);  // the Azoth's Omni receiver
+    AddUsbDevice(&a, 0x0B05, 0x19AF);  // an Aura controller
+    AddUsbDevice(&a, 0x8086, 0x0001);  // not an RGB vendor
+    CHECK(a.has(Brand::Logitech) && a.has(Brand::Azoth) && a.has(Brand::Asus));
+    CHECK(!a.has(Brand::Razer) && !a.has(Brand::Corsair));
+
+    // Everything on, except hardware the user doesn't have and vendor runtimes in use.
+    CHECK(DefaultOn(Conn::Lightsync, a) && DefaultOn(Conn::GameSense, a) && DefaultOn(Conn::Helper, a));
+    CHECK(DefaultOn(Conn::Chroma, a) && DefaultOn(Conn::AlienFx, a) && DefaultOn(Conn::Handback, a));
+    CHECK(DefaultOn(Conn::LogitechDevices, a) && DefaultOn(Conn::Azoth, a));
+    CHECK(!DefaultOn(Conn::RamLighting, a) && *OffReason(Conn::RamLighting, a));
+    a.set(App::Synapse);
+    CHECK(!DefaultOn(Conn::Chroma, a) && std::strstr(OffReason(Conn::Chroma, a), "Synapse"));
+    CHECK(*OffReason(Conn::Lightsync, a) == 0);
+    for (int i = 0; i < kConns; ++i) CHECK(Info(static_cast<Conn>(i)).install == (*Info(static_cast<Conn>(i)).integration != 0));
+}
+
 static void TestSetupHardware() {
     using namespace luma::app;
     CHECK(SlotIndex("DIMM_A1") == 0 && SlotIndex("DIMM_A2") == 1 && SlotIndex("DIMM_B1") == 2 && SlotIndex("DIMM_B2") == 3);
@@ -1125,6 +1153,7 @@ int main() {
     TestLogitechHidpp();
     TestDeviceLighting();
     TestSetupHardware();
+    TestSetupPlan();
     TestHyperXRam();
     TestHwSensors();
     TestIpc();

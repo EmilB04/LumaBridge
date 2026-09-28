@@ -24,6 +24,7 @@
 #include "imgui_internal.h"
 #include "integrations.h"
 #include "setup_hardware.h"
+#include "vendor_detect.h"
 #include "azoth_layout.h"
 
 namespace luma::app {
@@ -3091,6 +3092,16 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
     if (Toggle("Start minimized to the tray", &ctl.prefs().startMinimized)) ctl.Changed();
     EndCard();
 
+    BeginCard("guide");
+    CardTitle(f, "Setup guide", Icon::Plug);
+    Muted("Asks which RGB hardware and lighting software you have, and sets up LumaBridge's connections to match.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    if (ImGui::Button("Run the setup guide again")) {
+        ui.setupStep = 0;
+        ui.setupDetected = false;
+    }
+    EndCard();
+
     BeginCard("about");
     CardTitle(f, "About", Icon::Info);
     ImGui::Text("LumaBridge %s", kVersionText);
@@ -3317,6 +3328,370 @@ void Splash(UiState& ui, const Fonts& f) {
     ImGui::End();
 }
 
+// ---- Setup guide -----------------------------------------------------------------------
+// Asks what hardware and lighting software the PC has (detection ticks what it finds), then
+// sets up LumaBridge's connections: everything on, except what the answers rule out.
+
+using setup::App;
+using setup::Brand;
+using setup::Conn;
+using SetupState = UiState::SetupState;
+
+const char* kSetupSteps[] = {"Welcome", "Hardware", "Software", "Connections", "Set up"};
+
+void SetupStepper(int step, float width) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const int n = static_cast<int>(std::size(kSetupSteps));
+    const float seg = width / n, r = 11 * S(), y = p.y + r;
+    for (int i = 0; i < n; ++i) {
+        const ImVec2 c(p.x + seg * i + seg / 2, y);
+        if (i + 1 < n)
+            dl->AddLine(ImVec2(c.x + r + 4 * S(), y), ImVec2(c.x + seg - r - 4 * S(), y),
+                        Hex(i < step ? kAccent : kBorder), 2 * S());
+        if (i < step) {
+            dl->AddCircleFilled(c, r, Hex(kAccent), 24);
+            dl->AddLine(ImVec2(c.x - 4.5f * S(), c.y), ImVec2(c.x - 1 * S(), c.y + 3.5f * S()), Hex(0xFFFFFF), 2 * S());
+            dl->AddLine(ImVec2(c.x - 1 * S(), c.y + 3.5f * S()), ImVec2(c.x + 5 * S(), c.y - 3.5f * S()), Hex(0xFFFFFF),
+                        2 * S());
+        } else {
+            dl->AddCircleFilled(c, r, Hex(i == step ? kAccent : kTrack), 24);
+            dl->AddCircle(c, r, Hex(i == step ? kAccentHover : kBorder), 24, 1.5f * S());
+            char num[4];
+            snprintf(num, sizeof num, "%d", i + 1);
+            const ImVec2 ns = ImGui::CalcTextSize(num);
+            dl->AddText(ImVec2(c.x - ns.x / 2, c.y - ns.y / 2), Hex(i == step ? 0xFFFFFF : kMuted), num);
+        }
+        const ImVec2 ls = ImGui::CalcTextSize(kSetupSteps[i]);
+        dl->AddText(ImVec2(c.x - ls.x / 2, y + r + 6 * S()), Hex(i == step ? kText : kMuted), kSetupSteps[i]);
+    }
+    ImGui::Dummy(ImVec2(width, 2 * r + 6 * S() + ImGui::GetTextLineHeight() + 6 * S()));
+}
+
+// A tile that ticks on and off: title, a line under it, "Found on this PC" when detected.
+bool ChoiceTile(const Fonts& f, const char* id, const char* title, const char* sub, bool found, bool* on, float w) {
+    ImGui::PushID(id);
+    const float h = 66 * S();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const bool clicked = ImGui::InvisibleButton("tile", ImVec2(w, h));
+    if (clicked) *on = !*on;
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 b(p.x + w, p.y + h);
+    dl->AddRectFilled(p, b, Hex(hovered ? kCardHover : kCard), 10 * S());
+    dl->AddRect(p, b, Hex(*on ? kAccent : kBorder), 10 * S(), 0, (*on ? 2.f : 1.f) * S());
+    // The tick, right.
+    const ImVec2 c(b.x - 24 * S(), p.y + h / 2);
+    const float r = 10 * S();
+    if (*on) {
+        dl->AddCircleFilled(c, r, Hex(kAccent), 24);
+        dl->AddLine(ImVec2(c.x - 4.5f * S(), c.y), ImVec2(c.x - 1 * S(), c.y + 3.5f * S()), Hex(0xFFFFFF), 2 * S());
+        dl->AddLine(ImVec2(c.x - 1 * S(), c.y + 3.5f * S()), ImVec2(c.x + 5 * S(), c.y - 3.5f * S()), Hex(0xFFFFFF),
+                    2 * S());
+    } else {
+        dl->AddCircle(c, r, Hex(kBorder), 24, 1.5f * S());
+    }
+    const float x = p.x + 16 * S();
+    dl->AddText(f.bold, f.bold->FontSize, ImVec2(x, p.y + 12 * S()), Hex(kText), title);
+    if (found) {
+        const float tw = f.bold->CalcTextSizeA(f.bold->FontSize, FLT_MAX, 0, title).x;
+        const char* tag = "Found on this PC";
+        const float cs = f.caption->FontSize;
+        const ImVec2 ts = f.caption->CalcTextSizeA(cs, FLT_MAX, 0, tag);
+        const ImVec2 ta(x + tw + 10 * S(), p.y + 12 * S() + (f.bold->FontSize - ts.y) / 2 - 2 * S());
+        dl->AddRectFilled(ta, ImVec2(ta.x + ts.x + 12 * S(), ta.y + ts.y + 4 * S()), Hex(kGreen, 40), 8 * S());
+        dl->AddText(f.caption, cs, ImVec2(ta.x + 6 * S(), ta.y + 2 * S()), Hex(kGreen), tag);
+    }
+    dl->AddText(f.caption, f.caption->FontSize, ImVec2(x, p.y + 16 * S() + f.bold->FontSize), Hex(kMuted), sub);
+    ImGui::PopID();
+    return clicked;
+}
+
+const Integration* FindIntegration(const Integrations& in, const char* id) {
+    for (const auto& it : in.list())
+        if (it.id == id) return &it;
+    return nullptr;
+}
+
+// The connections ticked to start with, from the answers (and what's already set up).
+void SetupDefaults(Controller& ctl, const Integrations& in, UiState& ui) {
+    for (int i = 0; i < setup::kConns; ++i) {
+        const Conn c = static_cast<Conn>(i);
+        bool on = setup::DefaultOn(c, ui.setupAnswers);
+        if (const Integration* it = FindIntegration(in, setup::Info(c).integration)) {
+            if (it->state == IntegrationState::Active) on = true;
+            if (it->state == IntegrationState::Conflict) on = false;  // a vendor runtime would be replaced
+        }
+        ui.setupConns[i] = on;
+    }
+    (void)ctl;
+}
+
+// Applies the switches, then installs the ticked connections one after another.
+void SetupRun(Controller& ctl, Integrations& in, UiState& ui) {
+    if (ui.setupNext < 0) {
+        for (int i = 0; i < setup::kConns; ++i) {
+            const Conn c = static_cast<Conn>(i);
+            const bool on = ui.setupConns[i];
+            if (setup::Info(c).install) {
+                ui.setupState[i] = on ? SetupState::Pending : SetupState::Skipped;
+                ui.setupResult[i] = on ? "Waiting" : "Left as it is";
+                continue;
+            }
+            switch (c) {
+            case Conn::GameSense:
+                if (ctl.gameSense().IsRunning() != on) ctl.SetGameSenseEnabled(on);
+                break;
+            case Conn::LogitechDevices:
+                if (ctl.prefs().logitechDevices != on) ctl.SetLogitechEnabled(on);
+                break;
+            case Conn::Azoth: ctl.SetAzothEnabled(on); break;
+            case Conn::RamLighting: ctl.SetRamEnabled(on); break;
+            default: break;
+            }
+            ui.setupState[i] = on ? SetupState::Done : SetupState::Skipped;
+            ui.setupResult[i] = on ? "On" : "Off";
+        }
+        ui.setupNext = 0;
+    }
+    while (ui.setupNext < setup::kConns) {
+        const int i = ui.setupNext;
+        const setup::ConnInfo& ci = setup::Info(static_cast<Conn>(i));
+        if (ui.setupState[i] != SetupState::Pending && ui.setupState[i] != SetupState::Running) {
+            ++ui.setupNext;
+            continue;
+        }
+        if (ui.setupState[i] == SetupState::Pending) {
+            const Integration* it = FindIntegration(in, ci.integration);
+            if (it && it->state == IntegrationState::Active) {
+                ui.setupState[i] = SetupState::Done;
+                ui.setupResult[i] = "Already set up";
+                ++ui.setupNext;
+                continue;
+            }
+            if (in.Busy()) return;
+            in.Install(ci.integration, L"", it && it->state == IntegrationState::Conflict);
+            ui.setupState[i] = SetupState::Running;
+            ui.setupResult[i] = ci.admin ? "Approve the Windows administrator prompt..." : "Setting up...";
+            return;
+        }
+        if (in.Busy()) return;  // still running
+        // Trust what's on the PC afterwards, not only the script's exit code.
+        const std::string msg = in.LastMessage();
+        ui.integrationsLoaded = false;
+        EnsureIntegrations(ctl, in, ui);
+        const Integration* it = FindIntegration(in, ci.integration);
+        const bool ok = msg.rfind("Done", 0) == 0 && it && it->state == IntegrationState::Active;
+        ui.setupState[i] = ok ? SetupState::Done : SetupState::Failed;
+        ui.setupResult[i] = ok ? "Set up"
+                            : msg.rfind("Done", 0) == 0
+                                ? "Finished, but it isn't set up - see setup.log in the log folder (Settings)"
+                                : msg;
+        ++ui.setupNext;
+    }
+}
+
+void SetupFinish(Controller& ctl, UiState& ui) {
+    ctl.prefs().setupDone = true;
+    ctl.Changed();
+    ui.setupStep = -1;
+    ui.page = Page::Dashboard;
+    ui.integrationsLoaded = false;
+}
+
+void SetupGuide(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
+    EnsureIntegrations(ctl, in, ui);
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const float colW = std::min(avail, 780 * S());
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - colW) / 2);
+    ImGui::BeginChild("guide", ImVec2(colW, 0));
+    ImGui::Dummy(ImVec2(0, 10 * S()));
+    SetupStepper(ui.setupStep, colW);
+    ImGui::Dummy(ImVec2(0, 10 * S()));
+    auto heading = [&](const char* title, const char* text) {
+        ImGui::PushFont(f.title);
+        ImGui::TextUnformatted(title);
+        ImGui::PopFont();
+        ImGui::PushTextWrapPos(0);
+        Muted("%s", text);
+        ImGui::PopTextWrapPos();
+        ImGui::Dummy(ImVec2(0, 8 * S()));
+    };
+    const float gap = 12 * S(), tileW = (colW - gap) / 2;
+    auto footer = [&](bool back, const char* next) {
+        ImGui::Dummy(ImVec2(0, 12 * S()));
+        if (back && ImGui::Button("Back", ImVec2(110 * S(), 0))) --ui.setupStep;
+        const float nw = std::max(150 * S(), ImGui::CalcTextSize(next).x + 40 * S());
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - nw);
+        return PrimaryButton(next, ImVec2(nw, 0));
+    };
+
+    switch (ui.setupStep) {
+    case 0: {
+        if (f.logo) {
+            const float s = 72 * S();
+            ImGui::Image(static_cast<ImTextureID>(f.logo), ImVec2(s, s));
+        }
+        heading("Welcome to LumaBridge",
+                "A few questions to get your lighting going: which RGB hardware you have and which lighting "
+                "software runs on this PC. LumaBridge looks for them itself and ticks what it finds - you only "
+                "correct what's wrong. Then it sets up its connections, all on unless your answers rule one out.");
+        ImGui::Dummy(ImVec2(0, 8 * S()));
+        if (ImGui::Button("Skip - I'll set it up myself")) SetupFinish(ctl, ui);
+        const float nw = 150 * S();
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - nw);
+        if (PrimaryButton("Get started", ImVec2(nw, 0))) {
+            if (!ui.setupDetected) {
+                ui.setupFound = DetectVendors(DetectSetup(ctl.monitor().Snapshot().smbios), !ctl.devices().empty());
+                ui.setupAnswers = ui.setupFound;
+                ui.setupDetected = true;
+            }
+            ui.setupStep = 1;
+        }
+        break;
+    }
+    case 1: {
+        heading("What RGB hardware do you have?",
+                "Ticked: found on this PC. Tick anything LumaBridge missed, untick what you don't have.");
+        for (int i = 0; i < setup::kBrands; ++i) {
+            if (i % 2) ImGui::SameLine(0, gap);
+            const Brand b = static_cast<Brand>(i);
+            bool on = ui.setupAnswers.has(b);
+            if (ChoiceTile(f, setup::Info(b).name, setup::Info(b).name, setup::Info(b).what, ui.setupFound.has(b), &on,
+                           tileW))
+                ui.setupAnswers.set(b, on);
+            if (i % 2) ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
+        }
+        if (footer(true, "Next")) ui.setupStep = 2;
+        break;
+    }
+    case 2: {
+        heading("Which lighting software do you use?",
+                "LumaBridge works alongside it: it hands the lights back to Armoury Crate, passes game lighting on to "
+                "SteelSeries GG, and doesn't replace Razer's or Alienware's own game lighting.");
+        for (int i = 0; i < setup::kApps; ++i) {
+            if (i % 2) ImGui::SameLine(0, gap);
+            const App a = static_cast<App>(i);
+            bool on = ui.setupAnswers.has(a);
+            char sub[96];
+            snprintf(sub, sizeof sub, "%s's lighting app", setup::Info(a).vendor);
+            if (ChoiceTile(f, setup::Info(a).name, setup::Info(a).name, sub, ui.setupFound.has(a), &on, tileW))
+                ui.setupAnswers.set(a, on);
+            if (i % 2) ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
+        }
+        if (footer(true, "Next")) {
+            SetupDefaults(ctl, in, ui);
+            ui.setupStep = 3;
+        }
+        break;
+    }
+    case 3: {
+        heading("LumaBridge's connections",
+                "All on, except where your answers say otherwise. Change anything you like - everything can be "
+                "changed later on the Devices and Integrations pages.");
+        int admin = 0;
+        for (int i = 0; i < setup::kConns; ++i) {
+            const Conn c = static_cast<Conn>(i);
+            const setup::ConnInfo& ci = setup::Info(c);
+            if (i == 0 || i == static_cast<int>(Conn::LogitechDevices) || i == static_cast<int>(Conn::Handback)) {
+                ImGui::Dummy(ImVec2(0, 4 * S()));
+                ImGui::PushFont(f.bold);
+                ImGui::TextUnformatted(i == 0 ? "Games" : i == static_cast<int>(Conn::Handback) ? "Armoury Crate"
+                                                                                               : "Your devices");
+                ImGui::PopFont();
+            }
+            const Integration* it = FindIntegration(in, ci.integration);
+            const bool already = it && it->state == IntegrationState::Active;
+            ImGui::PushID(i);
+            BeginCard("conn");
+            ImGui::BeginDisabled(already);
+            bool on = ui.setupConns[i] || already;
+            if (Toggle(ci.name, &on)) ui.setupConns[i] = on;
+            ImGui::EndDisabled();
+            if (already) {
+                ImGui::SameLine();
+                Pill("Already set up", kGreen);
+            } else if (ci.admin && on) {
+                ImGui::SameLine();
+                Pill("Administrator approval", kAmber);
+                ++admin;
+            }
+            Muted("%s", ci.why);
+            if (!on && !already) {
+                const char* why = it && it->state == IntegrationState::Conflict
+                                      ? it->detail.c_str()
+                                      : setup::OffReason(c, ui.setupAnswers);
+                if (*why) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, V4(kAmber));
+                    ImGui::TextWrapped("%s", why);
+                    ImGui::PopStyleColor();
+                }
+            }
+            EndCard();
+            ImGui::PopID();
+        }
+        Muted("Corsair iCUE games are added one game at a time, on the Integrations page.");
+        if (admin)
+            Muted("Windows asks for administrator approval %d time%s, once for each marked connection.", admin,
+                  admin == 1 ? "" : "s");
+        if (footer(true, "Set up")) {
+            ui.setupNext = -1;
+            ui.setupStep = 4;
+        }
+        break;
+    }
+    default: {
+        SetupRun(ctl, in, ui);
+        const bool done = ui.setupNext >= setup::kConns;
+        int failed = 0;
+        for (auto s : ui.setupState) failed += s == SetupState::Failed;
+        heading(done ? (failed ? "Almost done" : "All set") : "Setting up...",
+                done ? (failed ? "Some connections couldn't be set up; you can try them again on the Integrations "
+                                 "page (Settings has the log folder)."
+                               : "Your lighting is ready. Everything can be changed later on the Devices and "
+                                 "Integrations pages.")
+                     : "Approve each Windows administrator prompt as it comes.");
+        for (int i = 0; i < setup::kConns; ++i) {
+            const SetupState s = ui.setupState[i];
+            const unsigned col = s == SetupState::Done      ? kGreen
+                                 : s == SetupState::Failed  ? kRed
+                                 : s == SetupState::Running ? kAccent
+                                                            : kMuted;
+            ImGui::PushID(i);
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float h = ImGui::GetTextLineHeight();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImVec2 c(p.x + h / 2, p.y + h / 2);
+            if (s == SetupState::Running) {
+                const float a0 = static_cast<float>(ImGui::GetTime() * 6);
+                dl->PathArcTo(c, h / 2 - 1 * S(), a0, a0 + 4.5f, 16);
+                dl->PathStroke(Hex(col), 0, 2 * S());
+            } else {
+                dl->AddCircleFilled(c, h / 2 - 2 * S(), Hex(col, s == SetupState::Pending ? 90 : 255), 16);
+            }
+            ImGui::Dummy(ImVec2(h, h));
+            ImGui::SameLine(0, 10 * S());
+            ImGui::TextUnformatted(setup::Info(static_cast<Conn>(i)).name);
+            ImGui::SameLine(colW * 0.45f);
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(col == kMuted ? kMuted : col));
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextWrapped("%s", ui.setupResult[i].c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::PopStyleColor();
+            ImGui::PopID();
+        }
+        if (done) {
+            ImGui::Dummy(ImVec2(0, 12 * S()));
+            const float nw = 150 * S();
+            ImGui::SetCursorPosX(ImGui::GetContentRegionMax().x - nw);
+            if (PrimaryButton("Finish", ImVec2(nw, 0))) SetupFinish(ctl, ui);
+        }
+        break;
+    }
+    }
+    ImGui::EndChild();
+}
+
 void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui, const Fonts& f) {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -3326,6 +3701,18 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
 
     integrations.SetOwner(hwnd);  // administrator prompts open in front of LumaBridge, from any page
+    // The setup guide fills the window until it's finished (first start, or from Settings).
+    if (!ctl.prefs().setupDone && ui.setupStep < 0) ui.setupStep = 0;
+    if (ui.setupStep >= 0) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(28 * S(), 22 * S()));
+        ImGui::BeginChild("setup-guide", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding);
+        SetupGuide(ctl, integrations, ui, f);
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::End();
+        Splash(ui, f);
+        return;
+    }
     const float sidebarW = 210 * S();
     Sidebar(ctl, ui, f, sidebarW);
     ImGui::SameLine(0, 0);

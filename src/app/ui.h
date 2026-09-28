@@ -3,7 +3,10 @@
 
 #include <windows.h>
 
+#include <array>
 #include <string>
+
+#include "setup_plan.h"
 
 struct ImFont;
 
@@ -50,6 +53,16 @@ struct UiState {
     bool autostart = false;
     bool autostartLoaded = false;
     double splashStart = -1;  // when the loading screen appeared (ImGui time), -1 before the first frame
+    // The setup guide: its step (-1: closed), the answers and the connections ticked, and while
+    // it sets them up, the one in progress and each one's result.
+    int setupStep = -1;
+    bool setupDetected = false;
+    setup::Answers setupFound, setupAnswers;
+    std::array<bool, setup::kConns> setupConns{};
+    enum class SetupState { Pending, Running, Done, Failed, Skipped };
+    std::array<SetupState, setup::kConns> setupState{};
+    std::array<std::string, setup::kConns> setupResult;
+    int setupNext = -1;  // the connection being set up (-1: not started)
 };
 
 // Applies the LumaBridge theme at the given DPI scale (call again when DPI changes).

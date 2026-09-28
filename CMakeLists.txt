@@ -143,6 +143,7 @@ if(LUMA_ARCH STREQUAL "x64")
         src/app/game_library.cpp
         src/app/game_feeds.cpp
         src/app/screen_capture.cpp
+        src/app/vendor_detect.cpp
         src/app/sensors/system_monitor.cpp
         src/app/peripherals/logitech_output.cpp
         src/app/peripherals/azoth_output.cpp src/app/peripherals/hardware_helper.cpp
