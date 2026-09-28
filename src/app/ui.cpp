@@ -1906,6 +1906,13 @@ void RamSlotsCard(Controller& ctl, const Fonts& f) {
           : hw.slotsKnown         ? "As your board reports them."
                                   : "Your board doesn't say which slots are used, so this is a guess.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
+    // What the firmware calls each stick's slot (to see why, when it isn't understood).
+    {
+        std::string names;
+        for (const auto& m : ctl.monitor().Snapshot().smbios.memory)
+            names += (names.empty() ? "" : ",  ") + ("\"" + m.slot + "\"") + (m.bank.empty() ? "" : " (\"" + m.bank + "\")");
+        if (!names.empty()) Muted("Your board names them: %s", names.c_str());
+    }
     std::array<bool, 4> slots = RamSlotsShown(ctl, hw);
     static const char* kNames[] = {"A1", "A2", "B1", "B2"};
     for (int i = 0; i < 4; ++i) {

@@ -1306,6 +1306,28 @@ static void TestSetupHardware() {
         const SetupHardware three = DetectSetup(amd);  // three sticks in the first three slots
         CHECK(three.slotsKnown && three.slots[0] && three.slots[1] && three.slots[2] && !three.slots[3]);
     }
+    // Channels numbered from zero.
+    CHECK(SlotIndex("P0_Node0_Channel0_Dimm0") == 0 && SlotIndex("P0_Node0_Channel1_Dimm1") == 3);
+    // Slots numbered in a row, without channels.
+    for (auto names : {std::vector<const char*>{"DIMM 1", "DIMM 2", "DIMM 3"}, std::vector<const char*>{"DIMM0", "DIMM1", "DIMM2"}}) {
+        luma::app::sensors::SmbiosInfo row;
+        for (const char* n : names) {
+            luma::app::sensors::MemoryModule m;
+            m.slot = n;
+            row.memory.push_back(m);
+        }
+        const SetupHardware r = DetectSetup(row);
+        CHECK(r.slotsKnown && r.slots[0] && r.slots[1] && r.slots[2] && !r.slots[3]);
+    }
+    {
+        luma::app::sensors::SmbiosInfo same;  // two sticks both called "DIMM 0": not understood
+        for (int i = 0; i < 2; ++i) {
+            luma::app::sensors::MemoryModule m;
+            m.slot = "DIMM 0";
+            same.memory.push_back(m);
+        }
+        CHECK(!DetectSetup(same).slotsKnown);
+    }
 
     luma::app::sensors::SmbiosInfo info;
     info.boardMaker = "ASUSTeK COMPUTER INC.";

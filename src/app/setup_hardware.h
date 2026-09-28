@@ -2,6 +2,7 @@
 // look from its model, and the memory's look and filled slots from the modules. Pure, tested.
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <string>
@@ -52,11 +53,13 @@ inline int SlotIndex(const std::string& locator, bool zeroBased = false) {
     int channel = -1, dimm = -1;
     const size_t ch = s.find("CHANNEL");
     if (ch != std::string::npos) {
-        for (size_t i = ch + 7; i < s.size(); ++i)
-            if (s[i] == 'A' || s[i] == 'B') {
-                channel = s[i] - 'A';
-                break;
-            }
+        // "CHANNEL A", "ChannelB", or numbered from zero: "P0_Node0_Channel0_Dimm0".
+        for (size_t i = ch + 7; i < s.size(); ++i) {
+            if (s[i] == ' ' || s[i] == '_' || s[i] == '-') continue;
+            if (s[i] >= 'A' && s[i] <= 'H') channel = s[i] - 'A';
+            else if (std::isdigit(static_cast<unsigned char>(s[i]))) channel = s[i] - '0';
+            break;
+        }
         const size_t d = s.find("DIMM", ch);
         if (d != std::string::npos && d + 4 < s.size()) {
             const bool spaced = s[d + 4] == ' ' && !zeroBased;
@@ -76,7 +79,7 @@ inline int SlotIndex(const std::string& locator, bool zeroBased = false) {
                 break;
             }
     }
-    if (channel < 0 || dimm < 0 || dimm > 1) return -1;
+    if (channel < 0 || channel > 1 || dimm < 0 || dimm > 1) return -1;
     return channel * 2 + dimm;
 }
 
@@ -102,6 +105,39 @@ inline SetupHardware DetectSetup(const sensors::SmbiosInfo& info) {
         if (slot < 0 && !m.bank.empty()) slot = SlotIndex(m.bank + " / " + m.slot, zeroBased);
         if (slot < 0 || h.slots[static_cast<size_t>(slot)]) allKnown = false;
         else h.slots[static_cast<size_t>(slot)] = true;
+    }
+    // Last: slots numbered in a row without channels ("DIMM 1" .. "DIMM 4", "DIMM0" ..
+    // "DIMM3"), in the board's order A1 A2 B1 B2. Only when every stick has a distinct number.
+    if (!allKnown && !info.memory.empty()) {
+        std::array<int, 8> nums{};
+        size_t n = 0;
+        bool ok = info.memory.size() <= 4;
+        for (const auto& m : info.memory) {
+            const std::string s = detail::Upper(m.slot);
+            const size_t d = s.find("DIMM");
+            int num = -1;
+            if (d != std::string::npos && s.find_first_of("ABCH", d + 4) == std::string::npos)
+                for (size_t i = d + 4; i < s.size() && num < 0; ++i) {
+                    if (s[i] == ' ' || s[i] == '_' || s[i] == '-') continue;
+                    if (std::isdigit(static_cast<unsigned char>(s[i]))) num = s[i] - '0';
+                    else break;
+                }
+            if (num < 0 || num > 4) ok = false;
+            else nums[n++] = num;
+        }
+        int lowest = 9;
+        for (size_t i = 0; i < n; ++i) lowest = std::min(lowest, nums[i]);
+        const int base = lowest == 0 ? 0 : 1;
+        std::array<bool, 4> seq{};
+        for (size_t i = 0; ok && i < n; ++i) {
+            const int slot = nums[i] - base;
+            if (slot < 0 || slot > 3 || seq[static_cast<size_t>(slot)]) ok = false;
+            else seq[static_cast<size_t>(slot)] = true;
+        }
+        if (ok) {
+            h.slots = seq;
+            allKnown = true;
+        }
     }
     h.slotsKnown = allKnown;
     if (!allKnown) h.slots = {};
