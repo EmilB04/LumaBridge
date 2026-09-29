@@ -1,5 +1,5 @@
-// Recognising RGB hardware LumaBridge doesn't light itself: USB vendors of RGB brands, and
-// RGB memory by its part number, so the setup guide and the Devices page can name what's in
+// Recognising RGB hardware LumaBridge doesn't light itself: USB vendors of RGB brands, RGB
+// memory by its part number, and AIO coolers by their pump's USB ID, so the setup guide and the Devices page can name what's in
 // a PC and say how it can be lit (natively, through OpenRGB, or with the brand's own app).
 // Pure, tested.
 #pragma once
@@ -84,6 +84,50 @@ inline std::string RgbMemory(const std::string& maker, const std::string& part) 
         if (p.find("GTR") != std::string::npos) return "G.Skill Trident Z Royal";
     }
     return "";
+}
+
+// ---- AIO water coolers ----------------------------------------------------------------
+// The pump of an all-in-one cooler is a USB device, so it can be named: by product ID, as
+// listed by liquidctl (the open-source cooler tool). One ID often covers every radiator size
+// of a model line, so the names are the line's.
+
+struct AioModel {
+    uint16_t vid, pid;
+    const char* name;
+    bool lcd;       // a screen on the pump head
+    bool pumpRgb;   // a lit pump head (lit by the brand's own app)
+};
+
+inline const std::vector<AioModel>& AioModels() {
+    static const std::vector<AioModel> k{
+        {0x1E71, 0x170E, "NZXT Kraken X42/X52/X62/X72", false, true},
+        {0x1E71, 0x1715, "NZXT Kraken M22", false, true},
+        {0x1E71, 0x2007, "NZXT Kraken X53/X63/X73", false, true},
+        {0x1E71, 0x2014, "NZXT Kraken X53/X63/X73", false, true},
+        {0x1E71, 0x3008, "NZXT Kraken Z53/Z63/Z73", true, false},
+        {0x1E71, 0x300C, "NZXT Kraken Elite", true, false},
+        {0x1E71, 0x300E, "NZXT Kraken", true, false},
+        {0x1E71, 0x3012, "NZXT Kraken Elite RGB", true, true},
+        {0x1B1C, 0x0C12, "Corsair Hydro H150i Pro", false, true},
+        {0x1B1C, 0x0C13, "Corsair Hydro H115i Pro", false, true},
+        {0x1B1C, 0x0C15, "Corsair Hydro H100i Pro", false, true},
+        {0x1B1C, 0x0C17, "Corsair H115i Platinum", false, true},
+        {0x1B1C, 0x0C18, "Corsair H100i Platinum", false, true},
+        {0x1B1C, 0x0C19, "Corsair H100i Platinum SE", false, true},
+        {0x1B1C, 0x0C20, "Corsair H100i Pro XT", false, true},
+        {0x1B1C, 0x0C21, "Corsair H115i Pro XT", false, true},
+        {0x1B1C, 0x0C22, "Corsair H150i Pro XT", false, true},
+        {0x0B05, 0x1988, "ASUS ROG Ryujin II", true, true},
+    };
+    return k;
+}
+
+// The AIO cooler among USB (vendor, product) pairs, or nullptr.
+inline const AioModel* FindAio(const std::vector<std::pair<uint16_t, uint16_t>>& usb) {
+    for (const auto& [vid, pid] : usb)
+        for (const AioModel& m : AioModels())
+            if (m.vid == vid && m.pid == pid) return &m;
+    return nullptr;
 }
 
 }  // namespace luma::app::catalog

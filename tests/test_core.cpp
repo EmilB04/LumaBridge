@@ -30,6 +30,7 @@
 #include "scene3d.h"
 #include "pc_layout.h"
 #include "display_layout.h"
+#include "nzxt_kraken.h"
 #include "war_thunder_lighting.h"
 #include "screen_colors.h"
 #include "smbios.h"
@@ -886,6 +887,31 @@ static void TestPcLayout() {
     CHECK(AirflowPoint(none, 0, 0, 1, 3).z < -kCaseD / 2);   // no fans: out the back vents
 }
 
+static void TestAioCatalog() {
+    using namespace luma::app::catalog;
+    const AioModel* k = FindAio({{0x046D, 0xC547}, {0x1E71, 0x3008}});
+    CHECK(k && std::string(k->name).find("Kraken Z") != std::string::npos && k->lcd);
+    CHECK(FindAio({{0x1E71, 0x2007}}) && !FindAio({{0x1E71, 0x2007}})->lcd);
+    CHECK(!FindAio({{0x1E71, 0x1234}, {0x046D, 0xC547}}));  // NZXT, but not a cooler LumaBridge knows
+    // A Kraken status report: 31.5 °C liquid, pump at 2400 RPM / 60 %, fans (screen models) 1200 RPM / 45 %.
+    uint8_t r[64] = {0x75, 0x01};
+    r[15] = 31;
+    r[16] = 5;
+    r[17] = 2400 & 0xFF;
+    r[18] = 2400 >> 8;
+    r[19] = 60;
+    r[23] = 1200 & 0xFF;
+    r[24] = 1200 >> 8;
+    r[25] = 45;
+    auto st = luma::app::nzxt::Parse(r, sizeof r, true);
+    CHECK(st.valid && std::fabs(st.liquidC - 31.5) < 1e-9 && st.pumpRpm == 2400 && st.pumpDuty == 60 && st.fanRpm == 1200);
+    CHECK(luma::app::nzxt::Parse(r, sizeof r, false).fanRpm == -1);  // the X models don't report fans
+    r[15] = r[16] = 0xFF;
+    CHECK(!luma::app::nzxt::Parse(r, sizeof r, true).valid);  // no reading yet
+    r[0] = 0x11;
+    CHECK(!luma::app::nzxt::Parse(r, sizeof r, true).valid);  // not a status report
+}
+
 static void TestDisplayLayout() {
     using namespace luma::app::displays;
     // Two 27" 1440p monitors side by side, the primary on the left.
@@ -929,6 +955,15 @@ static void TestDisplayLayout() {
     ScreenSize(q, &w, &h);
     CHECK(h > w && std::fabs(std::sqrt(w * w + h * h) - 24 * 2.54f) < 0.5f);
     CHECK(Arrange({}).empty());
+    // A small screen (a 7" sensor panel) rests on the desk, no stand.
+    Display tiny;
+    tiny.x = 2560;
+    tiny.w = 1024;
+    tiny.h = 600;
+    tiny.widthCm = 15.4f;
+    tiny.heightCm = 9.0f;
+    p = Arrange({a, tiny});
+    CHECK(p[1].resting && p[1].bottom < 1 && !p[0].resting);
 }
 
 static void TestFlightSim() {
@@ -1804,6 +1839,7 @@ int main() {
     TestScene3d();
     TestPcLayout();
     TestDisplayLayout();
+    TestAioCatalog();
     TestDcs();
     TestDeviceCatalog();
     TestHyperXRam();

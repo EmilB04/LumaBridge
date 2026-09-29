@@ -32,6 +32,7 @@
 #include "openrgb_output.h"
 #include "lamparray_output.h"
 #include "hardware_helper.h"
+#include "nzxt_kraken.h"
 #include "gamesense_server.h"
 #include "ipc.h"
 #include "source_tracker.h"
@@ -172,6 +173,8 @@ public:
         }
     };
     const Presence& presence() const { return presence_; }
+    // An NZXT Kraken's own readings (liquid temperature, pump and fan speeds), when one is plugged in.
+    nzxt::Status kraken() const { return kraken_.status(); }
     void RescanPresence();
 
     // ASUS ROG Azoth over USB (wired).
@@ -259,6 +262,7 @@ private:
     bool feedActive_[8] = {};
     std::future<std::vector<InstalledGame>> libraryJob_;
     Presence presence_;
+    nzxt::Kraken kraken_;
     uint64_t logitechInputAt_ = 0, azothInputAt_ = 0;  // last used (GetTickCount64)
     bool memoryLogged_ = false;  // the memory slots' names are in the log
     bool logitechAsleep_ = false, azothAsleep_ = false;

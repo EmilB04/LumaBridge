@@ -28,6 +28,7 @@ struct Placed {
     float x = 0, z = 0, bottom = 12;
     float w = 60, h = 34;
     float yaw = 0;
+    bool resting = false;  // a small screen (under 16"): no stand, resting on the desk, leaning back
 };
 
 // The screen's size: as reported, else a guess from its resolution (34" ultrawide, 27" for
@@ -111,6 +112,13 @@ inline std::vector<Placed> Arrange(const std::vector<Display>& list) {
         Placed& o = out[static_cast<size_t>(i)];
         o.x = cx[static_cast<size_t>(i)];
         o.bottom = 12 + (cy[static_cast<size_t>(i)] - o.h / 2 - lowest);
+        // A small screen (a sensor panel, a portable display) rests on the desk in front.
+        if (std::sqrt(o.w * o.w + o.h * o.h) < 16 * 2.54f) {
+            o.resting = true;
+            o.bottom = 0.3f;
+            o.z = 16;
+            continue;
+        }
         // Beside the primary (in its row): turned towards you and a little forward.
         const bool beside = std::fabs(o.x) > pp.w / 2 && std::fabs(cy[static_cast<size_t>(i)] - cy[static_cast<size_t>(prim)]) < (o.h + pp.h) / 2;
         if (beside) {

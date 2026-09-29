@@ -30,6 +30,7 @@
 #include "openrgb_protocol.h"
 #include "lamparray.h"
 #include "device_catalog.h"
+#include "nzxt_kraken.h"
 #include "pc_layout.h"
 #include "displays.h"
 
@@ -781,6 +782,20 @@ void WFans(DashCtx& c) {
             Muted("%s fan", sensors::FriendlyGpu(g.name).c_str());
             ++shown;
         }
+    // An NZXT Kraken reports its pump and radiator fans itself.
+    if (const nzxt::Status k = c.ctl.kraken(); k.valid) {
+        auto kRow = [&](int rpm, const char* what) {
+            ImGui::PushID(shown++);
+            IconItem(Icon::Fan, 18 * S(), Hex(kAccent), t * static_cast<float>(rpm) / 60.f * 0.35f);
+            ImGui::SameLine();
+            ImGui::Text("%d RPM", rpm);
+            ImGui::SameLine();
+            Muted("%s", what);
+            ImGui::PopID();
+        };
+        kRow(k.pumpRpm, "Kraken pump");
+        if (k.fanRpm > 0) kRow(k.fanRpm, "Kraken radiator fans");
+    }
     if (idle) Muted("%d header(s) with nothing connected / stopped", idle);
     if (!s.lhmConnected) LhmHint();
     else if (!shown && !idle) Muted("No fans reported.");
@@ -802,6 +817,15 @@ void WTemps(DashCtx& c) {
         row("CPU", x->value);
     for (const auto& g : s.gpus)
         if (g.temp >= 0) row(sensors::FriendlyGpu(g.name).c_str(), g.temp);
+    if (const nzxt::Status k = c.ctl.kraken(); k.valid) {
+        // Liquid runs cooler than chips: its own colors (green below 40, amber to 60, then red).
+        ImGui::PushStyleColor(ImGuiCol_Text, V4(TempColor(k.liquidC + 20)));
+        ImGui::Text("%5.1f \xC2\xB0" "C", k.liquidC);
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        Muted("Liquid (NZXT Kraken)");
+        ++shown;
+    }
     for (const auto& x : s.lhm)
         if (x.type == sensors::SensorType::Temperature && x.value > 0 && x.value < 150 &&
             (x.kind == sensors::HardwareKind::Board || x.kind == sensors::HardwareKind::Storage ||
@@ -2292,7 +2316,9 @@ struct Gear {
 struct Model {
     pc::Layout layout;
     std::array<double, pc::kSlots> fanRpm{};  // -1: not reported
-    double cpuFanRpm = -1, pumpRpm = -1, gpuFanPct = -1;
+    double cpuFanRpm = -1, pumpRpm = -1, gpuFanPct = -1, cpuTemp = -1;
+    const catalog::AioModel* aio = nullptr;  // the AIO cooler found on USB
+    nzxt::Status kraken;                     // an NZXT Kraken's own readings
     std::array<bool, 4> ram{};
     bool ramRgb = false, boardRgb = false, fansRgb = false, gpuRgb = false;
     int boardLeds = 5, drives = 0;
@@ -2337,7 +2363,9 @@ pc::Layout CaseLayout(Controller& ctl, const sensors::SystemSnapshot& snap, bool
     int plain = std::max(0, chassis - (rgb > 0 ? 1 : 0));  // the RGB fans usually share one header
     if (!rgb && !plain) plain = 2;
     l = pc::Guess(rgb, plain);
-    // A pump header that reports a speed: an AIO water cooler (its radiator guessed on top).
+    // An AIO cooler's pump on USB, or a pump header that reports a speed: an AIO (its
+    // radiator guessed on top).
+    if (catalog::FindAio(ctl.presence().usb)) l.cooler = pc::Cooler::Aio;
     for (const auto& x : snap.lhm)
         if (x.type == sensors::SensorType::Fan && x.value > 0 && (Contains(x.name, "Pump") || Contains(x.name, "AIO")))
             l.cooler = pc::Cooler::Aio;
@@ -2392,6 +2420,19 @@ Model Gather(Controller& ctl, const sensors::SystemSnapshot& snap) {
     m.cpuName = sensors::FriendlyCpu(snap.cpuName);
     m.drives = static_cast<int>(Drives().size());
     m.screens = Screens();
+    m.aio = catalog::FindAio(ctl.presence().usb);
+    if (const auto* x = sensors::PickSensor(snap.lhm, sensors::HardwareKind::Cpu, sensors::SensorType::Temperature,
+                                            {"Tctl", "Package", "Core (Tdie)", "CPU"}))
+        m.cpuTemp = x->value;
+    // An NZXT Kraken reports its own pump and (screen models) radiator fan speeds.
+    m.kraken = ctl.kraken();
+    if (m.kraken.valid) {
+        m.pumpRpm = m.kraken.pumpRpm;
+        if (m.kraken.fanRpm > 0 && m.layout.cooler == pc::Cooler::Aio)
+            for (int i = 0; i < pc::kSlots; ++i)
+                if (pc::Slots()[static_cast<size_t>(i)].mount == m.layout.radiator && m.layout.slots[static_cast<size_t>(i)] != pc::SlotFan::None)
+                    m.fanRpm[static_cast<size_t>(i)] = m.kraken.fanRpm;
+    }
     for (const auto& d : ctl.openRgb().devices())
         if (d.type == 2 && ctl.OpenRgbOn(d)) m.gpuRgb = true;  // a graphics card OpenRGB lights
 
@@ -2618,7 +2659,24 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
         sc.Box({bx + 0.4f, 34, -13}, {bx + 3.6f, 40, -7}, H(0x2A2F38), kCpu);
         sc.xf = s3d::Transform::Facing({1, 0, 0}, {bx + 3.65f, 37, -10}).Then(cx);
         sc.Disc(2.7f, 0, 8, H(0x4A5262), kCpu);
-        sc.Disc(1.6f, 0.05f, 8, H(0x5E6778), kCpu);
+        if (m.aio && m.aio->lcd) {
+            // The pump's screen, as NZXT's shows it by default: the liquid's temperature (as the
+            // Kraken reports it), else the CPU's, as a ring.
+            sc.Disc(2.45f, 0.05f, 8, H(0x0A0F1A), kCpu, s3d::kEmissive);
+            const double shown = m.kraken.valid ? m.kraken.liquidC : m.cpuTemp;
+            const float frac = shown < 0 ? 0.35f : static_cast<float>(std::clamp((m.kraken.valid ? (shown - 20) * 2 : shown) / 100.0, 0.05, 1.0));
+            const uint32_t arc = shown < 0 ? H(0x5A6272) : Hex(TempColor(m.kraken.valid ? shown + 20 : shown));
+            const int segs = std::max(1, static_cast<int>(24 * frac));
+            for (int i = 0; i < segs; ++i) {
+                const float a0 = 1.5707963f - 6.2831853f * static_cast<float>(i) / 24.f, a1 = 1.5707963f - 6.2831853f * static_cast<float>(i + 1) / 24.f;
+                sc.Quad({std::cos(a0) * 1.55f, std::sin(a0) * 1.55f, 0.1f}, {std::cos(a1) * 1.55f, std::sin(a1) * 1.55f, 0.1f},
+                        {std::cos(a1) * 2.05f, std::sin(a1) * 2.05f, 0.1f}, {std::cos(a0) * 2.05f, std::sin(a0) * 2.05f, 0.1f}, arc, kCpu,
+                        s3d::kEmissive | s3d::kDoubleSided);
+            }
+            sc.AddGlow({0, 0, 0.3f}, 2.4f, s3d::WithAlpha(arc, 40));
+        } else {
+            sc.Disc(1.6f, 0.05f, 8, H(0x5E6778), kCpu);
+        }
         if (m.layout.pumpRgb) {
             // The pump head's light ring, chained on the ARGB header: the fans' lighting.
             const std::vector<Rgb> ring = Leds(ctl, m.fansRgb ? device::kFans : nullptr, t, 12);
@@ -2648,15 +2706,18 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
             lo = std::max(first, hi - 12);
             hi = lo + 12;
         }
+        // Blowing out, the radiator sits against the panel with its fans inside pulling air
+        // from the case through it; pulling in, the fans sit at the panel and push through it.
+        const bool out = m.layout.exhaust[static_cast<size_t>(m.layout.radiator)];
         V3 rlo, rhi, port;
         if (top) {
-            rlo = {-4.4f, 41.2f, lo - 6.6f};
-            rhi = {8.4f, 43.8f, hi + 6.6f};
-            port = {2, 41.2f, rlo.z + 2};
+            rlo = {-4.4f, out ? 43.9f : 41.2f, lo - 6.6f};
+            rhi = {8.4f, out ? 46.6f : 43.8f, hi + 6.6f};
+            port = {2, rlo.y, rlo.z + 2};
         } else {
-            rlo = {-6.6f, std::max(pc::kShroudH + 0.5f, lo - 6.6f), 17.1f};
-            rhi = {6.6f, hi + 6.6f, 19.6f};
-            port = {0, rhi.y - 2, 17.1f};
+            rlo = {-6.6f, std::max(pc::kShroudH + 0.5f, lo - 6.6f), out ? 19.5f : 17.1f};
+            rhi = {6.6f, hi + 6.6f, out ? 22.2f : 19.6f};
+            port = {0, rhi.y - 2, rlo.z};
         }
         sc.bias = 2;
         sc.Box(rlo, rhi, H(0x2C323C), kCpu);
@@ -2732,7 +2793,10 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
         for (int i = 0; i < pc::kSlots; ++i) {
             const pc::Slot& s = pc::Slots()[static_cast<size_t>(i)];
             const pc::SlotFan f = m.layout.slots[static_cast<size_t>(i)];
-            sc.xf = s3d::Transform::Facing(s.inward, s.center).Then(cx);
+            // Behind a radiator that blows out, the fans move inside it (see the radiator).
+            const bool behindRadiator = m.layout.cooler == pc::Cooler::Aio && s.mount == m.layout.radiator &&
+                                        m.layout.exhaust[static_cast<size_t>(s.mount)];
+            sc.xf = s3d::Transform::Facing(s.inward, s.center + s.inward * (behindRadiator ? 3.4f : 0.f)).Then(cx);
             if (f == pc::SlotFan::None) {
                 if (o.editSlots) {
                     // An empty slot: a faint square to click.
@@ -2803,16 +2867,24 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
             const displays::Placed& d = placed[i];
             const int id = kMonitor0 + static_cast<int>(i);
             sc.xf = s3d::Transform::YawAt(d.yaw, {d.x, 0, d.z}).Then(group);
+            if (d.resting) {
+                // A small screen with no stand, leaning back on the desk.
+                s3d::Transform lean;
+                const float a = 0.26f;
+                lean.y = {0, std::cos(a), -std::sin(a)};
+                lean.z = {0, std::sin(a), std::cos(a)};
+                sc.xf = lean.Then(sc.xf);
+            }
             const float hw = d.w / 2 + 0.8f, top = d.bottom + d.h + 0.8f;
-            if (d.bottom < 20) {  // on its own stand
+            if (!d.resting && d.bottom < 20) {  // on its own stand (a small screen has none)
                 sc.bias = 3;
                 sc.Box({-9, 0, -7}, {9, 1, 5}, H(0x23272F), id);
                 sc.bias = 0;
                 sc.Box({-2, 1, -4.4f}, {2, d.bottom + 2, -2.4f}, H(0x2B3039), id);
-            } else {  // on an arm from behind
+            } else if (!d.resting) {  // on an arm from behind
                 sc.Box({-1.2f, d.bottom + d.h / 2 - 1.2f, -14}, {1.2f, d.bottom + d.h / 2 + 1.2f, -4.4f}, H(0x2B3039), id);
             }
-            sc.Box({-hw, d.bottom - 0.8f, -4.4f}, {hw, top, -2.5f}, H(0x23272F), id);
+            sc.Box({-hw, std::max(0.f, d.bottom - 0.8f), -4.4f}, {hw, top, -2.5f}, H(0x23272F), id);
             sc.Quad({-d.w / 2, d.bottom, -2.45f}, {d.w / 2, d.bottom, -2.45f}, {d.w / 2, d.bottom + d.h, -2.45f},
                     {-d.w / 2, d.bottom + d.h, -2.45f}, H(0x0D1422), id, s3d::kEmissive);
             if (screens[i].primary)  // the taskbar tells the primary display apart
@@ -2994,8 +3066,15 @@ void Describe(Controller& ctl, const Model& m, const sensors::SystemSnapshot& sn
         if (snap.cpuClockMhz > 0) snprintf(b, sizeof b, "   %.2f GHz", snap.cpuClockMhz / 1000), line += b;
         if (!line.empty()) Muted("%s", line.c_str());
         if (m.layout.cooler == pc::Cooler::Aio) {
-            Muted("AIO water cooler, radiator %s", m.layout.radiator == pc::Mount::Top ? "on top" : "in front");
-            if (m.pumpRpm > 0) Muted("Pump: %.0f RPM", m.pumpRpm);
+            Muted("%s, radiator %s", m.aio ? m.aio->name : "AIO water cooler", m.layout.radiator == pc::Mount::Top ? "on top" : "in front");
+            if (m.kraken.valid) {
+                Muted("Liquid: %.1f \xC2\xB0" "C   Pump: %d RPM (%d%%)", m.kraken.liquidC, m.kraken.pumpRpm, m.kraken.pumpDuty);
+                if (m.kraken.fanRpm > 0) Muted("Radiator fans: %d RPM (%d%%)", m.kraken.fanRpm, m.kraken.fanDuty);
+                if (m.aio && m.aio->lcd) Muted("Its screen shows the liquid temperature here (NZXT CAM sets what it really shows).");
+            } else {
+                if (m.aio && m.aio->lcd) Muted("Its screen shows the CPU temperature here (NZXT CAM sets what it really shows).");
+                if (m.pumpRpm > 0) Muted("Pump: %.0f RPM", m.pumpRpm);
+            }
         } else if (m.cpuFanRpm > 0) {
             Muted("Cooler fan: %.0f RPM", m.cpuFanRpm);
         }
@@ -3445,6 +3524,22 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
         c.cooler = cooler ? pc::Cooler::Aio : pc::Cooler::Air;
         SaveLayout(ctl, c);
     }
+    if (m.aio) {
+        Muted("Found on USB: %s%s.", m.aio->name, m.aio->lcd ? " (with a screen)" : "");
+        if (m.kraken.valid)
+            Muted("Read from the Kraken: liquid %.1f \xC2\xB0" "C, pump %d RPM%s.", m.kraken.liquidC, m.kraken.pumpRpm,
+                  m.kraken.fanRpm > 0 ? (", fans " + std::to_string(m.kraken.fanRpm) + " RPM").c_str() : "");
+        else if (m.aio->vid == nzxt::kVid)
+            Muted("Waiting for its first status reading...");
+        if (l.cooler != pc::Cooler::Aio) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Show it")) {
+                pc::Layout c = l;
+                c.cooler = pc::Cooler::Aio;
+                SaveLayout(ctl, c);
+            }
+        }
+    }
     if (l.cooler == pc::Cooler::Aio) {
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Radiator");
@@ -3503,7 +3598,10 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
     };
     row(Icon::Board, m.boardName.empty() ? "Motherboard" : m.boardName, "", m.boardRgb);
     row(Icon::Cpu, m.cpuName.empty() ? "Processor" : m.cpuName,
-        l.cooler == pc::Cooler::Aio ? "with an AIO water cooler" : "with an air cooler", false);
+        l.cooler != pc::Cooler::Aio ? std::string("with an air cooler")
+        : m.aio                     ? std::string("with an ") + m.aio->name
+                                    : std::string("with an AIO water cooler"),
+        false);
     int sticks = 0;
     for (bool st : m.ram) sticks += st;
     row(Icon::Memory, m.ramName.empty() ? "Memory" : m.ramName, std::to_string(sticks) + (sticks == 1 ? " stick" : " sticks"), m.ramRgb);

@@ -303,6 +303,7 @@ void Controller::Shutdown(bool handBack) {
     logitech_.Stop();
     azoth_.Stop();
     openRgb_.Stop();
+    kraken_.Stop();
     lampArray_.Stop();
     hardware_.Stop();
     const bool wasControlling = mirror_.IsRunning();
@@ -657,6 +658,12 @@ void Controller::Tick() {
     if (!wantScreen && screen_.Running()) screen_.Stop();
     if (presenceJob_.valid() && presenceJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
         presence_ = presenceJob_.get();
+    {
+        // An NZXT Kraken on USB: read its status while it's there (read only; CAM keeps its lights).
+        const catalog::AioModel* aio = catalog::FindAio(presence_.usb);
+        if (aio && aio->vid == nzxt::kVid && !kraken_.running()) kraken_.Start(aio->pid, aio->lcd);
+        if (!(aio && aio->vid == nzxt::kVid) && kraken_.running()) kraken_.Stop();
+    }
     if (now - presenceAt_ > 60000) RescanPresence();  // devices plugged in or out
     if (libraryJob_.valid() && libraryJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         library_ = libraryJob_.get();
