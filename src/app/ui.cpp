@@ -6103,9 +6103,9 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
 
 // ---- Frame ---------------------------------------------------------------------------
 
-void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width) {
+void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width, bool collapsed) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, V4(kSidebar));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16 * S(), 20 * S()));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, collapsed ? ImVec2(10 * S(), 20 * S()) : ImVec2(16 * S(), 20 * S()));
     ImGui::BeginChild("sidebar", ImVec2(width, 0), ImGuiChildFlags_AlwaysUseWindowPadding,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
@@ -6127,17 +6127,39 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width) {
             }
         }
         ImGui::Dummy(ImVec2(r * 2, r * 2 + 4 * S()));
-        ImGui::SameLine(0, 10 * S());
-        ImGui::BeginGroup();
-        ImGui::PushFont(f.title);
-        ImGui::TextUnformatted("LumaBridge");
-        ImGui::PopFont();
-        ImGui::PushFont(f.caption);
-        Muted("Game lighting for Aura");
-        ImGui::PopFont();
-        ImGui::EndGroup();
+        if (!collapsed) {
+            ImGui::SameLine(0, 10 * S());
+            ImGui::BeginGroup();
+            ImGui::PushFont(f.title);
+            ImGui::TextUnformatted("LumaBridge");
+            ImGui::PopFont();
+            ImGui::PushFont(f.caption);
+            Muted("Game lighting for Aura");
+            ImGui::PopFont();
+            ImGui::EndGroup();
+        }
     }
-    ImGui::Dummy(ImVec2(0, 18 * S()));
+
+    // Collapse / expand: a small chevron row, same style as the nav items below.
+    {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float w = ImGui::GetContentRegionAvail().x, h = 28 * S();
+        const bool clicked = ImGui::InvisibleButton("collapse", ImVec2(w, h));
+        const bool hovered = ImGui::IsItemHovered();
+        if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (clicked) ui.sidebarCollapsed = !ui.sidebarCollapsed;
+        if (collapsed && hovered) ImGui::SetTooltip(ui.sidebarCollapsed ? "Expand" : "Collapse");
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        if (hovered) dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Hex(kCardHover), 8 * S());
+        // Right (tap to expand) when collapsed, left (tap to collapse) when open.
+        const ImVec2 c(p.x + h / 2, p.y + h / 2);
+        const float len = 4 * S(), dir = collapsed ? 1.f : -1.f, lw = std::max(1.5f, 2 * S());
+        const ImU32 col = hovered ? Hex(kText) : Hex(kMuted);
+        dl->AddLine(ImVec2(c.x + dir * len, c.y - len), ImVec2(c.x - dir * len * 0.2f, c.y), col, lw);
+        dl->AddLine(ImVec2(c.x - dir * len * 0.2f, c.y), ImVec2(c.x + dir * len, c.y + len), col, lw);
+        if (!collapsed) dl->AddText(ImVec2(p.x + h, p.y + (h - ImGui::GetTextLineHeight()) / 2), Hex(kMuted), "Collapse");
+    }
+    ImGui::Dummy(ImVec2(0, collapsed ? 10 * S() : 14 * S()));
 
     const struct {
         Page page;
@@ -6163,39 +6185,52 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width) {
         } else if (hovered) {
             dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Hex(kCardHover), 10 * S());
         }
-        DrawIcon(it.icon, ImVec2(p.x + 22 * S(), p.y + h / 2), 18 * S(), sel ? Hex(kAccentHover) : hovered ? Hex(kText) : Hex(kMuted));
-        ImGui::PushFont(sel ? f.bold : f.regular);
-        dl->AddText(ImVec2(p.x + 44 * S(), p.y + (h - ImGui::GetFontSize()) / 2), sel || hovered ? Hex(kText) : Hex(kMuted), it.label);
-        ImGui::PopFont();
+        const float iconX = collapsed ? p.x + w / 2 : p.x + 22 * S();
+        DrawIcon(it.icon, ImVec2(iconX, p.y + h / 2), 18 * S(), sel ? Hex(kAccentHover) : hovered ? Hex(kText) : Hex(kMuted));
+        if (!collapsed) {
+            ImGui::PushFont(sel ? f.bold : f.regular);
+            dl->AddText(ImVec2(p.x + 44 * S(), p.y + (h - ImGui::GetFontSize()) / 2), sel || hovered ? Hex(kText) : Hex(kMuted), it.label);
+            ImGui::PopFont();
+        } else if (hovered) {
+            ImGui::SetTooltip("%s", it.label);
+        }
         ImGui::Dummy(ImVec2(0, 2 * S()));
     }
 
     // Live output at the bottom of the sidebar.
     const auto& out = ctl.output();
-    const float orbR = 22 * S();
+    const float orbR = collapsed ? 14 * S() : 22 * S();
+    const float reserve = collapsed ? orbR * 2 + 16 * S() : orbR * 2 + 76 * S();
     const float bottom = ImGui::GetWindowHeight() - 20 * S();
-    ImGui::SetCursorPosY(bottom - orbR * 2 - 76 * S());  // leaves room for the version line
+    ImGui::SetCursorPosY(bottom - reserve);  // leaves room for the version line (when shown)
     ImVec2 p = ImGui::GetCursorScreenPos();
-    Orb(ImVec2(p.x + orbR + 4 * S(), p.y + orbR + 4 * S()), orbR, PreviewColor(out));
-    ImGui::Dummy(ImVec2(0, orbR * 2 + 14 * S()));
-    ImGui::PushFont(f.bold);
-    ImGui::TextUnformatted(ctl.prefs().mode == Mode::Auto ? "Auto" : "Manual");
-    ImGui::PopFont();
-    // Version in the bottom-left corner.
-    {
+    const float orbX = collapsed ? p.x + ImGui::GetContentRegionAvail().x / 2 : p.x + orbR + 4 * S();
+    Orb(ImVec2(orbX, p.y + orbR + 4 * S()), orbR, PreviewColor(out));
+    if (collapsed) {
+        if (ImGui::IsMouseHoveringRect(ImVec2(orbX - orbR, p.y), ImVec2(orbX + orbR, p.y + orbR * 2 + 8 * S())))
+            ImGui::SetTooltip("%s: %s", ctl.prefs().mode == Mode::Auto ? "Auto" : "Manual", out.label.c_str());
+        ImGui::Dummy(ImVec2(0, orbR * 2 + 8 * S()));
+    } else {
+        ImGui::Dummy(ImVec2(0, orbR * 2 + 14 * S()));
+        ImGui::PushFont(f.bold);
+        ImGui::TextUnformatted(ctl.prefs().mode == Mode::Auto ? "Auto" : "Manual");
+        ImGui::PopFont();
+        // Version in the bottom-left corner.
+        {
+            ImGui::PushFont(f.caption);
+            const ImVec2 size = ImGui::CalcTextSize(kVersionText);
+            const ImVec2 at(ImGui::GetWindowPos().x + ImGui::GetStyle().WindowPadding.x,
+                            ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - size.y - 8 * S());
+            ImGui::GetWindowDrawList()->AddText(at, Hex(kMuted, 160), kVersionText);
+            ImGui::PopFont();
+        }
         ImGui::PushFont(f.caption);
-        const ImVec2 size = ImGui::CalcTextSize(kVersionText);
-        const ImVec2 at(ImGui::GetWindowPos().x + ImGui::GetStyle().WindowPadding.x,
-                        ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - size.y - 8 * S());
-        ImGui::GetWindowDrawList()->AddText(at, Hex(kMuted, 160), kVersionText);
+        if (const uint64_t left = ctl.handbackMsLeft())
+            Muted("Handing back to Armoury Crate... %d s", static_cast<int>((left + 999) / 1000));
+        else
+            Muted("%s", out.label.c_str());
         ImGui::PopFont();
     }
-    ImGui::PushFont(f.caption);
-    if (const uint64_t left = ctl.handbackMsLeft())
-        Muted("Handing back to Armoury Crate... %d s", static_cast<int>((left + 999) / 1000));
-    else
-        Muted("%s", out.label.c_str());
-    ImGui::PopFont();
 
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -7008,8 +7043,10 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
         Splash(ui, f);
         return;
     }
-    const float sidebarW = 210 * S();
-    Sidebar(ctl, ui, f, sidebarW);
+    // Icon-only below 760: the sidebar's full width plus the main content couldn't both fit.
+    const bool sidebarCollapsed = ui.sidebarCollapsed || ImGui::GetContentRegionAvail().x < 760 * S();
+    const float sidebarW = sidebarCollapsed ? 60 * S() : 210 * S();
+    Sidebar(ctl, ui, f, sidebarW, sidebarCollapsed);
     ImGui::SameLine(0, 0);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(28 * S(), 22 * S()));

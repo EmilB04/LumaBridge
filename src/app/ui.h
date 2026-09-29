@@ -33,6 +33,7 @@ struct UiState {
     Page page = Page::Dashboard;
     Page lastPage = Page::Dashboard;
     bool dashEdit = false;  // dashboard "Customize" mode
+    bool sidebarCollapsed = false;  // icon-only sidebar, toggled by hand (also forced when narrow)
     char hex[16] = "";
     bool hexEditing = false;
     std::string hexSlot;  // which color editor the hex field being typed in belongs to
