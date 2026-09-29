@@ -2288,7 +2288,7 @@ struct Gear {
 struct Model {
     pc::Layout layout;
     std::array<double, pc::kSlots> fanRpm{};  // -1: not reported
-    double cpuFanRpm = -1, gpuFanPct = -1;
+    double cpuFanRpm = -1, pumpRpm = -1, gpuFanPct = -1;
     std::array<bool, 4> ram{};
     bool ramRgb = false, boardRgb = false, fansRgb = false, gpuRgb = false;
     int boardLeds = 5, drives = 0;
@@ -2309,7 +2309,8 @@ bool Is(const char* device, const char* id) { return device && std::strcmp(devic
 pc::Layout CaseLayout(Controller& ctl, const sensors::SystemSnapshot& snap, bool header, int* chassisHeaders) {
     int chassis = 0;
     for (const auto& x : snap.lhm)
-        if (x.type == sensors::SensorType::Fan && x.value > 0 && !Contains(x.name, "CPU") && !Contains(x.name, "Pump"))
+        if (x.type == sensors::SensorType::Fan && x.value > 0 && !Contains(x.name, "CPU") && !Contains(x.name, "Pump") &&
+            !Contains(x.name, "AIO"))
             ++chassis;
     *chassisHeaders = chassis;
     pc::Layout l;
@@ -2317,7 +2318,12 @@ pc::Layout CaseLayout(Controller& ctl, const sensors::SystemSnapshot& snap, bool
     const int rgb = header ? ctl.config().argbFans.Fans() : 0;
     int plain = std::max(0, chassis - (rgb > 0 ? 1 : 0));  // the RGB fans usually share one header
     if (!rgb && !plain) plain = 2;
-    return pc::Guess(rgb, plain);
+    l = pc::Guess(rgb, plain);
+    // A pump header that reports a speed: an AIO water cooler (its radiator guessed on top).
+    for (const auto& x : snap.lhm)
+        if (x.type == sensors::SensorType::Fan && x.value > 0 && (Contains(x.name, "Pump") || Contains(x.name, "AIO")))
+            l.cooler = pc::Cooler::Aio;
+    return l;
 }
 
 Model Gather(Controller& ctl, const sensors::SystemSnapshot& snap) {
@@ -2338,8 +2344,9 @@ Model Gather(Controller& ctl, const sensors::SystemSnapshot& snap) {
     std::vector<double> chassis;
     for (const auto& x : snap.lhm) {
         if (x.type != sensors::SensorType::Fan) continue;
-        if (Contains(x.name, "CPU") && !Contains(x.name, "OPT")) m.cpuFanRpm = x.value;
-        else if (x.value > 0 && !Contains(x.name, "Pump")) chassis.push_back(x.value);
+        if (Contains(x.name, "Pump") || Contains(x.name, "AIO")) m.pumpRpm = x.value;
+        else if (Contains(x.name, "CPU") && !Contains(x.name, "OPT")) m.cpuFanRpm = x.value;
+        else if (x.value > 0) chassis.push_back(x.value);
     }
     int plainK = 0;
     const bool rgbShare = m.layout.RgbFans() > 0 && !chassis.empty();
@@ -2468,6 +2475,15 @@ void LedBar(s3d::Scene& sc, float x0, float x1, float y0, float y1, float z, con
     }
 }
 
+// A tube from a to b (a square one: it's small on screen).
+void Tube(s3d::Scene& sc, s3d::V3 a, s3d::V3 b, float r, uint32_t color, int id) {
+    const s3d::Transform keep = sc.xf;
+    const float len = s3d::Length(b - a);
+    sc.xf = s3d::Transform::Facing(b - a, s3d::Lerp(a, b, 0.5f)).Then(keep);
+    sc.Box({-r, -r, -len / 2}, {r, r, len / 2}, color, id);
+    sc.xf = keep;
+}
+
 // Live colors of `n` LEDs of a device (grey while LumaBridge isn't lighting it).
 std::vector<Rgb> Leds(Controller& ctl, const char* device, double t, int n, bool one = false) {
     std::vector<Rgb> out(static_cast<size_t>(n), kDark);
@@ -2555,13 +2571,61 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
     if (m.drives > 2) sc.Box({1, pc::kShroudH, -19}, {9, pc::kShroudH + 0.8f, -9}, H(0x3A414F), kStorage);
     if (m.drives) anchors->push_back({kStorage, cx.Apply({bx + 1, 29.4f, -9}), m.drives == 1 ? "Drive" : std::to_string(m.drives) + " drives"});
 
-    // CPU cooler: a tower heatsink with its fan in front (no RGB LumaBridge controls).
-    sc.Box({bx + 0.4f, 31, -12.8f}, {3, 43.6f, -7.2f}, H(0x9AA2AE), kCpu);
-    sc.Box({bx + 0.4f, 43.6f, -12.8f}, {3, 44.4f, -7.2f}, H(0x2A2F38), kCpu);
-    const s3d::Transform coolerFan = s3d::Transform::Facing({0, 0, 1}, {-3.2f, 37.3f, -6.2f}).Then(cx);
-    sc.xf = coolerFan;
-    Fan(sc, 5.6f, {}, turn(9, m.cpuFanRpm), m.cpuFanRpm, kCpu);
-    sc.xf = cx;
+    // CPU cooler (no RGB LumaBridge controls): a tower heatsink with its fan in front, or an AIO:
+    // the pump on the CPU, two tubes, and the radiator behind the top or front fans.
+    if (m.layout.cooler == pc::Cooler::Air) {
+        sc.Box({bx + 0.4f, 31, -12.8f}, {3, 43.6f, -7.2f}, H(0x9AA2AE), kCpu);
+        sc.Box({bx + 0.4f, 43.6f, -12.8f}, {3, 44.4f, -7.2f}, H(0x2A2F38), kCpu);
+        sc.xf = s3d::Transform::Facing({0, 0, 1}, {-3.2f, 37.3f, -6.2f}).Then(cx);
+        Fan(sc, 5.6f, {}, turn(9, m.cpuFanRpm), m.cpuFanRpm, kCpu);
+        sc.xf = cx;
+    } else {
+        sc.Box({bx + 0.4f, 34, -13}, {bx + 3.6f, 40, -7}, H(0x2A2F38), kCpu);
+        sc.xf = s3d::Transform::Facing({1, 0, 0}, {bx + 3.65f, 37, -10}).Then(cx);
+        sc.Disc(2.7f, 0, 8, H(0x4A5262), kCpu);
+        sc.Disc(1.6f, 0.05f, 8, H(0x5E6778), kCpu);
+        sc.xf = cx;
+        // The radiator, over the fans at its place (at least two fans long).
+        const bool top = m.layout.radiator == pc::Mount::Top;
+        float lo = 1e9f, hi = -1e9f;
+        for (int i = 0; i < pc::kSlots; ++i) {
+            const pc::Slot& sl = pc::Slots()[static_cast<size_t>(i)];
+            if (sl.mount != m.layout.radiator || m.layout.slots[static_cast<size_t>(i)] == pc::SlotFan::None) continue;
+            const float c = top ? sl.center.z : sl.center.y;
+            lo = std::min(lo, c);
+            hi = std::max(hi, c);
+        }
+        if (lo > hi) lo = hi = top ? 6.5f : 34.5f;
+        if (hi - lo < 12) {  // two fans long, inside the case
+            const float first = top ? -11.5f : 16.5f;
+            lo = std::max(first, hi - 12);
+            hi = lo + 12;
+        }
+        V3 rlo, rhi, port;
+        if (top) {
+            rlo = {-4.4f, 41.2f, lo - 6.6f};
+            rhi = {8.4f, 43.8f, hi + 6.6f};
+            port = {2, 41.2f, rlo.z + 2};
+        } else {
+            rlo = {-6.6f, std::max(pc::kShroudH + 0.5f, lo - 6.6f), 17.1f};
+            rhi = {6.6f, hi + 6.6f, 19.6f};
+            port = {0, rhi.y - 2, 17.1f};
+        }
+        sc.Box(rlo, rhi, H(0x2C323C), kCpu);
+        for (int k = 1; k < 12; ++k) {  // fins
+            const float f = static_cast<float>(k) / 12.f;
+            if (top) sc.AddLine({rlo.x + 0.2f, rlo.y - 0.02f, rlo.z + (rhi.z - rlo.z) * f}, {rhi.x - 0.2f, rlo.y - 0.02f, rlo.z + (rhi.z - rlo.z) * f}, H(0x5A6272, 160));
+            else sc.AddLine({rlo.x + 0.2f, rlo.y + (rhi.y - rlo.y) * f, rlo.z - 0.02f}, {rhi.x - 0.2f, rlo.y + (rhi.y - rlo.y) * f, rlo.z - 0.02f}, H(0x5A6272, 160));
+        }
+        // Tubes: out of the pump's side, up and over to the radiator's end.
+        for (int k = 0; k < 2; ++k) {
+            const float d = k ? 1.1f : -1.1f;
+            const V3 a{bx + 3.2f, 39.5f, -10 + d}, bend{bx + 5.5f, 41.f, -10 + d};
+            const V3 end = top ? V3{port.x + d, port.y, port.z} : V3{port.x, port.y + d, port.z};
+            Tube(sc, a, bend, 0.5f, H(0x3A414E), kCpu);
+            Tube(sc, bend, end, 0.5f, H(0x3A414E), kCpu);
+        }
+    }
     anchors->push_back({kCpu, cx.Apply({-3, 45, -10}), m.cpuName.empty() ? std::string("Processor") : m.cpuName});
 
     // Memory: the sticks in their slots, their light bars along the top edge.
@@ -2816,7 +2880,12 @@ void Describe(Controller& ctl, const Model& m, const sensors::SystemSnapshot& sn
             snprintf(b, sizeof b, "   %.0f \xC2\xB0" "C", x->value), line += b;
         if (snap.cpuClockMhz > 0) snprintf(b, sizeof b, "   %.2f GHz", snap.cpuClockMhz / 1000), line += b;
         if (!line.empty()) Muted("%s", line.c_str());
-        if (m.cpuFanRpm > 0) Muted("Cooler fan: %.0f RPM", m.cpuFanRpm);
+        if (m.layout.cooler == pc::Cooler::Aio) {
+            Muted("AIO water cooler, radiator %s", m.layout.radiator == pc::Mount::Top ? "on top" : "in front");
+            if (m.pumpRpm > 0) Muted("Pump: %.0f RPM", m.pumpRpm);
+        } else if (m.cpuFanRpm > 0) {
+            Muted("Cooler fan: %.0f RPM", m.cpuFanRpm);
+        }
         rgbLine(nullptr);
         break;
     }
@@ -3152,7 +3221,7 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
 
     // The fans: what LumaBridge guessed, and correcting it.
     BeginCard("fans3d");
-    CardTitle(f, "Fans in the case", Icon::Fan);
+    CardTitle(f, "Fans and cooling", Icon::Fan);
     const pc::Layout& l = m.layout;
     if (l.guessed)
         Muted("LumaBridge's guess: %d fan%s, %d of them RGB on the ARGB header. Wrong? Click Edit fans, then click the "
@@ -3178,6 +3247,31 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
             SaveLayout(ctl, c);
         }
         ImGui::PopID();
+    }
+    // The CPU cooler.
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("CPU cooler");
+    ImGui::SameLine(110 * S());
+    int cooler = l.cooler == pc::Cooler::Aio ? 1 : 0;
+    const char* coolers[] = {"Air (fan)", "AIO (water)"};
+    if (Segmented("cooler", &cooler, coolers, 2, 260 * S())) {
+        pc::Layout c = l;
+        c.cooler = cooler ? pc::Cooler::Aio : pc::Cooler::Air;
+        SaveLayout(ctl, c);
+    }
+    if (l.cooler == pc::Cooler::Aio) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Radiator");
+        ImGui::SameLine(110 * S());
+        int where = l.radiator == pc::Mount::Front ? 1 : 0;
+        const char* places[] = {"Top", "Front"};
+        if (Segmented("radiator", &where, places, 2, 260 * S())) {
+            pc::Layout c = l;
+            c.radiator = where ? pc::Mount::Front : pc::Mount::Top;
+            SaveLayout(ctl, c);
+        }
+        Muted("The radiator sits behind the fans there; put fans in those slots with Edit fans.");
     }
     int intake = 0, exhaust = 0;
     for (int i = 0; i < pc::kSlots; ++i)
@@ -3216,7 +3310,8 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
         RgbPill(rgb);
     };
     row(Icon::Board, m.boardName.empty() ? "Motherboard" : m.boardName, "", m.boardRgb);
-    row(Icon::Cpu, m.cpuName.empty() ? "Processor" : m.cpuName, "and its cooler", false);
+    row(Icon::Cpu, m.cpuName.empty() ? "Processor" : m.cpuName,
+        l.cooler == pc::Cooler::Aio ? "with an AIO water cooler" : "with an air cooler", false);
     int sticks = 0;
     for (bool st : m.ram) sticks += st;
     row(Icon::Memory, m.ramName.empty() ? "Memory" : m.ramName, std::to_string(sticks) + (sticks == 1 ? " stick" : " sticks"), m.ramRgb);

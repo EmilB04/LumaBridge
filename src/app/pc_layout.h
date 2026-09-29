@@ -58,12 +58,18 @@ inline const std::array<Slot, kSlots>& Slots() {
 
 enum class SlotFan : uint8_t { None = 0, Plain = 1, Rgb = 2 };
 
+// The CPU cooler: a tower heatsink with a fan, or an all-in-one water cooler (a pump on the
+// CPU, tubes, and a radiator behind the top or front fans).
+enum class Cooler : uint8_t { Air = 0, Aio = 1 };
+
 struct Layout {
     std::array<SlotFan, kSlots> slots{};
     // Per mount: true when its fans blow out of the case. Front and bottom pull air in, back
     // and top push it out: the usual way.
     std::array<bool, kMounts> exhaust{false, true, true, false};
     int turn = 0;           // quarter turns on the desk (0: its front towards you, the glass on the right)
+    Cooler cooler = Cooler::Air;
+    Mount radiator = Mount::Top;  // an AIO's radiator: Top or Front
     bool guessed = true;    // LumaBridge's guess, not yet corrected
 
     int Fans() const {
@@ -86,7 +92,8 @@ struct Layout {
         return k;
     }
     bool operator==(const Layout& o) const {
-        return slots == o.slots && exhaust == o.exhaust && turn == o.turn && guessed == o.guessed;
+        return slots == o.slots && exhaust == o.exhaust && turn == o.turn && guessed == o.guessed && cooler == o.cooler &&
+               radiator == o.radiator;
     }
 };
 
@@ -100,13 +107,15 @@ inline Layout Guess(int rgbFans, int plainFans) {
     return l;
 }
 
-// "v1;slots=222111000;exhaust=0110;turn=0" ("" or anything unreadable: guess).
+// "v1;slots=222111000;exhaust=0110;turn=0;cooler=air" (cooler: air, aio-top or aio-front; ""
+// or anything unreadable: guess).
 inline std::string Encode(const Layout& l) {
     std::string s = "v1;slots=";
     for (SlotFan f : l.slots) s += static_cast<char>('0' + static_cast<int>(f));
     s += ";exhaust=";
     for (bool e : l.exhaust) s += e ? '1' : '0';
     s += ";turn=" + std::to_string(l.turn);
+    s += std::string(";cooler=") + (l.cooler == Cooler::Air ? "air" : l.radiator == Mount::Front ? "aio-front" : "aio-top");
     return s;
 }
 
@@ -130,6 +139,11 @@ inline bool Decode(const std::string& s, Layout* out) {
     }
     for (int i = 0; i < kMounts; ++i) l.exhaust[static_cast<size_t>(i)] = exhaust[static_cast<size_t>(i)] == '1';
     l.turn = turn.empty() ? 0 : ((std::atoi(turn.c_str()) % 4) + 4) % 4;
+    const std::string cooler = field("cooler");  // not in layouts saved before AIO coolers: air
+    if (cooler.rfind("aio", 0) == 0) {
+        l.cooler = Cooler::Aio;
+        l.radiator = cooler == "aio-front" ? Mount::Front : Mount::Top;
+    }
     *out = l;
     return true;
 }

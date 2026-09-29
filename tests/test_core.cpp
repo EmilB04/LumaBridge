@@ -841,6 +841,14 @@ static void TestPcLayout() {
     Layout back2;
     CHECK(Decode(Encode(l), &back2) && back2 == l);
     CHECK(Encode(Guess(3, 3)).rfind("v1;slots=222111000;exhaust=0110;turn=0", 0) == 0);
+    // The CPU cooler: air unless said otherwise (layouts saved before AIOs), an AIO's radiator
+    // on top or in front.
+    CHECK(Decode("v1;slots=222111000;exhaust=0110;turn=0", &back2) && back2.cooler == Cooler::Air);
+    l.cooler = Cooler::Aio;
+    l.radiator = Mount::Front;
+    CHECK(Decode(Encode(l), &back2) && back2 == l && Encode(l).find("cooler=aio-front") != std::string::npos);
+    l.radiator = Mount::Top;
+    CHECK(Decode(Encode(l), &back2) && back2.cooler == Cooler::Aio && back2.radiator == Mount::Top);
     CHECK(!Decode("", &back2) && !Decode("v1;slots=22;exhaust=0110", &back2) && !Decode("v1;slots=922110000;exhaust=0110", &back2));
 
     // Airflow starts outside an intake and ends outside an exhaust.
