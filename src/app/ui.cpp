@@ -164,6 +164,7 @@ bool Segmented(const char* id, int* current, const char* const* labels, int coun
         const bool clicked = ImGui::InvisibleButton("seg", ImVec2(bw, bh));
         ImGui::PopID();
         const bool sel = *current == i, hovered = ImGui::IsItemHovered();
+        if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         if (sel) {
             dl->AddRectFilled(a, ImVec2(a.x + bw, a.y + bh), Hex(hovered ? kAccentHover : kAccent), bh / 2);
         } else if (hovered) {
@@ -195,6 +196,7 @@ bool Toggle(const char* label, bool* v) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const bool clicked = ImGui::InvisibleButton(label, ImVec2(w + tw, fh));
     if (clicked) *v = !*v;
+    if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     // Knob position eases towards the new state.
     ImGuiStorage* st = ImGui::GetStateStorage();
     const ImGuiID id = ImGui::GetItemID();
@@ -247,6 +249,7 @@ bool DirectionArrows(const char* id, bool* reversed) {
         const bool clicked = ImGui::InvisibleButton("dir", ImVec2(bw, bh));
         ImGui::PopID();
         const bool sel = *reversed != right, hovered = ImGui::IsItemHovered();
+        if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         if (hovered) ImGui::SetTooltip(right ? "Right" : "Left");
         if (sel) dl->AddRectFilled(a, ImVec2(a.x + bw, a.y + bh), Hex(hovered ? kAccentHover : kAccent), bh / 2);
         else if (hovered) dl->AddRectFilled(a, ImVec2(a.x + bw, a.y + bh), Hex(kCardHover), bh / 2);
@@ -281,6 +284,7 @@ bool Swatch(const char* id, Rgb c, float size, bool selected = false) {
     ImGui::PushID(id);
     ImVec2 p = ImGui::GetCursorScreenPos();
     bool clicked = ImGui::InvisibleButton("sw", ImVec2(size, size));
+    if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float r = size / 2;
     ImVec2 center(p.x + r, p.y + r);
@@ -2108,6 +2112,7 @@ bool PresetTilesOf(Controller& ctl, Look& p, std::initializer_list<fx::Kind> kin
         const ImVec2 a = ImGui::GetCursorScreenPos();
         const bool clicked = ImGui::InvisibleButton("preset", ImVec2(w, h));
         const bool active = PresetActive(p, x), hovered = ImGui::IsItemHovered();
+        if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         const ImVec2 b(a.x + w, a.y + h);
         dl->AddRectFilled(a, b, Hex(hovered ? kBorder : kCardHover), 10 * S());
         if (active) dl->AddRect(a, b, Hex(kAccentHover), 10 * S(), 0, 2 * S());
@@ -2213,6 +2218,7 @@ bool ColorTab(const char* label, Rgb c, bool selected, float width) {
     const ImVec2 a = ImGui::GetCursorScreenPos();
     const bool clicked = ImGui::InvisibleButton(label, ImVec2(width, h));
     const bool hovered = ImGui::IsItemHovered();
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 b(a.x + width, a.y + h);
     dl->AddRectFilled(a, b, Hex(selected ? kCardHover : hovered ? kCardHover : kTrack), 12 * S());
@@ -5187,6 +5193,7 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
                                                 ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
                                                 ImVec2(0, 26 * S()));
             ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
             ImGui::SameLine(0, 0);
             ImGui::AlignTextToFramePadding();  // the icon and name on the row's text line
             IconItem(r.icon, 16 * S(), r.status.color == kGreen ? Hex(kAccent) : Hex(kMuted));
@@ -5717,7 +5724,10 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
                                                 ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
                                                 ImVec2(0, 26 * S()));
             ImGui::PopStyleColor(2);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", ToUtf8(g.exePath.empty() ? g.dir : g.exePath).c_str());
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                ImGui::SetTooltip("%s", ToUtf8(g.exePath.empty() ? g.dir : g.exePath).c_str());
+            }
             ImGui::SameLine(0, 0);
             ImGui::AlignTextToFramePadding();
             if (row.running) ImGui::PushFont(f.bold);
@@ -5784,6 +5794,7 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
             const float w = ImGui::GetContentRegionAvail().x, h = 80 * S();
             const bool clicked = ImGui::InvisibleButton("tile", ImVec2(w, h));
             const bool hovered = ImGui::IsItemHovered();
+            if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
             ImDrawList* dl = ImGui::GetWindowDrawList();
             dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), Hex(hovered ? kCardHover : kCard), 14 * S());
             dl->AddRect(a, ImVec2(a.x + w, a.y + h), hovered ? Hex(kAccent, 180) : Hex(kBorder, 180), 14 * S());
@@ -6144,6 +6155,7 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width) {
         ImGui::PushID(it.label);
         if (ImGui::InvisibleButton("nav", ImVec2(w, h))) ui.page = it.page;
         const bool hovered = ImGui::IsItemHovered();
+        if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         ImGui::PopID();
         if (sel) {
             dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Hex(kAccent, 42), 10 * S());
@@ -6463,6 +6475,7 @@ bool ChoiceTile(const Fonts& f, const char* id, const char* title, const char* s
     const bool clicked = ImGui::InvisibleButton("tile", ImVec2(w, h));
     if (clicked) *on = !*on;
     const bool hovered = ImGui::IsItemHovered();
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 b(p.x + w, p.y + h);
     dl->AddRectFilled(p, b, Hex(hovered ? kCardHover : kCard), 10 * S());
