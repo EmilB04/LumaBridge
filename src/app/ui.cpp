@@ -2515,6 +2515,15 @@ struct Anchor {
     std::string label;
 };
 
+// Text shown on a surface in the scene (the pump's screen): where, which way the surface faces,
+// which way is up on it, how tall the text is (cm), and its color.
+struct SurfaceText {
+    s3d::V3 at, normal, up;
+    float height;
+    std::string text;
+    uint32_t color;
+};
+
 // ---- Parts ----------------------------------------------------------------------------------
 
 // A fan in the current placement's xy plane (facing z): frame, LED ring (empty: none), blades.
@@ -2597,7 +2606,7 @@ struct Options {
 };
 
 void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, double t, Spin& spin,
-           std::vector<Anchor>* anchors) {
+           std::vector<Anchor>* anchors, std::vector<SurfaceText>* texts = nullptr) {
     using s3d::V3;
     const Prefs& p = ctl.prefs();
     // Spin: each fan turns at its speed (scaled: 1000 RPM is one turn a second, so the blades
@@ -2691,6 +2700,14 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
                         s3d::kEmissive | s3d::kDoubleSided);
             }
             sc.AddGlow({0, 0, 0.3f}, 2.4f, s3d::WithAlpha(arc, 40));
+            // ...and the number in the middle.
+            if (texts && shown >= 0) {
+                char num[16];
+                snprintf(num, sizeof num, "%.0f\xC2\xB0", shown);
+                const V3 c = sc.xf.Apply({0, 0, 0.12f});
+                texts->push_back({c, sc.xf.Apply({0, 0, 1}) - sc.xf.Apply({0, 0, 0}), sc.xf.Apply({0, 1, 0}) - sc.xf.Apply({0, 0, 0}), 1.5f,
+                                  num, Hex(0xF2F5FA)});
+            }
         } else {
             sc.Disc(1.6f, 0.05f, 8, H(0x5E6778), kCpu);
         }
@@ -3228,7 +3245,8 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     const double t = ImGui::GetTime();
     s3d::Scene sc;
     std::vector<Anchor> anchors;
-    Build(sc, ctl, m, o, t, spins[static_cast<int>(mode)], &anchors);
+    std::vector<SurfaceText> texts;
+    Build(sc, ctl, m, o, t, spins[static_cast<int>(mode)], &anchors, &texts);
 
     const float W = ImGui::GetContentRegionAvail().x, Hh = height;
     const ImVec2 a = ImGui::GetCursorScreenPos();
@@ -3390,12 +3408,43 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
             dl->AddLine(ImVec2(it.xy[0], it.xy[1]), ImVec2(it.xy[2], it.xy[3]), it.color, it.width * S());
         }
     }
-    // Outlines: what the mouse is over, and (Lighting) the parts of the device being edited.
-    auto outline = [&](int id, ImU32 col, float w) {
+    // Text on surfaces (the pump's screen), where the surface faces the camera.
+    for (const SurfaceText& st : texts) {
+        const s3d::V3 eye = v.cam.Eye();
+        if (s3d::Dot(st.normal, eye - st.at) <= 0) continue;
+        const s3d::Projected c = s3d::Project(v.cam, vp, st.at), top = s3d::Project(v.cam, vp, st.at + st.up * st.height);
+        if (!c.visible || !top.visible) continue;
+        const float px = std::hypot(top.sx - c.sx, top.sy - c.sy);
+        if (px < 5) continue;
+        ImFont* font = ImGui::GetFont();
+        const ImVec2 ts = font->CalcTextSizeA(px, FLT_MAX, 0, st.text.c_str());
+        dl->AddText(font, px, ImVec2(c.sx - ts.x / 2, c.sy - ts.y / 2), st.color, st.text.c_str());
+    }
+    // Outlines: what the mouse is over, and (Lighting) the parts of the device being edited:
+    // around each one's outer edge (not every face, which looked like an X-ray).
+    auto outlineOf = [&](const std::vector<int>& group, ImU32 col, float w) {
+        std::vector<ImVec2> pts;
         for (const auto& it : items)
-            if (it.kind == s3d::DrawItem::Polygon && it.id == id)
-                dl->AddPolyline(reinterpret_cast<const ImVec2*>(it.xy), it.n, col, ImDrawFlags_Closed, w * S());
+            if (it.kind == s3d::DrawItem::Polygon && std::find(group.begin(), group.end(), it.id) != group.end())
+                for (int i = 0; i < it.n; ++i) pts.push_back(ImVec2(it.xy[i * 2], it.xy[i * 2 + 1]));
+        if (pts.size() < 3) return;
+        // Convex hull (Andrew's monotone chain).
+        std::sort(pts.begin(), pts.end(), [](ImVec2 a, ImVec2 b) { return a.x < b.x || (a.x == b.x && a.y < b.y); });
+        auto cross = [](ImVec2 o2, ImVec2 a, ImVec2 b) { return (a.x - o2.x) * (b.y - o2.y) - (a.y - o2.y) * (b.x - o2.x); };
+        std::vector<ImVec2> hull(pts.size() * 2);
+        size_t k = 0;
+        for (size_t i = 0; i < pts.size(); ++i) {
+            while (k >= 2 && cross(hull[k - 2], hull[k - 1], pts[i]) <= 0) --k;
+            hull[k++] = pts[i];
+        }
+        for (size_t i = pts.size() - 1, lo = k + 1; i-- > 0;) {
+            while (k >= lo && cross(hull[k - 2], hull[k - 1], pts[i]) <= 0) --k;
+            hull[k++] = pts[i];
+        }
+        hull.resize(k > 1 ? k - 1 : k);
+        if (hull.size() >= 3) dl->AddPolyline(hull.data(), static_cast<int>(hull.size()), col, ImDrawFlags_Closed, w * S());
     };
+    auto outline = [&](int id, ImU32 col, float w) { outlineOf({id}, col, w); };
     std::vector<int> ids{kCase, kBoard, kCpu, kRam, kGpu, kPsu, kStorage, kKeyboard, kMouse, kHeadset};
     for (int i = 0; i < static_cast<int>(std::max<size_t>(1, m.screens.size())); ++i) ids.push_back(kMonitor0 + i);
     for (int i = 0; i < pc::kSlots; ++i) ids.push_back(kFan0 + i);
@@ -3404,12 +3453,20 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
         for (int id : ids)
             if (const char* d = DeviceOf(m, id); d && ui.lightTarget == d) outline(id, Hex(kAccentHover, 200), 1.6f);
     if (mode == Mode::MySetup && v.selected >= 0) {
-        // What's selected: all of it (the whole case for a part of it, every monitor).
+        // What's selected: all of it (the whole case for a part of it), around its outer edge;
+        // each monitor on its own.
+        std::vector<int> group;
         for (int id : ids)
-            if (DeskItemOf(m, id) == DeskItemOf(m, v.selected)) outline(id, Hex(kAccentHover, 190), 1.6f);
+            if (DeskItemOf(m, id) == DeskItemOf(m, v.selected)) {
+                if (IsMonitor(id)) outline(id, Hex(kAccentHover, 190), 1.6f);
+                else group.push_back(id);
+            }
+        if (!group.empty()) outlineOf(group, Hex(kAccentHover, 190), 1.6f);
     }
     const int highlight = v.dragObj >= 0 ? v.dragObj : under;
-    if (highlight >= 0 && highlight != kDesk) outline(highlight, Hex(kText, 120), 1.2f);
+    if (highlight >= 0 && highlight != kDesk && !(mode == Mode::MySetup && v.selected >= 0 && DeskItemOf(m, highlight) == DeskItemOf(m, v.selected) &&
+                                                  highlight == kCase))
+        outline(highlight, Hex(kText, 120), 1.2f);
 
     // Names over the parts (My setup), or the one under the mouse.
     // The one under the mouse first, then the rest where they don't cover each other.
@@ -4095,18 +4152,59 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
         ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize(rgb ? "RGB" : "No RGB").x - 20 * S());
         RgbPill(rgb);
     };
-    row(Icon::Board, m.boardName.empty() ? "Motherboard" : m.boardName, "", m.boardRgb);
-    row(Icon::Cpu, m.cpuName.empty() ? "Processor" : m.cpuName,
-        l.cooler != pc::Cooler::Aio ? std::string("with an air cooler")
-        : m.aio                     ? std::string("with an ") + m.aio->name
-                                    : std::string("with an AIO water cooler"),
-        false);
+    // Grouped like the PC: the core parts, graphics, cooling, storage, then the desk.
+    bool firstGroup = true;
+    auto group = [&](const char* name) {
+        ImGui::Dummy(ImVec2(0, (firstGroup ? 2.f : 8.f) * S()));
+        firstGroup = false;
+        ImGui::PushStyleColor(ImGuiCol_Text, V4(kMuted));
+        ImGui::TextUnformatted(name);
+        ImGui::PopStyleColor();
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x, p.y - 1 * S()), ImVec2(p.x + ImGui::GetContentRegionAvail().x, p.y - 1 * S()),
+                                            Hex(kBorder), 1 * S());
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+    };
     int sticks = 0;
     for (bool st : m.ram) sticks += st;
+    group("Processor and motherboard");
+    row(Icon::Cpu, m.cpuName.empty() ? "Processor" : m.cpuName, "", false);
+    row(Icon::Board, m.boardName.empty() ? "Motherboard" : m.boardName, "", m.boardRgb);
     row(Icon::Memory, m.ramName.empty() ? "Memory" : m.ramName, std::to_string(sticks) + (sticks == 1 ? " stick" : " sticks"), m.ramRgb);
-    if (!m.gpuName.empty()) row(Icon::Gpu, m.gpuName, "", m.gpuRgb);
+    if (!m.gpuName.empty()) {
+        group("Graphics");
+        row(Icon::Gpu, m.gpuName, "", m.gpuRgb);
+    }
+    group("Cooling");
+    if (l.cooler == pc::Cooler::Aio) {
+        std::string detail = "AIO, radiator " + std::string(l.radiator == pc::Mount::Top ? "on top" : "in front");
+        if (m.kraken.valid) {
+            char b[64];
+            snprintf(b, sizeof b, ", liquid %.1f \xC2\xB0" "C, pump %d RPM", m.kraken.liquidC, m.kraken.pumpRpm);
+            detail += b;
+        }
+        row(Icon::Fan, m.aio ? m.aio->name : "AIO water cooler", detail, l.pumpRgb && m.fansRgb);
+    } else {
+        row(Icon::Fan, "CPU cooler", m.cpuFanRpm > 0 ? "air, " + std::to_string(static_cast<int>(m.cpuFanRpm)) + " RPM" : "air", false);
+    }
     row(Icon::Fan, "Case fans", std::to_string(l.Fans()) + ", " + std::to_string(l.RgbFans()) + " RGB", m.fansRgb && l.RgbFans() > 0);
-    if (m.drives) row(Icon::Disk, "Storage", std::to_string(m.drives) + (m.drives == 1 ? " drive" : " drives"), false);
+    if (m.drives) {
+        group("Storage");
+        row(Icon::Disk, "Drives", std::to_string(m.drives) + (m.drives == 1 ? " drive" : " drives"), false);
+    }
+    if (!m.screens.empty()) {
+        group("Monitors");
+        for (const auto& d : m.screens) {
+            float w = 0, h = 0;
+            displays::ScreenSize(d, &w, &h);
+            char b[96];
+            snprintf(b, sizeof b, "%.0f\", %dx%d%s", std::sqrt(w * w + h * h) / 2.54f, d.w, d.h, d.primary ? ", main" : "");
+            std::string detail = b;
+            if (d.hz > 0) detail += ", " + std::to_string(d.hz) + " Hz";
+            row(Icon::Grid, d.name, detail, false);
+        }
+    }
+    group("On the desk");
     row(Icon::Keyboard, m.keyboard.name, "", m.keyboard.device != nullptr);
     row(Icon::Mouse, m.mouse.name, "", m.mouse.device != nullptr);
     if (m.headset) row(Icon::Leds, m.headsetGear.name, "", m.headsetGear.device != nullptr);
