@@ -1,0 +1,61 @@
+name: Trello update on merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  move-trello-card:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Move Trello card to Done
+        env:
+          TRELLO_API_KEY: ${{ secrets.TRELLO_API_KEY }}
+          TRELLO_TOKEN: ${{ secrets.TRELLO_TOKEN }}
+          TRELLO_BOARD_ID: ${{ secrets.TRELLO_BOARD_ID }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+
+          CARD_ID=$(echo "$PR_BODY" | grep -oE 'trello\.com/c/[a-zA-Z0-9]+' | head -n1 | sed 's#trello.com/c/##')
+
+          if [ -z "$CARD_ID" ]; then
+            echo "No Trello card link found in PR body, skipping."
+            exit 0
+          fi
+
+          AUTH="key=${TRELLO_API_KEY}&token=${TRELLO_TOKEN}"
+
+          CARD=$(curl -sf "https://api.trello.com/1/cards/${CARD_ID}?${AUTH}&fields=idBoard,idLabels,name")
+
+          CARD_BOARD_ID=$(echo "$CARD" | jq -r '.idBoard')
+          if [ "$CARD_BOARD_ID" != "$TRELLO_BOARD_ID" ]; then
+            echo "Card ${CARD_ID} is not on the expected board, skipping."
+            exit 0
+          fi
+
+          DONE_LIST_ID=$(curl -sf "https://api.trello.com/1/boards/${TRELLO_BOARD_ID}/lists?${AUTH}&fields=name" \
+            | jq -r '.[] | select(.name == "Done") | .id')
+
+          if [ -z "$DONE_LIST_ID" ]; then
+            echo "Done list not found on board." >&2
+            exit 1
+          fi
+
+          curl -sf -X PUT "https://api.trello.com/1/cards/${CARD_ID}?${AUTH}&idList=${DONE_LIST_ID}&pos=top" > /dev/null
+
+          AWAITING_LABEL_ID=$(curl -sf "https://api.trello.com/1/boards/${TRELLO_BOARD_ID}/labels?${AUTH}&fields=name" \
+            | jq -r '.[] | select(.name == "awaiting-emil") | .id')
+
+          if [ -n "$AWAITING_LABEL_ID" ]; then
+            HAS_LABEL=$(echo "$CARD" | jq -r --arg id "$AWAITING_LABEL_ID" '.idLabels | index($id) != null')
+            if [ "$HAS_LABEL" = "true" ]; then
+              curl -sf -X DELETE "https://api.trello.com/1/cards/${CARD_ID}/idLabels/${AWAITING_LABEL_ID}?${AUTH}" > /dev/null
+            fi
+          fi
+
+          echo "Card ${CARD_ID} moved to Done."
