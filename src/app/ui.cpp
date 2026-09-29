@@ -5252,6 +5252,9 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
     }
     if (Toggle("Start LumaBridge with Windows", &ui.autostart)) SetAutostart(ui.autostart);
     if (Toggle("Start minimized to the tray", &ctl.prefs().startMinimized)) ctl.Changed();
+    if (Toggle("Closing the window keeps LumaBridge in the tray", &ctl.prefs().closeToTray)) ctl.Changed();
+    Muted(ctl.prefs().closeToTray ? "Close hides the window; games keep their lighting. Exit is in the tray icon's menu."
+                                  : "Close exits LumaBridge (the lights go back to Armoury Crate). Minimize keeps it running.");
     EndCard();
 
     BeginCard("guide");

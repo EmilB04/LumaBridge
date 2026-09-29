@@ -47,7 +47,8 @@ built in, including in games that only support other brands. No middleware neede
   Rocket League, War Thunder) or choose what it shows without lighting, including its own color.
 - **Integrations:** one-click setup per SDK, with live status.
 - Lives in the tray, starts with Windows if you want. The tray icon glows in the current
-  color.
+  color. Closing the window exits LumaBridge; minimize it to keep it running (or have close
+  keep it in the tray, in Settings).
 
 | Game SDK | Coverage | Your own devices of that brand |
 |---|---|---|

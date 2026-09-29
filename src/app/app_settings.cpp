@@ -98,6 +98,8 @@ Prefs LoadPrefs(const std::wstring& ini) {
     p.lightingStopped = v == L"1";
     v = Read(ini, L"App", L"StartMinimized");
     if (!v.empty()) p.startMinimized = v != L"0";
+    v = Read(ini, L"App", L"CloseToTray");
+    if (!v.empty()) p.closeToTray = v != L"0";
 
     std::string recent = Narrow(Read(ini, L"App", L"RecentColors"));
     for (size_t pos = 0; pos < recent.size() && p.recentColors.size() < Prefs::kMaxRecent;) {
@@ -256,6 +258,7 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
                                                             : L"manual");
     WriteConfigValue(ini, L"App", L"LightingStopped", p.lightingStopped ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"StartMinimized", p.startMinimized ? L"1" : L"0");
+    WriteConfigValue(ini, L"App", L"CloseToTray", p.closeToTray ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"SetupDone", p.setupDone ? L"1" : L"0");
     WriteConfigValue(ini, L"LampArray", L"Enabled", p.lampArray ? L"1" : L"0");
     {

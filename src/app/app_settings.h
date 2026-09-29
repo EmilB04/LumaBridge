@@ -49,6 +49,8 @@ struct Prefs {
     // "Stop controlling the lights": remembered across restarts until resumed.
     bool lightingStopped = false;
     bool startMinimized = true;
+    // Closing the window: hide it in the tray (keeps the lighting running), else exit.
+    bool closeToTray = false;
     // The setup guide has been finished (or skipped); until then the window opens on it.
     bool setupDone = false;
     std::vector<Rgb> recentColors;  // most recent first, max kMaxRecent

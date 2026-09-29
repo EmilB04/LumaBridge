@@ -15,6 +15,7 @@
 #include <cwchar>
 #include <iterator>
 #include <map>
+#include <thread>
 #include <vector>
 
 #include "controller.h"
@@ -407,8 +408,9 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                      SWP_NOZORDER | SWP_NOACTIVATE);
         return 0;
     }
-    case WM_CLOSE:  // close = hide to tray; Exit is in the tray menu
-        ShowWindow(hwnd, SW_HIDE);
+    case WM_CLOSE:  // the window's X, or Close window on the taskbar
+        if (g_ctl.prefs().closeToTray) ShowWindow(hwnd, SW_HIDE);  // Exit is in the tray menu
+        else PostQuitMessage(0);
         return 0;
     case WM_TRAY:
         if (LOWORD(lp) == WM_LBUTTONUP || LOWORD(lp) == WM_LBUTTONDBLCLK) ShowMain();
@@ -574,6 +576,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
 
     Shell_NotifyIconW(NIM_DELETE, &g_nid);
     KillTimer(g_ipc, kTickTimer);
+    ShowWindow(g_main, SW_HIDE);
+    // Exiting must end the process: if something hangs while shutting down (a device that
+    // stops answering), end it anyway after a few seconds.
+    std::thread([] {
+        Sleep(8000);
+        LUMA_WARN("shutdown took too long; ending the process");
+        ExitProcess(0);
+    }).detach();
     g_ctl.Shutdown();
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
