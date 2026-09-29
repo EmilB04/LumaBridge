@@ -31,6 +31,7 @@
 #include "lamparray.h"
 #include "device_catalog.h"
 #include "pc_layout.h"
+#include "displays.h"
 
 namespace luma::app {
 namespace {
@@ -2264,11 +2265,14 @@ namespace view3d {
 enum Obj : int {
     kNone = -1,
     kCase = 1, kBoard, kCpu, kRam, kGpu, kPsu, kStorage,
-    kDesk = 20, kMonitor, kKeyboard, kMouse, kHeadset,
+    kDesk = 20, kKeyboard, kMouse, kHeadset,
+    kMonitor0 = 40,  // + display (up to 8)
     kFan0 = 100,    // + case slot
     kOther0 = 200,  // + index into Model::others
 };
 
+constexpr int kMaxScreens = 8;
+bool IsMonitor(int obj) { return obj >= kMonitor0 && obj < kMonitor0 + kMaxScreens; }
 bool InCase(int obj) { return (obj >= kCase && obj <= kStorage) || (obj >= kFan0 && obj < kFan0 + pc::kSlots); }
 
 uint32_t C(Rgb c, int a = 255) { return s3d::Rgba(c.r, c.g, c.b, a); }
@@ -2297,8 +2301,22 @@ struct Model {
     bool headset = false;
     Gear headsetGear;
     std::vector<Gear> others;
+    std::vector<displays::Display> screens;  // the monitors, as Windows has them arranged
     std::vector<std::string> notes;  // "Fan speeds: set up Hardware access", ...
 };
+
+// The monitors, looked up again every few seconds (Windows' arrangement can change).
+const std::vector<displays::Display>& Screens() {
+    static std::vector<displays::Display> list;
+    static uint64_t at = 0;
+    const uint64_t now = GetTickCount64();
+    if (!at || now - at > 3000) {
+        at = now;
+        list = displays::List();
+        if (list.size() > static_cast<size_t>(kMaxScreens)) list.resize(static_cast<size_t>(kMaxScreens));
+    }
+    return list;
+}
 
 bool Contains(const std::string& hay, const char* needle) { return hay.find(needle) != std::string::npos; }
 // Whether a device id (possibly none) is this one.
@@ -2373,6 +2391,7 @@ Model Gather(Controller& ctl, const sensors::SystemSnapshot& snap) {
     m.boardName = hw.boardName.empty() ? sensors::FriendlyBoard(snap.smbios.boardMaker, snap.smbios.boardName) : hw.boardName;
     m.cpuName = sensors::FriendlyCpu(snap.cpuName);
     m.drives = static_cast<int>(Drives().size());
+    m.screens = Screens();
     for (const auto& d : ctl.openRgb().devices())
         if (d.type == 2 && ctl.OpenRgbOn(d)) m.gpuRgb = true;  // a graphics card OpenRGB lights
 
@@ -2416,9 +2435,21 @@ s3d::V3 DeskSpot(const Prefs& p, const std::string& item) {
     return it == p.setupSpots.end() ? pc::DefaultDeskSpot(item) : pc::FromSaved(it->second.x, it->second.y);
 }
 
-// Where the case stands and how it's turned (turn 0: its front towards you).
+// How far something is turned on the desk (radians, counter-clockwise seen from above).
+float DeskAngle(const Prefs& p, const std::string& item) {
+    auto it = p.setupSpots.find(item);
+    return it == p.setupSpots.end() ? 0.f : it->second.angle * 0.01745329f;
+}
+
+// Where a desk item stands, turned as it is.
+s3d::Transform DeskXf(const Prefs& p, const std::string& item) { return s3d::Transform::YawAt(DeskAngle(p, item), DeskSpot(p, item)); }
+
+// Where the case stands and how it's turned (turn 0: its front towards you). Mirrored, as a
+// real case is: seen from the front, the glass is on the left and the motherboard on the right.
 s3d::Transform CaseXf(const Prefs& p, const pc::Layout& l) {
-    return s3d::Transform::YawAt(-1.5707963f * static_cast<float>(l.turn), DeskSpot(p, "desk:case") + s3d::V3{0, 1.2f, 0});
+    return s3d::Transform::YawAt(-1.5707963f * static_cast<float>(l.turn) + DeskAngle(p, "desk:case"),
+                                 DeskSpot(p, "desk:case") + s3d::V3{0, 1.2f, 0})
+        .MirroredX();
 }
 
 // Something to point at: its name at a spot (world), and more on hover.
@@ -2527,7 +2558,7 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
     }
 
     // ---- The case ----
-    const s3d::Transform cx = o.desk ? CaseXf(p, m.layout) : s3d::Transform{};
+    const s3d::Transform cx = o.desk ? CaseXf(p, m.layout) : s3d::Transform{}.MirroredX();
     sc.xf = cx;
     const float W = pc::kCaseW / 2, D = pc::kCaseD / 2, Hh = pc::kCaseH;
     sc.Room({-W, 0, -D}, {W, Hh, D}, H(0x262C37), kCase);
@@ -2540,13 +2571,17 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
     anchors->push_back({kCase, cx.Apply({0, Hh + 3, 0}), "Case"});
 
     // PSU shroud (with the power supply under it).
+    sc.bias = 4;  // what sits on it sorts in front
     sc.Box({-W + 0.2f, 0, -D + 0.2f}, {W - 0.2f, pc::kShroudH, D - 0.2f}, H(0x323845), kPsu);
+    sc.bias = 0;
     sc.Box({-W + 3, 2, -D + 0.6f}, {-W + 17, 8.6f, -D + 15}, H(0x22272F), kPsu);
     anchors->push_back({kPsu, cx.Apply({W, 5, 10}), "Power supply"});
 
     // Motherboard, VRM and I/O covers, chipset; its RGB on the I/O cover.
     const float bx = -W + 0.6f;
+    sc.bias = 6;
     sc.Box({bx, 14, -21}, {bx + 0.4f, 44, 3.5f}, H(0x2B3547), kBoard);
+    sc.bias = 0;
     sc.Box({bx + 0.4f, 40, -18}, {bx + 2.2f, 43.5f, -8}, H(0x3A414F), kBoard);
     sc.Box({bx + 0.4f, 31, -21}, {bx + 2.8f, 43.5f, -18.3f}, H(0x3C4452), kBoard);
     sc.Box({bx + 0.4f, 15, -3}, {bx + 1.6f, 19.5f, 2.5f}, H(0x3A414F), kBoard);
@@ -2584,6 +2619,18 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
         sc.xf = s3d::Transform::Facing({1, 0, 0}, {bx + 3.65f, 37, -10}).Then(cx);
         sc.Disc(2.7f, 0, 8, H(0x4A5262), kCpu);
         sc.Disc(1.6f, 0.05f, 8, H(0x5E6778), kCpu);
+        if (m.layout.pumpRgb) {
+            // The pump head's light ring, chained on the ARGB header: the fans' lighting.
+            const std::vector<Rgb> ring = Leds(ctl, m.fansRgb ? device::kFans : nullptr, t, 12);
+            const bool lit = m.fansRgb && LiveParams(ctl, device::kFans);
+            for (int i = 0; i < 12; ++i) {
+                const float a0 = 6.2831853f * static_cast<float>(i) / 12.f, a1 = 6.2831853f * static_cast<float>(i + 1) / 12.f;
+                sc.Quad({std::cos(a0) * 2.2f, std::sin(a0) * 2.2f, 0.1f}, {std::cos(a0) * 2.75f, std::sin(a0) * 2.75f, 0.1f},
+                        {std::cos(a1) * 2.75f, std::sin(a1) * 2.75f, 0.1f}, {std::cos(a1) * 2.2f, std::sin(a1) * 2.2f, 0.1f},
+                        C(ring[static_cast<size_t>(i)]), kCpu, s3d::kDoubleSided | (lit ? static_cast<uint32_t>(s3d::kEmissive) : 0u));
+                if (lit && i % 3 == 0) sc.AddGlow({std::cos(a0) * 2.5f, std::sin(a0) * 2.5f, 0.3f}, 1.2f, C(ring[static_cast<size_t>(i)], 70));
+            }
+        }
         sc.xf = cx;
         // The radiator, over the fans at its place (at least two fans long).
         const bool top = m.layout.radiator == pc::Mount::Top;
@@ -2611,7 +2658,9 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
             rhi = {6.6f, hi + 6.6f, 19.6f};
             port = {0, rhi.y - 2, 17.1f};
         }
+        sc.bias = 2;
         sc.Box(rlo, rhi, H(0x2C323C), kCpu);
+        sc.bias = 0;
         for (int k = 1; k < 12; ++k) {  // fins
             const float f = static_cast<float>(k) / 12.f;
             if (top) sc.AddLine({rlo.x + 0.2f, rlo.y - 0.02f, rlo.z + (rhi.z - rlo.z) * f}, {rhi.x - 0.2f, rlo.y - 0.02f, rlo.z + (rhi.z - rlo.z) * f}, H(0x5A6272, 160));
@@ -2649,7 +2698,9 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
 
     // Graphics card: shroud, backplate, three fans underneath, and a light strip on its edge.
     if (!m.gpuName.empty()) {
+        sc.bias = 3;
         sc.Box({bx + 0.4f, 20.5f, -21}, {3.6f, 26, 10}, H(0x3E4553), kGpu);
+        sc.bias = 0;
         sc.Box({bx + 0.4f, 26, -21}, {3.6f, 26.4f, 10}, H(0x565E6E), kGpu);
         sc.Box({bx + 0.4f, 17, -21.8f}, {3.6f, 26.4f, -21}, H(0x6A7282), kGpu);  // bracket
         const std::vector<Rgb> strip = m.gpuRgb ? Leds(ctl, device::kOther, t, 10) : std::vector<Rgb>(10, Rgb{58, 63, 74});
@@ -2708,46 +2759,77 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
         sc.xf = cx;
     }
 
-    // Airflow: cool air in through the intakes, warm air out of the exhausts.
+    // Airflow: wind streaks from the intakes through the case to the exhausts, cool to warm.
     if (o.airflow && m.layout.Fans()) {
         double sum = 0;
         int n = 0;
         for (double r : m.fanRpm)
             if (r > 0) sum += r, ++n;
-        const double speed = (n ? sum / n : 900) / 1000.0 * 0.35;
-        for (int i = 0; i < 110; ++i) {
+        const double speed = (n ? sum / n : 900) / 1000.0 * 0.3;
+        const Rgb cool{90, 180, 255}, warm{255, 150, 80};
+        auto tint = [&](float k) {
+            return Rgb{static_cast<uint8_t>(cool.r + (warm.r - cool.r) * k), static_cast<uint8_t>(cool.g + (warm.g - cool.g) * k),
+                       static_cast<uint8_t>(cool.b + (warm.b - cool.b) * k)};
+        };
+        for (int i = 0; i < 34; ++i) {
             const uint32_t seed = static_cast<uint32_t>(i) * 2654435761u;
-            const float phase = static_cast<float>(std::fmod(t * speed + (seed % 1000u) / 1000.0, 1.0));
-            const V3 at = pc::AirflowPoint(m.layout, i, i / 3 + i % 5, phase, static_cast<uint32_t>(i));
-            const int alpha = static_cast<int>(150 * std::sin(phase * 3.14159f));
-            const Rgb cool{80, 170, 255}, warm{255, 140, 70};
-            const Rgb c{static_cast<uint8_t>(cool.r + (warm.r - cool.r) * phase), static_cast<uint8_t>(cool.g + (warm.g - cool.g) * phase),
-                        static_cast<uint8_t>(cool.b + (warm.b - cool.b) * phase)};
-            sc.AddGlow(at, 0.45f, C(c, alpha));
+            const float head = static_cast<float>(std::fmod(t * speed + (seed % 1000u) / 1000.0, 1.0));
+            // A streak: a few segments trailing behind its head, fading towards the tail.
+            constexpr int kSegs = 6;
+            constexpr float kLen = 0.16f;
+            V3 prev = pc::AirflowPoint(m.layout, i, i / 3 + i % 5, head, static_cast<uint32_t>(i));
+            for (int k = 1; k <= kSegs; ++k) {
+                const float ph = head - kLen * static_cast<float>(k) / kSegs;
+                if (ph < 0) break;
+                const V3 at = pc::AirflowPoint(m.layout, i, i / 3 + i % 5, ph, static_cast<uint32_t>(i));
+                const float fade = 1.f - static_cast<float>(k - 1) / kSegs;
+                const int alpha = static_cast<int>(170 * fade * std::sin(std::min(1.f, head) * 3.14159f));
+                sc.AddLine(prev, at, C(tint(ph), alpha), 1.6f);
+                prev = at;
+            }
         }
     }
 
     if (!o.desk) return;
 
     // ---- On the desk ----
-    // Monitor.
+    // Monitors, as Windows has them arranged (one, if it doesn't say).
     {
-        const V3 at = DeskSpot(p, "desk:monitor");
-        sc.xf = s3d::Transform::Translate(at);
-        sc.Box({-9, 0, -7}, {9, 1, 5}, H(0x23272F), kMonitor);
-        sc.Box({-2, 1, -4}, {2, 14, -2}, H(0x2B3039), kMonitor);
-        sc.Box({-31, 12, -4.5f}, {31, 47, -2.5f}, H(0x23272F), kMonitor);
-        sc.Quad({-30, 13, -2.45f}, {30, 13, -2.45f}, {30, 46, -2.45f}, {-30, 46, -2.45f}, H(0x0D1422), kMonitor, s3d::kEmissive);
-        anchors->push_back({kMonitor, sc.xf.Apply({0, 49, -3}), "Monitor"});
+        std::vector<displays::Display> screens = m.screens;
+        if (screens.empty()) screens.push_back({});
+        const std::vector<displays::Placed> placed = displays::Arrange(screens);
+        const s3d::Transform group = DeskXf(p, "desk:monitor");
+        for (size_t i = 0; i < placed.size(); ++i) {
+            const displays::Placed& d = placed[i];
+            const int id = kMonitor0 + static_cast<int>(i);
+            sc.xf = s3d::Transform::YawAt(d.yaw, {d.x, 0, d.z}).Then(group);
+            const float hw = d.w / 2 + 0.8f, top = d.bottom + d.h + 0.8f;
+            if (d.bottom < 20) {  // on its own stand
+                sc.bias = 3;
+                sc.Box({-9, 0, -7}, {9, 1, 5}, H(0x23272F), id);
+                sc.bias = 0;
+                sc.Box({-2, 1, -4.4f}, {2, d.bottom + 2, -2.4f}, H(0x2B3039), id);
+            } else {  // on an arm from behind
+                sc.Box({-1.2f, d.bottom + d.h / 2 - 1.2f, -14}, {1.2f, d.bottom + d.h / 2 + 1.2f, -4.4f}, H(0x2B3039), id);
+            }
+            sc.Box({-hw, d.bottom - 0.8f, -4.4f}, {hw, top, -2.5f}, H(0x23272F), id);
+            sc.Quad({-d.w / 2, d.bottom, -2.45f}, {d.w / 2, d.bottom, -2.45f}, {d.w / 2, d.bottom + d.h, -2.45f},
+                    {-d.w / 2, d.bottom + d.h, -2.45f}, H(0x0D1422), id, s3d::kEmissive);
+            if (screens[i].primary)  // the taskbar tells the primary display apart
+                sc.Quad({-d.w / 2, d.bottom, -2.44f}, {d.w / 2, d.bottom, -2.44f}, {d.w / 2, d.bottom + 1.2f, -2.44f},
+                        {-d.w / 2, d.bottom + 1.2f, -2.44f}, H(0x1C2A44), id, s3d::kEmissive);
+            anchors->push_back({id, sc.xf.Apply({0, top + 2, -3}), m.screens.empty() ? std::string("Monitor") : screens[i].name});
+        }
     }
     // Keyboard: every key, lit key by key when LumaBridge lights it.
     {
         const Gear& g = m.keyboard;
-        const V3 at = DeskSpot(p, g.spot);
-        sc.xf = s3d::Transform::Translate(at);
+        sc.xf = DeskXf(p, g.spot);
         const auto& keys = azoth::IsoKeys();
         const float u = 2.55f, w = 16 * u, d = 6.2f * u;
+        sc.bias = 25;  // the base under the keys
         sc.Box({-w / 2 - 1, 0, -d / 2 - 1}, {w / 2 + 1, 2.2f, d / 2 + 1}, H(0x2A2F38), kKeyboard);
+        sc.bias = 0;
         std::vector<Rgb> colors;
         const fx::Params* kp = g.device ? LiveParams(ctl, g.device) : nullptr;
         const double level = g.device ? LiveLevel(ctl, g.device) : 0;
@@ -2761,8 +2843,10 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
             else if (kp) c = Scale(fx::Render(*kp, t, azoth::EffectColumn(k), azoth::kColumns), level);
             const bool lit = kp != nullptr;
             sc.Box({x0, 2.2f, z0}, {x1, 3.1f, z1}, lit ? C(Scale(c, 0.35)) : H(0x3C424E), kKeyboard);
+            sc.bias = -0.3f;  // the legend on top of its key
             sc.Quad({x0 + 0.2f, 3.12f, z1 - 0.2f}, {x1 - 0.2f, 3.12f, z1 - 0.2f}, {x1 - 0.2f, 3.12f, z0 + 0.2f}, {x0 + 0.2f, 3.12f, z0 + 0.2f},
                     lit ? C(c) : H(0x4A5160), kKeyboard, lit ? s3d::kEmissive : 0u);
+            sc.bias = 0;
             if (lit && i % 5 == 0) sc.AddGlow({(x0 + x1) / 2, 3.2f, (z0 + z1) / 2}, 1.8f, C(c, 45));
         }
         anchors->push_back({kKeyboard, sc.xf.Apply({0, 5, -d / 2 - 2}), g.name});
@@ -2770,27 +2854,34 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
     // Mouse.
     {
         const Gear& g = m.mouse;
-        sc.xf = s3d::Transform::Translate(DeskSpot(p, g.spot));
+        sc.xf = DeskXf(p, g.spot);
+        sc.bias = 4;
         sc.Box({-3.3f, 0, -6}, {3.3f, 2.6f, 6}, H(0x2E333D), kMouse);
+        sc.bias = 0;
         sc.Box({-2.8f, 2.6f, -4.5f}, {2.8f, 3.8f, 3}, H(0x3A404C), kMouse);
         sc.Box({-0.3f, 3.8f, -4.2f}, {0.3f, 4.2f, -2.4f}, H(0x3A404C), kMouse);  // wheel
         const bool perLed = Is(g.device, device::kMouse) && ctl.logitech().mouseEffect();
         const std::vector<Rgb> leds = Leds(ctl, g.device, t, 8, !perLed);
         const bool lit = g.device && LiveParams(ctl, g.device);
+        sc.bias = -0.3f;
         for (int i = 0; i < 8; ++i) {
             const float z0 = -1 + 0.6f * static_cast<float>(i), z1 = z0 + 0.6f;
             sc.Quad({-2.9f, 2.62f, z1}, {-2.2f, 3.3f, z1}, {-2.2f, 3.3f, z0}, {-2.9f, 2.62f, z0}, C(leds[static_cast<size_t>(i)]), kMouse,
                     lit ? s3d::kEmissive : 0u);
         }
         sc.Quad({-1, 3.82f, 2.6f}, {1, 3.82f, 2.6f}, {1, 3.82f, 0.8f}, {-1, 3.82f, 0.8f}, C(leds[4]), kMouse, lit ? s3d::kEmissive : 0u);
+        sc.bias = 0;
         if (lit) sc.AddGlow({0, 4, 1.7f}, 2.2f, C(leds[4], 90));
         anchors->push_back({kMouse, sc.xf.Apply({0, 7, 0}), g.name});
     }
     // Headset on its stand.
     if (m.headset) {
         const Gear& g = m.headsetGear;
-        sc.xf = s3d::Transform::Translate(DeskSpot(p, g.spot));
+        const s3d::Transform at = DeskXf(p, g.spot);
+        sc.xf = at;
+        sc.bias = 3;
         sc.Box({-5, 0, -5}, {5, 1, 5}, H(0x23272F), kHeadset);
+        sc.bias = 0;
         sc.Box({-0.8f, 1, -0.8f}, {0.8f, 24, 0.8f}, H(0x2B3039), kHeadset);
         sc.Box({-9, 24, -2}, {9, 26, 2}, H(0x1E222A), kHeadset);
         const std::vector<Rgb> leds = Leds(ctl, g.device, t, 2);
@@ -2799,17 +2890,19 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
             const float x = side ? 8.5f : -8.5f;
             sc.Box({x - 1.6f, 13, -4}, {x + 1.6f, 23, 4}, H(0x1B1F27), kHeadset);
             const float fx = side ? x + 1.62f : x - 1.62f;
-            sc.xf = s3d::Transform::Facing({side ? 1.f : -1.f, 0, 0}, {fx, 18, 0}).Then(s3d::Transform::Translate(DeskSpot(p, g.spot)));
+            sc.xf = s3d::Transform::Facing({side ? 1.f : -1.f, 0, 0}, {fx, 18, 0}).Then(at);
             sc.Disc(2.6f, 0, 8, C(leds[static_cast<size_t>(side)]), kHeadset, lit ? s3d::kEmissive : 0u);
             if (lit) sc.AddGlow({0, 0, 0.2f}, 3.4f, C(leds[static_cast<size_t>(side)], 70));
-            sc.xf = s3d::Transform::Translate(DeskSpot(p, g.spot));
+            sc.xf = at;
         }
         anchors->push_back({kHeadset, sc.xf.Apply({0, 29, 0}), g.name});
     }
     // Other lit devices: light bars.
     for (const Gear& g : m.others) {
-        sc.xf = s3d::Transform::Translate(DeskSpot(p, g.spot));
+        sc.xf = DeskXf(p, g.spot);
+        sc.bias = 2;
         sc.Box({-10, 0, -1.5f}, {10, 2.4f, 1.5f}, H(0x1B1F27), g.obj);
+        sc.bias = 0;
         LedBar(sc, -9.5f, 9.5f, 0.6f, 2.0f, 1.52f, Leds(ctl, g.device, t, g.leds), g.obj);
         anchors->push_back({g.obj, sc.xf.Apply({0, 5, 0}), g.name});
     }
@@ -2821,6 +2914,7 @@ const char* DeviceOf(const Model& m, int obj) {
     if (obj >= kFan0 && obj < kFan0 + pc::kSlots)
         return m.fansRgb && m.layout.slots[static_cast<size_t>(obj - kFan0)] == pc::SlotFan::Rgb ? device::kFans : nullptr;
     switch (obj) {
+    case kCpu: return m.layout.cooler == pc::Cooler::Aio && m.layout.pumpRgb && m.fansRgb ? device::kFans : nullptr;
     case kBoard: return m.boardRgb ? device::kBoard : nullptr;
     case kRam: return m.ramRgb ? device::kRam : nullptr;
     case kGpu: return m.gpuRgb ? device::kOther : nullptr;
@@ -2837,7 +2931,7 @@ const char* DeviceOf(const Model& m, int obj) {
 // move the whole case.
 std::string DeskItemOf(const Model& m, int obj) {
     if (InCase(obj)) return "desk:case";
-    if (obj == kMonitor) return "desk:monitor";
+    if (IsMonitor(obj)) return "desk:monitor";
     if (obj == kKeyboard) return m.keyboard.spot;
     if (obj == kMouse) return m.mouse.spot;
     if (obj == kHeadset) return m.headsetGear.spot;
@@ -2870,6 +2964,25 @@ void Describe(Controller& ctl, const Model& m, const sensors::SystemSnapshot& sn
         else rgbLine(DeviceOf(m, obj));
         return;
     }
+    if (IsMonitor(obj)) {
+        const int i = obj - kMonitor0;
+        if (i >= static_cast<int>(m.screens.size())) {
+            ImGui::TextUnformatted("Monitor");
+            Muted("Windows didn't report its displays.");
+            return;
+        }
+        const displays::Display& d = m.screens[static_cast<size_t>(i)];
+        ImGui::Text("%s%s", d.name.c_str(), d.primary ? " (main display)" : "");
+        float w, h;
+        displays::ScreenSize(d, &w, &h);
+        snprintf(b, sizeof b, "%d x %d", d.w, d.h);
+        std::string line = b;
+        if (d.hz > 1) snprintf(b, sizeof b, " at %d Hz", d.hz), line += b;
+        snprintf(b, sizeof b, ", %.0f\"", std::sqrt(w * w + h * h) / 2.54f), line += b;
+        Muted("%s", line.c_str());
+        Muted("Placed as Windows arranges your displays. No RGB lighting LumaBridge can control.");
+        return;
+    }
     switch (obj) {
     case kCpu: {
         ImGui::TextUnformatted(m.cpuName.empty() ? "Processor" : m.cpuName.c_str());
@@ -2886,7 +2999,12 @@ void Describe(Controller& ctl, const Model& m, const sensors::SystemSnapshot& sn
         } else if (m.cpuFanRpm > 0) {
             Muted("Cooler fan: %.0f RPM", m.cpuFanRpm);
         }
-        rgbLine(nullptr);
+        if (m.layout.cooler == pc::Cooler::Aio && m.layout.pumpRgb) {
+            if (m.fansRgb) Muted("Pump RGB: on the ARGB header, with the fans' lighting");
+            else Muted("Pump RGB: LumaBridge found no ARGB header (ASUS Aura) to light it");
+        } else {
+            rgbLine(nullptr);
+        }
         break;
     }
     case kGpu:
@@ -2931,10 +3049,6 @@ void Describe(Controller& ctl, const Model& m, const sensors::SystemSnapshot& sn
         ImGui::TextUnformatted("Case");
         Muted("Drag to move it on the desk.");
         break;
-    case kMonitor:
-        ImGui::TextUnformatted("Monitor");
-        Muted("No RGB lighting LumaBridge can control");
-        break;
     default: {
         const Gear* g = obj == kKeyboard ? &m.keyboard : obj == kMouse ? &m.mouse : obj == kHeadset ? &m.headsetGear : nullptr;
         if (obj >= kOther0 && obj < kOther0 + static_cast<int>(m.others.size())) g = &m.others[static_cast<size_t>(obj - kOther0)];
@@ -2953,19 +3067,31 @@ enum class Mode { Lighting, Preview, MySetup };
 void DefaultCamera(s3d::Camera* c, Mode mode) {
     *c = {};
     if (mode == Mode::MySetup) {
-        c->target = {22, 14, -10};
-        c->yaw = 0.55f;
+        c->target = {26, 14, -10};
+        c->yaw = -0.5f;
         c->pitch = 0.36f;
         c->distance = 125;
     } else {
-        c->target = {30, 16, -12};
-        c->yaw = 0.62f;
+        c->target = {40, 18, -14};
+        c->yaw = -0.62f;
         c->pitch = 0.34f;
-        c->distance = 105;
+        c->distance = 100;
     }
 }
 
 }  // namespace view3d
+
+// Turns something on the desk by `degrees` (counter-clockwise seen from above).
+void TurnItem(Controller& ctl, const std::string& item, float degrees) {
+    if (item.empty()) return;
+    auto& spots = ctl.prefs().setupSpots;
+    Spot s;
+    if (auto it = spots.find(item); it != spots.end()) s = it->second;
+    else pc::ToSaved(pc::DefaultDeskSpot(item), &s.x, &s.y);
+    s.angle = static_cast<float>(std::fmod(s.angle + degrees + 720.f, 360.f));
+    spots[item] = s;
+    ctl.Changed();
+}
 
 // The whole setup in 3D. Lighting: click a lit part to edit its lighting. MySetup: drag
 // things on the desk, click fan slots while editing, see the air move. Preview: just look.
@@ -3000,8 +3126,12 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     ImGuiIO& io = ImGui::GetIO();
     if (hovered) ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
     if (hovered && io.MouseWheel != 0) {
-        v.cam.distance *= std::pow(0.9f, io.MouseWheel);
-        v.cam.Clamp();
+        if (v.dragObj >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            TurnItem(ctl, DeskItemOf(m, v.dragObj), io.MouseWheel * 15.f);  // turn what you're holding
+        } else {
+            v.cam.distance *= std::pow(0.9f, io.MouseWheel);
+            v.cam.Clamp();
+        }
     }
 
     auto items = s3d::Render(sc, v.cam, vp);
@@ -3027,9 +3157,12 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
         if (moved && left && v.dragObj >= 0) {
             s3d::V3 hit;
             if (s3d::HitPlaneY(s3d::ScreenRay(v.cam, vp, io.MousePos.x, io.MousePos.y), 0, &hit)) {
+                const std::string item = DeskItemOf(m, v.dragObj);
                 Spot s;
+                if (auto it = prefs.setupSpots.find(item); it != prefs.setupSpots.end()) s = it->second;  // keeps its angle
                 pc::ToSaved(hit + v.dragOffset, &s.x, &s.y);
-                prefs.setupSpots[DeskItemOf(m, v.dragObj)] = s;
+                prefs.setupSpots[item] = s;
+                v.selected = v.dragObj;
             }
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
         } else if (moved && (right || v.orbiting)) {
@@ -3050,7 +3183,11 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
                 ctl.Changed();
             } else if (mode == Mode::Lighting) {
                 if (const char* d = DeviceOf(m, under)) ui.lightTarget = ui.lightTarget == d ? "" : d;
+            } else if (canDrag) {
+                v.selected = DeskItemOf(m, under).empty() ? -1 : under;  // to turn it
             }
+        } else if (click && canDrag) {
+            v.selected = -1;
         }
         v.dragObj = -1;
         v.orbiting = false;
@@ -3094,12 +3231,18 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
             if (it.kind == s3d::DrawItem::Polygon && it.id == id)
                 dl->AddPolyline(reinterpret_cast<const ImVec2*>(it.xy), it.n, col, ImDrawFlags_Closed, w * S());
     };
-    std::vector<int> ids{kCase, kBoard, kCpu, kRam, kGpu, kPsu, kStorage, kMonitor, kKeyboard, kMouse, kHeadset};
+    std::vector<int> ids{kCase, kBoard, kCpu, kRam, kGpu, kPsu, kStorage, kKeyboard, kMouse, kHeadset};
+    for (int i = 0; i < static_cast<int>(std::max<size_t>(1, m.screens.size())); ++i) ids.push_back(kMonitor0 + i);
     for (int i = 0; i < pc::kSlots; ++i) ids.push_back(kFan0 + i);
     for (int i = 0; i < static_cast<int>(m.others.size()); ++i) ids.push_back(kOther0 + i);
     if (mode == Mode::Lighting && !ui.lightTarget.empty())
         for (int id : ids)
             if (const char* d = DeviceOf(m, id); d && ui.lightTarget == d) outline(id, Hex(kAccentHover, 200), 1.6f);
+    if (mode == Mode::MySetup && v.selected >= 0) {
+        // What's selected: all of it (the whole case for a part of it, every monitor).
+        for (int id : ids)
+            if (DeskItemOf(m, id) == DeskItemOf(m, v.selected)) outline(id, Hex(kAccentHover, 190), 1.6f);
+    }
     const int highlight = v.dragObj >= 0 ? v.dragObj : under;
     if (highlight >= 0 && highlight != kDesk) outline(highlight, Hex(kText, 120), 1.2f);
 
@@ -3140,7 +3283,7 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     // How to use it, bottom left.
     const char* hint = mode == Mode::MySetup
                            ? (ui.setupEdit ? "Click a slot to add a fan, make it an RGB fan, or take it out.  Drag to turn the view."
-                                           : "Drag things to move them on the desk.  Drag the desk to turn the view, scroll to zoom, double-click to reset.")
+                                           : "Drag things to move them (scroll while dragging turns them).  Drag the desk to turn the view, scroll to zoom.")
                        : mode == Mode::Lighting ? "Click a lit part to edit its lighting.  Drag to turn the view, scroll to zoom."
                                                 : "Drag to turn the view, scroll to zoom.";
     dl->AddText(ImVec2(a.x + 12 * S(), a.y + Hh - ImGui::GetTextLineHeight() - 10 * S()), Hex(kMuted, 200), hint);
@@ -3149,6 +3292,25 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
                     m.notes[i].c_str());
     ImGui::SetCursorScreenPos(ImVec2(a.x, a.y + Hh));
     ImGui::Dummy(ImVec2(W, 6 * S()));
+    // Turning what's selected.
+    if (mode == Mode::MySetup && v.selected >= 0) {
+        const std::string item = DeskItemOf(m, v.selected);
+        std::string name = InCase(v.selected) ? "Case" : IsMonitor(v.selected) ? (m.screens.size() > 1 ? "Monitors" : "Monitor") : "";
+        for (const Anchor& an : anchors)
+            if (name.empty() && an.obj == v.selected) name = an.label;
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("%s", name.c_str());
+        ImGui::SameLine(0, 12 * S());
+        if (ImGui::Button("Turn left")) TurnItem(ctl, item, 15);
+        ImGui::SameLine();
+        if (ImGui::Button("Turn right")) TurnItem(ctl, item, -15);
+        ImGui::SameLine();
+        if (ImGui::Button("Quarter turn")) TurnItem(ctl, item, 90);
+        ImGui::SameLine();
+        if (ImGui::Button("Straight")) TurnItem(ctl, item, -DeskAngle(prefs, item) / 0.01745329f);
+        ImGui::SameLine();
+        Muted("Scroll while dragging turns it too.");
+    }
 }
 
 // The setup in 3D, on the Lighting page and in the setup guide. `selectable`: clicking a lit
@@ -3230,24 +3392,47 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
     else
         Muted("Set by you: %d fan%s, %d of them RGB. Click Edit fans to change them.", l.Fans(), l.Fans() == 1 ? "" : "s", l.RgbFans());
     ImGui::Dummy(ImVec2(0, 4 * S()));
+    // Each position: how many fans (the - / + change it), and which way they blow.
     for (int mount = 0; mount < pc::kMounts; ++mount) {
-        int fans = 0;
-        for (int i = 0; i < pc::kSlots; ++i)
-            fans += pc::Slots()[static_cast<size_t>(i)].mount == static_cast<pc::Mount>(mount) && l.slots[static_cast<size_t>(i)] != pc::SlotFan::None;
-        if (!fans) continue;
+        const pc::Mount mt = static_cast<pc::Mount>(mount);
+        const int fans = pc::FansAt(l, mt), slots = pc::SlotsAt(mt);
         ImGui::PushID(mount);
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("%s: %d", pc::MountName(static_cast<pc::Mount>(mount)), fans);
-        ImGui::SameLine(110 * S());
-        int dir = l.exhaust[static_cast<size_t>(mount)] ? 1 : 0;
-        const char* dirs[] = {"Pulls air in", "Blows out"};
-        if (Segmented("dir", &dir, dirs, 2, 260 * S())) {
+        ImGui::TextUnformatted(pc::MountName(mt));
+        ImGui::SameLine(80 * S());
+        ImGui::BeginDisabled(fans == 0);
+        if (ImGui::Button("-", ImVec2(28 * S(), 0))) {
             pc::Layout c = l;
-            c.exhaust[static_cast<size_t>(mount)] = dir == 1;
+            pc::SetFansAt(&c, mt, fans - 1);
             SaveLayout(ctl, c);
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("%d", fans);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(fans >= slots);
+        if (ImGui::Button("+", ImVec2(28 * S(), 0))) {
+            pc::Layout c = l;
+            pc::SetFansAt(&c, mt, fans + 1);
+            SaveLayout(ctl, c);
+        }
+        ImGui::EndDisabled();
+        if (fans) {
+            ImGui::SameLine(190 * S());
+            int dir = l.exhaust[static_cast<size_t>(mount)] ? 1 : 0;
+            const char* dirs[] = {"Pulls air in", "Blows out"};
+            if (Segmented("dir", &dir, dirs, 2, 240 * S())) {
+                pc::Layout c = l;
+                c.exhaust[static_cast<size_t>(mount)] = dir == 1;
+                SaveLayout(ctl, c);
+            }
+        } else {
+            ImGui::Dummy(ImVec2(0, 2 * S()));
         }
         ImGui::PopID();
     }
+    Muted("Which of them are RGB fans (on the ARGB header): Edit fans, then click a fan.");
     // The CPU cooler.
     ImGui::Dummy(ImVec2(0, 2 * S()));
     ImGui::AlignTextToFramePadding();
@@ -3271,7 +3456,14 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
             c.radiator = where ? pc::Mount::Front : pc::Mount::Top;
             SaveLayout(ctl, c);
         }
-        Muted("The radiator sits behind the fans there; put fans in those slots with Edit fans.");
+        Muted("The radiator sits behind the fans there.");
+        bool pumpRgb = l.pumpRgb;
+        if (Toggle("The pump head has RGB (on the ARGB header)", &pumpRgb)) {
+            pc::Layout c = l;
+            c.pumpRgb = pumpRgb;
+            SaveLayout(ctl, c);
+        }
+        if (l.pumpRgb) Muted("It shows the fans' lighting, as it's chained with them.");
     }
     int intake = 0, exhaust = 0;
     for (int i = 0; i < pc::kSlots; ++i)

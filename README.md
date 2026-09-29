@@ -13,10 +13,11 @@ built in, including in games that only support other brands. No middleware neede
   LibreHardwareMonitor if it runs.
 - **My setup:** your PC and desk in 3D, live: the case with everything LumaBridge found
   inside (motherboard, CPU cooler, memory, graphics card, drives, fans), the monitor,
-  keyboard, mouse and other lit devices on the desk. LEDs show their live colors, fans spin
-  with the speeds the sensors report, and the airflow moves through the case. Drag things
-  around, turn the view, and correct LumaBridge's guess of where the fans sit, which way
-  they blow, and whether the CPU has an air cooler or an AIO. The Lighting page shows the same view: click a lit part to edit its lighting.
+  keyboard, mouse and other lit devices on the desk, and every monitor placed as Windows has
+  your displays arranged. LEDs show their live colors, fans spin with the speeds the sensors
+  report, and wind streaks show the airflow through the case. Drag and turn things on the
+  desk, turn the view, and correct LumaBridge's guess of how many fans sit where, which way
+  they blow, and whether the CPU has an air cooler or an AIO (with or without RGB). The Lighting page shows the same view: click a lit part to edit its lighting.
 - **Auto mode:** games drive your lights. LumaBridge answers the game's lighting SDK as
   if that brand's software were installed, and follows the game that's currently active.
   Every running game is listed, with whether it supports dynamic lighting. Counter-Strike 2,

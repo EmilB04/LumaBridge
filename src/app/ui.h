@@ -45,6 +45,7 @@ struct UiState {
         int dragObj = -1;        // the object being moved on the desk (-1: none)
         s3d::V3 dragOffset;      // from where the mouse meets the desk to the object's spot
         bool orbiting = false;
+        int selected = -1;       // My setup: what was clicked last on the desk (to turn it)
     };
     View3d setupView, lightView, guideView;
     bool setupEdit = false;      // My setup: editing the fan slots
