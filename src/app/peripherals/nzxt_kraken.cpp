@@ -72,6 +72,43 @@ std::vector<Interface> FindInterfaces(uint16_t pid) {
 
 }  // namespace
 
+std::vector<Named> FindByName() {
+    std::vector<Named> out;
+    GUID hid;
+    HidD_GetHidGuid(&hid);
+    HDEVINFO set = SetupDiGetClassDevsW(&hid, nullptr, nullptr, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    if (set == INVALID_HANDLE_VALUE) return out;
+    SP_DEVICE_INTERFACE_DATA iface{};
+    iface.cbSize = sizeof iface;
+    for (DWORD i = 0; SetupDiEnumDeviceInterfaces(set, nullptr, &hid, i, &iface); ++i) {
+        DWORD need = 0;
+        SetupDiGetDeviceInterfaceDetailW(set, &iface, nullptr, 0, &need, nullptr);
+        if (!need) continue;
+        std::vector<BYTE> buf(need);
+        auto* detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W*>(buf.data());
+        detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
+        if (!SetupDiGetDeviceInterfaceDetailW(set, &iface, detail, need, nullptr, nullptr)) continue;
+        HANDLE q = CreateFileW(detail->DevicePath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (q == INVALID_HANDLE_VALUE) continue;
+        HIDD_ATTRIBUTES attr{};
+        attr.Size = sizeof attr;
+        wchar_t product[128] = {};
+        if (HidD_GetAttributes(q, &attr) && HidD_GetProductString(q, product, sizeof product)) {
+            std::wstring lower = product;
+            for (wchar_t& c : lower) c = static_cast<wchar_t>(towlower(c));
+            const bool dup = std::any_of(out.begin(), out.end(), [&](const Named& n) { return n.vid == attr.VendorID && n.pid == attr.ProductID; });
+            if (lower.find(L"kraken") != std::wstring::npos && !dup) {
+                char name[256] = {};
+                WideCharToMultiByte(CP_UTF8, 0, product, -1, name, sizeof name, nullptr, nullptr);
+                out.push_back({attr.VendorID, attr.ProductID, name});
+            }
+        }
+        CloseHandle(q);
+    }
+    SetupDiDestroyDeviceInfoList(set);
+    return out;
+}
+
 void Kraken::Start(uint16_t pid, bool screen) {
     if (thread_.joinable() || !pid) return;
     stop_ = false;

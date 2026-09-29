@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace luma::app::nzxt {
 
@@ -42,6 +43,14 @@ inline Status Parse(const uint8_t* m, size_t n, bool screenModel) {
     s.valid = s.liquidC > 0 && s.liquidC < 100 && s.pumpRpm >= 0 && s.pumpRpm < 10000;
     return s;
 }
+
+// NZXT Krakens found by their USB name ("NZXT Kraken Elite" ...), whatever their product ID:
+// (vendor, product) and the name, one per device.
+struct Named {
+    uint16_t vid, pid;
+    std::string name;
+};
+std::vector<Named> FindByName();
 
 // Where reading stands, for the UI.
 enum class KrakenState { Off, Searching, CantOpen, NoReply, Reading };

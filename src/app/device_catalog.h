@@ -124,17 +124,24 @@ inline const std::vector<AioModel>& AioModels() {
 }
 
 // The AIO cooler among USB (vendor, product) pairs, or nullptr. NZXT numbers its screen
-// Krakens 0x30xx, so a newer one than listed is still recognised as one.
-inline const AioModel* FindAio(const std::vector<std::pair<uint16_t, uint16_t>>& usb) {
-    for (const auto& [vid, pid] : usb)
-        for (const AioModel& m : AioModels())
-            if (m.vid == vid && m.pid == pid) return &m;
+// Krakens 0x30xx, so a newer one than listed is still recognised as one; so is any device in
+// `named` (found by its USB name, "NZXT Kraken ...").
+inline const AioModel* FindAio(const std::vector<std::pair<uint16_t, uint16_t>>& usb,
+                               const std::vector<std::pair<uint16_t, uint16_t>>& named = {}) {
+    for (const auto* list : {&usb, &named})
+        for (const auto& [vid, pid] : *list)
+            for (const AioModel& m : AioModels())
+                if (m.vid == vid && m.pid == pid) return &m;
     static thread_local AioModel newer{};
     for (const auto& [vid, pid] : usb)
         if (vid == 0x1E71 && pid >= 0x3000 && pid <= 0x30FF) {
             newer = {vid, pid, "NZXT Kraken", true, true};
             return &newer;
         }
+    for (const auto& [vid, pid] : named) {
+        newer = {vid, pid, "NZXT Kraken", pid >= 0x3000, true};
+        return &newer;
+    }
     return nullptr;
 }
 

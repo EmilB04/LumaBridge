@@ -33,6 +33,7 @@
 #include "lamparray_output.h"
 #include "hardware_helper.h"
 #include "nzxt_kraken.h"
+#include "device_catalog.h"
 #include "gamesense_server.h"
 #include "ipc.h"
 #include "source_tracker.h"
@@ -162,6 +163,9 @@ public:
         bool azoth = false;    // ROG Azoth, by cable or its Omni receiver
         // Every USB device, as (vendor, product): for naming RGB brands (device_catalog.h).
         std::vector<std::pair<uint16_t, uint16_t>> usb;
+        // Krakens found by their USB name (any product ID), and the AIO cooler found.
+        std::vector<std::pair<uint16_t, uint16_t>> krakens;
+        const catalog::AioModel* Aio() const { return catalog::FindAio(usb, krakens); }
         std::optional<bool> ghubSleep;  // G HUB's "turn off lighting on inactivity"
         std::vector<LogitechDevice> logitech;  // with and without RGB lighting
         // Logitech devices with RGB lighting.
@@ -263,6 +267,7 @@ private:
     bool feedActive_[8] = {};
     std::future<std::vector<InstalledGame>> libraryJob_;
     Presence presence_;
+    std::string presenceLogged_;  // what the log last said about NZXT devices
     nzxt::Kraken kraken_;
     uint64_t logitechInputAt_ = 0, azothInputAt_ = 0;  // last used (GetTickCount64)
     bool memoryLogged_ = false;  // the memory slots' names are in the log

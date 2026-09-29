@@ -38,6 +38,7 @@ struct UiState {
     std::string hexSlot;  // which color editor the hex field being typed in belongs to
     int colorSlot = 0;    // Lighting > Manual: which of the two colors is being edited
     std::string lightTarget;  // Lighting > Manual: the device being edited ("" = all devices)
+    std::string dragItem2d;   // Lighting's 2D preview: the device being dragged
     // The 3D views (see SetupView): each one's camera, and what the mouse is doing in them.
     struct View3d {
         s3d::Camera cam;

@@ -896,6 +896,7 @@ static void TestAioCatalog() {
     CHECK(FindAio({{0x1E71, 0x3014}}) && FindAio({{0x1E71, 0x3014}})->lcd);  // Kraken 2024 Plus
     CHECK(FindAio({{0x1E71, 0x3020}}) && FindAio({{0x1E71, 0x3020}})->pid == 0x3020);  // a newer screen Kraken
     CHECK(!FindAio({{0x1E71, 0x2019}}));  // NZXT's RGB & fan controller is no cooler
+    CHECK(FindAio({{0x1E71, 0x2019}}, {{0x1E71, 0x2040}}) && FindAio({}, {{0x1E71, 0x2040}})->pid == 0x2040);  // named "Kraken"
     // A Kraken status report: 31.5 °C liquid, pump at 2400 RPM / 60 %, fans (screen models) 1200 RPM / 45 %.
     uint8_t r[64] = {0x75, 0x01};
     r[15] = 31;

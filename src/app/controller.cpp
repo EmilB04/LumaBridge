@@ -254,6 +254,7 @@ void Controller::RescanPresence() {
         p.logitech = ScanLogitechDevices();
         p.ghubSleep = GHubTurnsOffOnInactivity();
         p.usb = UsbDevices();
+        for (const auto& k : nzxt::FindByName()) p.krakens.emplace_back(k.vid, k.pid);
         p.scanned = true;
         return p;
     });
@@ -657,10 +658,25 @@ void Controller::Tick() {
     if (wantScreen && !screen_.Running()) screen_.Start();
     if (!wantScreen && screen_.Running()) screen_.Stop();
     if (presenceJob_.valid() && presenceJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
-        presence_ = presenceJob_.get();
+    {
+        Presence fresh = presenceJob_.get();
+        // Once per change: what NZXT has on USB, and which AIO was recognised (for bug reports).
+        std::string nzxtIds;
+        char b[24];
+        for (const auto& [vid, pid] : fresh.usb)
+            if (vid == nzxt::kVid) snprintf(b, sizeof b, " %04X", pid), nzxtIds += b;
+        for (const auto& [vid, pid] : fresh.krakens) snprintf(b, sizeof b, " named:%04X:%04X", vid, pid), nzxtIds += b;
+        const catalog::AioModel* aio = fresh.Aio();
+        const std::string summary = nzxtIds + (aio ? std::string(" -> ") + aio->name : std::string(" -> no AIO"));
+        if (summary != presenceLogged_) {
+            LUMA_INFO("USB: %d device(s); NZXT:%s", static_cast<int>(fresh.usb.size()), summary.c_str());
+            presenceLogged_ = summary;
+        }
+        presence_ = std::move(fresh);
+    }
     {
         // An NZXT Kraken on USB: read its status while it's there (read only; CAM keeps its lights).
-        const catalog::AioModel* aio = catalog::FindAio(presence_.usb);
+        const catalog::AioModel* aio = presence_.Aio();
         if (aio && aio->vid == nzxt::kVid && !kraken_.running()) kraken_.Start(aio->pid, aio->lcd);
         if (!(aio && aio->vid == nzxt::kVid) && kraken_.running()) kraken_.Stop();
     }
