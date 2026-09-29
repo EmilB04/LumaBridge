@@ -5173,12 +5173,16 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
               "Their own app lights them (or OpenRGB, if you use it: Integrations).",
               Join(also).c_str());
     ImGui::Dummy(ImVec2(0, 2 * S()));
+    // Below 520, Kind and LEDs drop off (Status widens to take the room): five columns of text
+    // get cramped before the sidebar even has to collapse.
+    const bool devicesNarrow = ImGui::GetContentRegionAvail().x < 520 * S();
     if (rows.empty()) Muted("Nothing LumaBridge can light was found on this PC yet.");
-    else if (ImGui::BeginTable("devices", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
+    else if (ImGui::BeginTable("devices", devicesNarrow ? 3 : 5,
+                               ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Device", ImGuiTableColumnFlags_WidthStretch, 2.6f);
-        ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthStretch, 1.4f);
-        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 1.8f);
-        ImGui::TableSetupColumn("LEDs", ImGuiTableColumnFlags_WidthFixed, 50 * S());
+        if (!devicesNarrow) ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthStretch, 1.4f);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, devicesNarrow ? 2.2f : 1.8f);
+        if (!devicesNarrow) ImGui::TableSetupColumn("LEDs", ImGuiTableColumnFlags_WidthFixed, 50 * S());
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 24 * S());
         ImGui::TableHeadersRow();
         int n = 0;
@@ -5199,16 +5203,20 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
             IconItem(r.icon, 16 * S(), r.status.color == kGreen ? Hex(kAccent) : Hex(kMuted));
             ImGui::SameLine();
             ImGui::TextUnformatted(r.name.c_str());
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            Muted("%s", r.kind.c_str());
+            if (!devicesNarrow) {
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                Muted("%s", r.kind.c_str());
+            }
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
             Pill(r.status.text.c_str(), r.status.color);
             if (!r.status.tip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", r.status.tip.c_str());
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            if (r.leds >= 0) Muted("%d", r.leds);
+            if (!devicesNarrow) {
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                if (r.leds >= 0) Muted("%d", r.leds);
+            }
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
             Muted(">");
@@ -5702,12 +5710,16 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
         Muted("%d game(s)%s", static_cast<int>(lib.size()), ctl.libraryScanning() ? " - rescanning..." : "");
         ImGui::Dummy(ImVec2(0, 2 * S()));
     }
+    // Below 560, Store and Without game lighting drop off (open the row for those); Dynamic
+    // lighting widens to take the room.
+    const bool gamesNarrow = ImGui::GetContentRegionAvail().x < 560 * S();
     if (!rows.empty() &&
-        ImGui::BeginTable("games", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::BeginTable("games", gamesNarrow ? 3 : 5,
+                          ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Game", ImGuiTableColumnFlags_WidthStretch, 2.6f);
-        ImGui::TableSetupColumn("Store", ImGuiTableColumnFlags_WidthStretch, 1.1f);
-        ImGui::TableSetupColumn("Dynamic lighting", ImGuiTableColumnFlags_WidthStretch, 1.8f);
-        ImGui::TableSetupColumn("Without game lighting", ImGuiTableColumnFlags_WidthStretch, 1.6f);
+        if (!gamesNarrow) ImGui::TableSetupColumn("Store", ImGuiTableColumnFlags_WidthStretch, 1.1f);
+        ImGui::TableSetupColumn("Dynamic lighting", ImGuiTableColumnFlags_WidthStretch, gamesNarrow ? 2.4f : 1.8f);
+        if (!gamesNarrow) ImGui::TableSetupColumn("Without game lighting", ImGuiTableColumnFlags_WidthStretch, 1.6f);
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 24 * S());
         ImGui::TableHeadersRow();
         int id = 0;
@@ -5737,9 +5749,11 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
                 ImGui::SameLine();
                 Pill("Running", kAccent);
             }
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            Muted("%s", ToUtf8(g.store).c_str());
+            if (!gamesNarrow) {
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                Muted("%s", ToUtf8(g.store).c_str());
+            }
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
             const games::GameProfile* profile = ProfileFor(&g, row.running, name);
@@ -5747,23 +5761,25 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
             if (st.pill) Pill(st.text, st.color);
             else Muted("%s", st.text);
             if (!st.tip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", st.tip.c_str());
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            if (!profile || profile->kind != games::ProfileKind::NotAGame) {
-                const std::string key = games::Normalize(name);
-                auto it = ctl.prefs().gameModes.find(key);
-                const int mode = it == ctl.prefs().gameModes.end() ? 0 : static_cast<int>(it->second);
-                if (mode == static_cast<int>(GameMode::Color)) {
-                    auto c = ctl.prefs().gameColors.find(key);
-                    const ImVec2 p = ImGui::GetCursorScreenPos();
-                    const float r = 6 * S(), y = p.y + ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset + ImGui::GetTextLineHeight() / 2;
-                    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + r, y), r,
-                                                                Col(c == ctl.prefs().gameColors.end() ? Rgb{} : c->second));
-                    ImGui::Dummy(ImVec2(r * 2, 1));
-                    ImGui::SameLine();
+            if (!gamesNarrow) {
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                if (!profile || profile->kind != games::ProfileKind::NotAGame) {
+                    const std::string key = games::Normalize(name);
+                    auto it = ctl.prefs().gameModes.find(key);
+                    const int mode = it == ctl.prefs().gameModes.end() ? 0 : static_cast<int>(it->second);
+                    if (mode == static_cast<int>(GameMode::Color)) {
+                        auto c = ctl.prefs().gameColors.find(key);
+                        const ImVec2 p = ImGui::GetCursorScreenPos();
+                        const float r = 6 * S(), y = p.y + ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset + ImGui::GetTextLineHeight() / 2;
+                        ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + r, y), r,
+                                                                    Col(c == ctl.prefs().gameColors.end() ? Rgb{} : c->second));
+                        ImGui::Dummy(ImVec2(r * 2, 1));
+                        ImGui::SameLine();
+                    }
+                    if (mode) ImGui::TextUnformatted(kGameModeNames[mode]);
+                    else Muted("Default");
                 }
-                if (mode) ImGui::TextUnformatted(kGameModeNames[mode]);
-                else Muted("Default");
             }
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
