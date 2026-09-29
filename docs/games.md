@@ -34,6 +34,7 @@ what's described, the app log (`lumabridge-app.log`) shows whether data arrived
 | Euro Truck Simulator 2, The Last of Us Part I, The Sims 4 | Logitech LIGHTSYNC. With Logitech LIGHTSYNC set up on the Integrations page LumaBridge catches it and shows it on every device; otherwise LumaBridge hands your Logitech gear to the game while it runs. |
 | Apex Legends, PUBG: BATTLEGROUNDS, HITMAN World of Assassination | Razer Chroma. Install Razer Chroma on the Integrations page (and switch Chroma on in the game's options if it has one). Their anti-cheat may refuse LumaBridge's DLL; then use Screen colors. |
 | Marvel Rivals | Razer Chroma, switched on in its launcher. It talks to Razer's own Chroma app, so it lights Razer gear through Razer Synapse only. |
+| Civilization VI, Total War: WARHAMMER III, Terraria, Assetto Corsa, iRacing, Grand Theft Auto V, Factorio, American Truck Simulator | Logitech LIGHTSYNC. With Logitech LIGHTSYNC set up on the Integrations page LumaBridge catches it and shows it on every device; otherwise LumaBridge hands your Logitech gear to the game while it runs. Which events drive which colors isn't publicly documented for these. |
 | Destiny 2, Rainbow Six Siege, Red Dead Redemption 2, Call of Duty | No lighting of their own (only fixed, fan-made profiles). Use Screen colors. |
 
 ## Screen colors

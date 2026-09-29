@@ -113,6 +113,47 @@ inline const GameProfile* Profiles(size_t* count) {
          "The game lights Logitech gear itself through G HUB (LIGHTSYNC). With Logitech LIGHTSYNC set up on the "
          "Integrations page, LumaBridge catches that lighting and shows it on every device; otherwise it hands "
          "your Logitech gear to the game while it runs."},
+        {"civ6", "Civilization VI", {"civilizationvi.exe", "civ6.exe"}, {"civilizationvi", "sidmeierscivilizationvi"},
+         ProfileKind::VendorSdk, Feed::None, "Logitech LIGHTSYNC",
+         "The game lights Logitech gear itself through G HUB (LIGHTSYNC). With Logitech LIGHTSYNC set up on the "
+         "Integrations page, LumaBridge catches that lighting and shows it on every device; otherwise it hands "
+         "your Logitech gear to the game while it runs. Which events drive which colors isn't publicly documented."},
+        {"totalwarwh3", "Total War: WARHAMMER III", {"warhammer3.exe"}, {"totalwarwarhammeriii", "totalwarwarhammer3"},
+         ProfileKind::VendorSdk, Feed::None, "Logitech LIGHTSYNC",
+         "The game lights Logitech gear itself through G HUB (LIGHTSYNC). With Logitech LIGHTSYNC set up on the "
+         "Integrations page, LumaBridge catches that lighting and shows it on every device; otherwise it hands "
+         "your Logitech gear to the game while it runs. Which events drive which colors isn't publicly documented."},
+        {"terraria", "Terraria", {"terraria.exe"}, {"terraria"}, ProfileKind::VendorSdk, Feed::None,
+         "Logitech LIGHTSYNC",
+         "The game lights Logitech gear itself through G HUB (LIGHTSYNC). With Logitech LIGHTSYNC set up on the "
+         "Integrations page, LumaBridge catches that lighting and shows it on every device; otherwise it hands "
+         "your Logitech gear to the game while it runs. Which events drive which colors isn't publicly documented."},
+        {"assettocorsa", "Assetto Corsa", {"acs.exe", "assettocorsa.exe"}, {"assettocorsa"}, ProfileKind::VendorSdk,
+         Feed::None, "Logitech LIGHTSYNC",
+         "The game lights Logitech gear itself through G HUB (LIGHTSYNC). With Logitech LIGHTSYNC set up on the "
+         "Integrations page, LumaBridge catches that lighting and shows it on every device; otherwise it hands "
+         "your Logitech gear to the game while it runs. Which events drive which colors isn't publicly documented."},
+        {"iracing", "iRacing", {"iracingsim64dx11.exe", "iracingui.exe"}, {"iracing"}, ProfileKind::VendorSdk,
+         Feed::None, "Logitech LIGHTSYNC",
+         "The game lights Logitech gear itself through G HUB (LIGHTSYNC). With Logitech LIGHTSYNC set up on the "
+         "Integrations page, LumaBridge catches that lighting and shows it on every device; otherwise it hands "
+         "your Logitech gear to the game while it runs. Which events drive which colors isn't publicly documented."},
+        {"gtav", "Grand Theft Auto V", {"gta5.exe"}, {"grandtheftautov", "gtav"}, ProfileKind::VendorSdk, Feed::None,
+         "Logitech LIGHTSYNC",
+         "The game lights Logitech gear itself through G HUB (LIGHTSYNC). With Logitech LIGHTSYNC set up on the "
+         "Integrations page, LumaBridge catches that lighting and shows it on every device; otherwise it hands "
+         "your Logitech gear to the game while it runs. Which events drive which colors isn't publicly documented; "
+         "Rockstar's own anti-tamper is untested against LumaBridge."},
+        {"factorio", "Factorio", {"factorio.exe"}, {"factorio"}, ProfileKind::VendorSdk, Feed::None,
+         "Logitech LIGHTSYNC",
+         "The game lights Logitech gear itself through G HUB (LIGHTSYNC). With Logitech LIGHTSYNC set up on the "
+         "Integrations page, LumaBridge catches that lighting and shows it on every device; otherwise it hands "
+         "your Logitech gear to the game while it runs. Which events drive which colors isn't publicly documented."},
+        {"ats", "American Truck Simulator", {"amtrucks.exe"}, {"americantrucksimulator"}, ProfileKind::VendorSdk,
+         Feed::None, "Logitech LIGHTSYNC",
+         "The game lights Logitech gear itself through G HUB (LIGHTSYNC). With Logitech LIGHTSYNC set up on the "
+         "Integrations page, LumaBridge catches that lighting and shows it on every device; otherwise it hands "
+         "your Logitech gear to the game while it runs. Which events drive which colors isn't publicly documented."},
         {"apex", "Apex Legends", {"r5apex.exe", "r5apex_dx12.exe"}, {"apexlegends"}, ProfileKind::VendorSdk, Feed::None,
          "Razer Chroma",
          "Install Razer Chroma on the Integrations page, and switch the game's Razer Chroma option on if it has "

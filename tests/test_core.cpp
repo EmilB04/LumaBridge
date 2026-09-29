@@ -613,6 +613,10 @@ static void TestGameProfiles() {
     CHECK(std::strstr(FindProfile("bf2042.exe", "")->how, "Logitech") != nullptr);
     CHECK(FindProfile("notepad.exe", "Some Game") == nullptr);
     CHECK(std::strcmp(ProfileByKey("warthunder")->title, "War Thunder") == 0);
+    CHECK(FindProfile("civilizationvi.exe", "")->kind == ProfileKind::VendorSdk && !FindProfile("civilizationvi.exe", "")->blocked);
+    CHECK(FindProfile("gta5.exe", "")->kind == ProfileKind::VendorSdk);
+    CHECK(FindProfile("", "American Truck Simulator")->kind == ProfileKind::VendorSdk);
+    CHECK(FindProfile("iracingsim64dx11.exe", "")->kind == ProfileKind::VendorSdk);
 }
 
 static void TestCs2() {
