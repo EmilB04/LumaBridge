@@ -52,6 +52,8 @@ struct Prefs {
     // Closing the window: hide it in the tray (keeps the lighting running), else exit.
     bool closeToTray = false;
     bool lighting3d = true;  // the Lighting page's preview: 3D, else the flat 2D one
+    bool dashGraphs = true;  // the dashboard's performance cards show graphs
+    int psuWatts = 0;        // the power supply's rating (W), as set by you (0: not set)
     // The setup guide has been finished (or skipped); until then the window opens on it.
     bool setupDone = false;
     std::vector<Rgb> recentColors;  // most recent first, max kMaxRecent

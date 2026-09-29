@@ -31,6 +31,7 @@
 #include "lamparray.h"
 #include "device_catalog.h"
 #include "nzxt_kraken.h"
+#include "perf_history.h"
 #include "pc_layout.h"
 #include "displays.h"
 
@@ -622,6 +623,65 @@ void Bar(double fraction, unsigned color) {
     ImGui::PopStyleColor(2);
 }
 
+// ---- Graphs: the last two minutes of each figure ------------------------------------------
+
+struct PerfHistory {
+    perf::Series cpuLoad, cpuTemp, gpuLoad, mem, power;
+    double at = -1;  // when the last sample was taken (ImGui time)
+};
+PerfHistory& History() {
+    static PerfHistory h;
+    return h;
+}
+
+// One figure over time: a thin line over a faint area, newest on the right, on a recessive
+// baseline; hover for the value then. `lo`..`hi` is its scale.
+void Graph(const char* id, const perf::Series& series, double lo, double hi, unsigned color, const char* fmt) {
+    if (!ImGui::GetCurrentContext() || !series.Any()) return;
+    const float w = ImGui::GetContentRegionAvail().x, h = 38 * S();
+    const ImVec2 a = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton(id, ImVec2(w, h));
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const auto& v = series.values();
+    const size_t n = perf::Series::kLength;
+    const size_t off = n - v.size();  // a short history starts from the right
+    auto X = [&](size_t i) { return a.x + w * static_cast<float>(off + i) / static_cast<float>(n - 1); };
+    auto Y = [&](double val) {
+        const double t = std::clamp((val - lo) / std::max(1e-9, hi - lo), 0.0, 1.0);
+        return a.y + h - 1 - static_cast<float>(t) * (h - 3 * S());
+    };
+    dl->AddLine(ImVec2(a.x, a.y + h - 0.5f), ImVec2(a.x + w, a.y + h - 0.5f), Hex(kBorder), 1.f);
+    // The area, then the line, in runs between gaps.
+    for (size_t i = 0; i + 1 < v.size(); ++i) {
+        if (v[i] < 0 || v[i + 1] < 0) continue;
+        const ImVec2 p0(X(i), Y(v[i])), p1(X(i + 1), Y(v[i + 1]));
+        dl->AddQuadFilled(p0, p1, ImVec2(p1.x, a.y + h - 1), ImVec2(p0.x, a.y + h - 1), Hex(color, 34));
+    }
+    for (size_t i = 0; i + 1 < v.size(); ++i)
+        if (v[i] >= 0 && v[i + 1] >= 0)
+            dl->AddLine(ImVec2(X(i), Y(v[i])), ImVec2(X(i + 1), Y(v[i + 1])), Hex(color), 2 * S());
+    if (hovered) {
+        // The sample under the mouse: a crosshair, a dot and its value.
+        const float mx = ImGui::GetIO().MousePos.x;
+        size_t best = v.size();
+        float bestD = 1e9f;
+        for (size_t i = 0; i < v.size(); ++i)
+            if (v[i] >= 0 && std::fabs(X(i) - mx) < bestD) bestD = std::fabs(X(i) - mx), best = i;
+        if (best < v.size()) {
+            const float x = X(best), y = Y(v[best]);
+            dl->AddLine(ImVec2(x, a.y), ImVec2(x, a.y + h), Hex(kMuted, 120), 1.f);
+            dl->AddCircleFilled(ImVec2(x, y), 4 * S(), Hex(kCard), 12);
+            dl->AddCircleFilled(ImVec2(x, y), 3 * S(), Hex(color), 12);
+            char val[48];
+            snprintf(val, sizeof val, fmt, v[best]);
+            const int ago = static_cast<int>(v.size() - 1 - best);
+            if (ago == 0) ImGui::SetTooltip("%s  now", val);
+            else ImGui::SetTooltip("%s  %d s ago", val, ago);
+        }
+    }
+}
+
 // A big number with a small unit, e.g. "42 %".
 void Metric(const Fonts& f, const char* value, const char* unit, unsigned color = kText) {
     ImGui::PushFont(f.title);
@@ -671,6 +731,7 @@ void WCpu(DashCtx& c) {
     if (s.cpuLoad >= 0) snprintf(v, sizeof v, "%.0f", s.cpuLoad);
     Metric(c.f, v, "% load", s.cpuLoad >= 0 ? LoadColor(s.cpuLoad) : kMuted);
     Bar(s.cpuLoad / 100.0, LoadColor(s.cpuLoad));
+    if (c.ctl.prefs().dashGraphs) Graph("cpu-graph", History().cpuLoad, 0, 100, kAccent, "%.0f %% load");
     if (const auto* t = sensors::PickSensor(s.lhm, sensors::HardwareKind::Cpu, sensors::SensorType::Temperature,
                                             {"Tctl", "Package", "Core (Tdie)", "CPU"})) {
         ImGui::PushStyleColor(ImGuiCol_Text, V4(TempColor(t->value)));
@@ -682,6 +743,14 @@ void WCpu(DashCtx& c) {
         Muted("Temperature: set up Hardware access (Devices).");
     }
     if (s.cpuThreads) Muted("%d threads", s.cpuThreads);
+}
+
+// The graphics card: the one with the most memory of its own (not the processor's built-in one).
+const sensors::GpuStat* MainGpuOf(const sensors::SystemSnapshot& snap) {
+    const sensors::GpuStat* card = nullptr;
+    for (const auto& g : snap.gpus)
+        if (!card || g.vramTotal > card->vramTotal) card = &g;
+    return card;
 }
 
 void WGpu(DashCtx& c) {
@@ -707,6 +776,7 @@ void WGpu(DashCtx& c) {
             snprintf(v, sizeof v, "%.0f", load);
             Metric(c.f, v, "% load", LoadColor(load));
             Bar(load / 100.0, LoadColor(load));
+            if (c.ctl.prefs().dashGraphs && &g == MainGpuOf(s)) Graph("gpu-graph", History().gpuLoad, 0, 100, kAccent, "%.0f %% load");
         }
         std::string line;
         char b[64];
@@ -739,6 +809,7 @@ void WMemory(DashCtx& c) {
         snprintf(v, sizeof v, "%.0f", used * 100);
         Metric(c.f, v, "% used", LoadColor(used * 100));
         Bar(used, LoadColor(used * 100));
+        if (c.ctl.prefs().dashGraphs) Graph("mem-graph", History().mem, 0, 100, kAccent, "%.0f %% used");
         Muted("%s of %s", Gb(s.memUsed).c_str(), Gb(s.memTotal).c_str());
     }
     // Group identical sticks: "2 x 8 GB HyperX FURY @ 3600 MT/s".
@@ -813,8 +884,10 @@ void WTemps(DashCtx& c) {
         ++shown;
     };
     if (const auto* x = sensors::PickSensor(s.lhm, sensors::HardwareKind::Cpu, sensors::SensorType::Temperature,
-                                            {"Tctl", "Package", "CPU"}))
+                                            {"Tctl", "Package", "CPU"})) {
         row("CPU", x->value);
+        if (c.ctl.prefs().dashGraphs) Graph("temp-graph", History().cpuTemp, 20, 100, kAccent2, "%.0f \xC2\xB0" "C CPU");
+    }
     for (const auto& g : s.gpus)
         if (g.temp >= 0) row(sensors::FriendlyGpu(g.name).c_str(), g.temp);
     if (const nzxt::Status k = c.ctl.kraken(); k.valid) {
@@ -1136,6 +1209,46 @@ void WStorage(DashCtx& c) {
         }
 }
 
+// The processor's and the graphics cards' power right now (W; -1: not reported).
+const sensors::Sensor* CpuPower(const sensors::SystemSnapshot& s) {
+    return sensors::PickSensor(s.lhm, sensors::HardwareKind::Cpu, sensors::SensorType::Power, {"Package", "CPU Package", "Core"});
+}
+std::vector<std::pair<std::string, double>> GpuPowers(const sensors::SystemSnapshot& s) {
+    std::vector<std::pair<std::string, double>> out;
+    for (const auto& g : s.gpus) {
+        double w = g.powerW;
+        if (w < 0)
+            if (const auto* x = sensors::PickSensor(s.lhm, sensors::HardwareKind::Gpu, sensors::SensorType::Power, {"Package", "Board", "Core"}))
+                w = x->value;
+        if (w >= 0) out.push_back({sensors::FriendlyGpu(g.name), w});
+    }
+    return out;
+}
+
+// How many fans the case has (as set on My setup, else a guess of three).
+int CaseFans(const Prefs& p) {
+    pc::Layout l;
+    return pc::Decode(p.caseLayout, &l) ? l.Fans() : 3;
+}
+
+// What the whole PC draws from the power supply, estimated (perf_history.h).
+perf::Draw SystemDraw(Controller& ctl, const sensors::SystemSnapshot& s) {
+    const auto* cpu = CpuPower(s);
+    double gpu = -1;
+    for (const auto& g : GpuPowers(s)) gpu = std::max(0.0, gpu) + g.second;
+    return perf::EstimateDraw(cpu ? cpu->value : -1, gpu, static_cast<int>(Drives().size()), CaseFans(ctl.prefs()));
+}
+
+// The power supply's rating: a supply that reports itself over USB, else what you set.
+int PsuWatts(Controller& ctl, std::string* name) {
+    if (const catalog::PsuModel* m = catalog::FindPsu(ctl.presence().usb)) {
+        if (name) *name = m->name;
+        return m->watts;
+    }
+    if (name) *name = "Power supply";
+    return ctl.prefs().psuWatts;
+}
+
 void WPower(DashCtx& c) {
     const auto& s = c.snap;
     using sensors::HardwareKind;
@@ -1148,19 +1261,32 @@ void WPower(DashCtx& c) {
         ImGui::TextUnformatted(label.c_str());
         RightText(value, kText);
     };
-    char b[48];
-    const auto* cpuW = sensors::PickSensor(s.lhm, HardwareKind::Cpu, SensorType::Power, {"Package", "CPU Package", "Core"});
-    std::vector<std::pair<std::string, double>> gpuW;
-    for (const auto& g : s.gpus) {
-        double w = g.powerW;
-        if (w < 0)
-            if (const auto* x = sensors::PickSensor(s.lhm, HardwareKind::Gpu, SensorType::Power, {"Package", "Board", "Core"}))
-                w = x->value;
-        if (w >= 0) gpuW.push_back({sensors::FriendlyGpu(g.name), w});
-    }
+    char b[96];
+    const auto* cpuW = CpuPower(s);
+    const std::vector<std::pair<std::string, double>> gpuW = GpuPowers(s);
     if (cpuW) total += cpuW->value, ++parts;
     for (const auto& g : gpuW) total += g.second, ++parts;
-    if (parts) {
+    // The whole PC against the power supply's rating.
+    std::string psuName;
+    const int rated = PsuWatts(c.ctl, &psuName);
+    const perf::Draw draw = SystemDraw(c.ctl, s);
+    if (draw.total >= 0) {
+        snprintf(b, sizeof b, "%.0f", draw.total);
+        char unit[48];
+        if (rated > 0) snprintf(unit, sizeof unit, "W of %d W", rated);
+        else snprintf(unit, sizeof unit, "W, the whole PC");
+        const double load = perf::PsuLoad(draw.total, rated);
+        const unsigned col = load < 0 ? kText : load < 0.7 ? kText : load < 0.9 ? kAmber : kRed;
+        Metric(c.f, b, unit, col);
+        if (load >= 0) {
+            Bar(load, load < 0.7 ? kAccent : load < 0.9 ? kAmber : kRed);
+            Muted("%s: %.0f %% of its rating", psuName.c_str(), load * 100);
+        }
+        if (c.ctl.prefs().dashGraphs)
+            Graph("power-graph", History().power, 0, std::max({rated > 0 ? rated * 0.6 : 0.0, History().power.Max() * 1.25, 150.0}), kAccent2,
+                  "%.0f W");
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+    } else if (parts) {
         snprintf(b, sizeof b, "%.0f", total);
         Metric(c.f, b, parts > 1 ? "W  CPU + graphics" : "W", kText);
         ImGui::Dummy(ImVec2(0, 2 * S()));
@@ -1193,12 +1319,56 @@ void WPower(DashCtx& c) {
         snprintf(b, sizeof b, "%.0f MHz", mhz);
         row(Icon::Gauge, s.gpus.size() > 1 ? sensors::FriendlyGpu(g.name) + " clock" : std::string("Graphics clock"), b);
     }
+    if (draw.total >= 0) {
+        snprintf(b, sizeof b, "~%.0f W", draw.rest);
+        row(Icon::Board, "Rest of the PC (estimate)", b);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("The motherboard, memory, drives, fans and USB report no power: about 35 W, 5 W a drive and 2 W a fan.");
+    }
+    // The power supply's rating: set here unless it reports itself over USB.
+    if (!catalog::FindPsu(c.ctl.presence().usb)) {
+        ImGui::AlignTextToFramePadding();
+        IconItem(Icon::Bolt, 16 * S(), Hex(kMuted));
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Power supply");
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - 118 * S());
+        int w = c.ctl.prefs().psuWatts;
+        ImGui::SetNextItemWidth(118 * S());
+        const int step = 50, fast = 100;
+        if (ImGui::InputScalar("##psu", ImGuiDataType_S32, &w, &step, &fast, w > 0 ? "%d W" : "%d")) {
+            c.ctl.prefs().psuWatts = std::clamp(w, 0, 5000);
+            c.ctl.Changed();
+        }
+        if (c.ctl.prefs().psuWatts <= 0) Muted("Enter your power supply's watts (on its label) to see how much of it the PC uses.");
+    }
     if (!cpuW) {
         // Why the processor's power is missing.
         if (!s.lhmConnected) Muted("Processor power: set up Hardware access on the Devices page (one click).");
         else if (s.sensorSource.rfind("LumaBridge", 0) == 0)
             Muted("Processor power: update Hardware access on the Devices page (one click) to read it.");
     }
+}
+
+// Once a second, whatever page is open: each graphed figure's value (-1 when not reported).
+void SampleHistory(Controller& ctl) {
+    PerfHistory& h = History();
+    const double now = ImGui::GetTime();
+    if (h.at >= 0 && now - h.at < 1.0) return;
+    h.at = now;
+    const sensors::SystemSnapshot s = ctl.monitor().Snapshot();
+    if (!s.ready) return;
+    h.cpuLoad.Push(s.cpuLoad);
+    const auto* t = sensors::PickSensor(s.lhm, sensors::HardwareKind::Cpu, sensors::SensorType::Temperature, {"Tctl", "Package", "Core (Tdie)", "CPU"});
+    h.cpuTemp.Push(t ? t->value : -1);
+    double gpu = -1;
+    if (const sensors::GpuStat* g = MainGpuOf(s)) {
+        gpu = g->load;
+        if (gpu < 0)
+            if (const auto* x = sensors::PickSensor(s.lhm, sensors::HardwareKind::Gpu, sensors::SensorType::Load, {"Core"})) gpu = x->value;
+    }
+    h.gpuLoad.Push(gpu);
+    h.mem.Push(s.memTotal ? 100.0 * static_cast<double>(s.memUsed) / static_cast<double>(s.memTotal) : -1);
+    h.power.Push(SystemDraw(ctl, s).total);
 }
 
 // ---- The top row: lighting and game ------------------------------------------------
@@ -1562,6 +1732,9 @@ void DashboardPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
     ImGui::SameLine(0, 10 * S());
     ImGui::AlignTextToFramePadding();
     Muted("Hide and reorder the cards below.");
+    ImGui::SameLine(0, 24 * S());
+    if (Toggle("Graphs", &ctl.prefs().dashGraphs)) ctl.Changed();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The last two minutes of load, memory, temperature and power, under each figure.");
     if (ui.dashEdit) {
         ImGui::Dummy(ImVec2(0, 4 * S()));
         DashboardCustomize(ctl, ui, f);
@@ -4689,13 +4862,7 @@ void DeviceLightingCard(Controller& ctl, UiState& ui, const Fonts& f, const char
 // A device's own page.
 void NzxtCard(Controller& ctl, const Fonts& f);
 
-// The graphics card: the one with the most memory of its own (not the processor's built-in one).
-const sensors::GpuStat* MainGpu(const sensors::SystemSnapshot& snap) {
-    const sensors::GpuStat* card = nullptr;
-    for (const auto& g : snap.gpus)
-        if (!card || g.vramTotal > card->vramTotal) card = &g;
-    return card;
-}
+const sensors::GpuStat* MainGpu(const sensors::SystemSnapshot& snap) { return MainGpuOf(snap); }
 
 void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f,
                       const sensors::SystemSnapshot& snap) {
@@ -6793,6 +6960,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
 
     integrations.SetOwner(hwnd);  // administrator prompts open in front of LumaBridge, from any page
+    SampleHistory(ctl);           // the dashboard's graphs keep going on every page
     // The setup guide fills the window until it's finished (first start, or from Settings).
     if (!ctl.prefs().setupDone && ui.setupStep < 0) ui.setupStep = 0;
     if (ui.setupStep >= 0) {

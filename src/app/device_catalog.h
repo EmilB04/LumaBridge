@@ -123,6 +123,34 @@ inline const std::vector<AioModel>& AioModels() {
     return k;
 }
 
+// Power supplies that report themselves over USB (as listed by liquidctl), with their rating.
+struct PsuModel {
+    uint16_t vid, pid;
+    const char* name;
+    int watts;
+};
+
+inline const std::vector<PsuModel>& PsuModels() {
+    static const std::vector<PsuModel> k{
+        {0x1B1C, 0x1C05, "Corsair HX750i", 750},   {0x1B1C, 0x1C06, "Corsair HX850i", 850},
+        {0x1B1C, 0x1C07, "Corsair HX1000i", 1000}, {0x1B1C, 0x1C08, "Corsair HX1200i", 1200},
+        {0x1B1C, 0x1C23, "Corsair HX1200i", 1200}, {0x1B1C, 0x1C27, "Corsair HX1200i", 1200},
+        {0x1B1C, 0x1C0A, "Corsair RM650i", 650},   {0x1B1C, 0x1C0B, "Corsair RM750i", 750},
+        {0x1B1C, 0x1C0C, "Corsair RM850i", 850},   {0x1B1C, 0x1C0D, "Corsair RM1000i", 1000},
+        {0x1B1C, 0x1C1E, "Corsair HX1000i", 1000}, {0x1B1C, 0x1C1F, "Corsair HX1500i", 1500},
+        {0x7793, 0x5911, "NZXT E500", 500},        {0x7793, 0x5912, "NZXT E650", 650},
+        {0x7793, 0x2500, "NZXT E850", 850},
+    };
+    return k;
+}
+
+inline const PsuModel* FindPsu(const std::vector<std::pair<uint16_t, uint16_t>>& usb) {
+    for (const auto& [vid, pid] : usb)
+        for (const PsuModel& m : PsuModels())
+            if (m.vid == vid && m.pid == pid) return &m;
+    return nullptr;
+}
+
 // The AIO cooler among USB (vendor, product) pairs, or nullptr. NZXT numbers its screen
 // Krakens 0x30xx, so a newer one than listed is still recognised as one; so is any device in
 // `named` (found by its USB name, "NZXT Kraken ...").

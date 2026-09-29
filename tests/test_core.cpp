@@ -31,6 +31,7 @@
 #include "pc_layout.h"
 #include "display_layout.h"
 #include "nzxt_kraken.h"
+#include "perf_history.h"
 #include "war_thunder_lighting.h"
 #include "screen_colors.h"
 #include "smbios.h"
@@ -914,6 +915,26 @@ static void TestAioCatalog() {
     CHECK(!luma::app::nzxt::Parse(r, sizeof r, true).valid);  // no reading yet
     r[0] = 0x11;
     CHECK(!luma::app::nzxt::Parse(r, sizeof r, true).valid);  // not a status report
+}
+
+static void TestPerf() {
+    using namespace luma::app::perf;
+    Series s;
+    CHECK(!s.Any() && s.Max() < 0);
+    for (int i = 0; i < 130; ++i) s.Push(i);
+    CHECK(s.values().size() == Series::kLength && s.values().front() == 10 && s.Max() == 129);
+    Series gap;
+    gap.Push(-1);
+    CHECK(!gap.Any());
+    // CPU 65 W + graphics 220 W, 2 drives, 6 fans: 285 measured + 35 + 10 + 12.
+    Draw d = EstimateDraw(65, 220, 2, 6);
+    CHECK(d.measured == 285 && d.rest == 57 && d.total == 342);
+    CHECK(EstimateDraw(-1, -1, 2, 6).total < 0);
+    CHECK(EstimateDraw(-1, 200, 0, 0).total == 235);
+    CHECK(std::fabs(PsuLoad(342, 850) - 342.0 / 850) < 1e-9 && PsuLoad(342, 0) < 0);
+    using luma::app::catalog::FindPsu;
+    CHECK(FindPsu({{0x1B1C, 0x1C0C}}) && FindPsu({{0x1B1C, 0x1C0C}})->watts == 850);
+    CHECK(!FindPsu({{0x1B1C, 0x0C12}}));  // a Corsair cooler, not a power supply
 }
 
 static void TestDisplayLayout() {
@@ -1862,6 +1883,7 @@ int main() {
     TestPcLayout();
     TestDisplayLayout();
     TestAioCatalog();
+    TestPerf();
     TestDcs();
     TestDeviceCatalog();
     TestHyperXRam();

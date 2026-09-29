@@ -17,8 +17,10 @@ middleware needed. It also shows your whole PC and desk in 3D, live.
   radiator on top or in front, RGB pump). Next to it, everything found, grouped: processor
   and motherboard, graphics, cooling, storage, monitors and the desk.
 - **Dashboard:** lighting, the running game, CPU / GPU load, temperatures, clocks and power,
-  memory, fan speeds, drives, devices and connections at a glance. Cards can be hidden and
-  reordered. Fan speeds, CPU temperature and power come from LumaBridge itself once Hardware
+  memory, fan speeds, drives, devices and connections at a glance, with graphs of the last
+  two minutes (can be turned off). Power and clocks shows what the whole PC draws out of your
+  power supply's rating (Corsair HXi / RMi and NZXT E supplies are recognised; for others,
+  enter the watts from its label). Cards can be hidden and reordered. Fan speeds, CPU temperature and power come from LumaBridge itself once Hardware
   access is set up (AMD Ryzen and Intel CPUs, Nuvoton NCT679x boards), else from
   LibreHardwareMonitor if it runs.
 - **Auto mode:** games drive your lights. LumaBridge answers the game's lighting SDK as

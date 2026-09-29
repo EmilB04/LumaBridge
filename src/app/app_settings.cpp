@@ -102,6 +102,10 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (!v.empty()) p.closeToTray = v != L"0";
     v = Read(ini, L"App", L"Lighting3d");
     if (!v.empty()) p.lighting3d = v != L"0";
+    v = Read(ini, L"App", L"DashGraphs");
+    if (!v.empty()) p.dashGraphs = v != L"0";
+    v = Read(ini, L"App", L"PsuWatts");
+    if (!v.empty()) p.psuWatts = std::clamp(_wtoi(v.c_str()), 0, 5000);
 
     std::string recent = Narrow(Read(ini, L"App", L"RecentColors"));
     for (size_t pos = 0; pos < recent.size() && p.recentColors.size() < Prefs::kMaxRecent;) {
@@ -262,6 +266,8 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"StartMinimized", p.startMinimized ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"CloseToTray", p.closeToTray ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"Lighting3d", p.lighting3d ? L"1" : L"0");
+    WriteConfigValue(ini, L"App", L"DashGraphs", p.dashGraphs ? L"1" : L"0");
+    WriteConfigValue(ini, L"App", L"PsuWatts", std::to_wstring(p.psuWatts).c_str());
     WriteConfigValue(ini, L"App", L"SetupDone", p.setupDone ? L"1" : L"0");
     WriteConfigValue(ini, L"LampArray", L"Enabled", p.lampArray ? L"1" : L"0");
     {
