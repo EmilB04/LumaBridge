@@ -10,6 +10,14 @@ the current state, how to build and test from Linux, and what's planned.
   there and fast-forward `main` to the same commit (`git push origin HEAD:main`). No pull
   requests unless the owner asks for one. If the session is set up with another branch name
   (e.g. `claude/...`), still use `feature/lumabridge-core` and `main`, as the owner asked.
+- **`main` can move on its own** (the owner merges pull requests there, e.g. the Trello
+  automation). Before starting and before pushing, `git fetch origin` and bring
+  `feature/lumabridge-core` up to `origin/main` (`git merge --ff-only origin/main`, or a
+  merge commit if both moved; never rewrite pushed history), so `main` only ever
+  fast-forwards.
+- **Trello:** `.github/workflows/trello-update.yml` moves a Trello card to Done when a pull
+  request with a `trello.com/c/...` link in its body is merged into `main`. When the owner
+  asks for a pull request for a Trello card, put the card's link in the body.
 - **Commits:** authored as `EmilB04 <emil.berglund@live.no>`
   (`git -c user.name=EmilB04 -c user.email=emil.berglund@live.no commit ...`), with **no**
   `Co-Authored-By`, `Claude-Session` or other trailers, and no mention of Claude or AI in
