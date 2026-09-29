@@ -6,6 +6,7 @@
 // device with its live effect where you put it. Pure, tested.
 #pragma once
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -152,7 +153,8 @@ inline bool DecodeDevice(const std::string& s, DeviceLighting* out) {
 // (one per fan on the ARGB header), "board", "ram", "mouse", "keyboard".
 struct Spot {
     float x = 0.5f, y = 0.5f;
-    bool operator==(const Spot& o) const { return x == o.x && y == o.y; }
+    float angle = 0;  // turned on the desk, degrees counter-clockwise seen from above (3D views)
+    bool operator==(const Spot& o) const { return x == o.x && y == o.y && angle == o.angle; }
 };
 
 inline std::string FanItem(int i) { return "fan" + std::to_string(i); }
@@ -177,17 +179,21 @@ inline Spot ClampSpot(Spot s) {
     return s;
 }
 
-// "x,y"
+// "x,y" or "x,y,angle"
 inline std::string EncodeSpot(Spot s) {
-    char buf[48];
-    snprintf(buf, sizeof buf, "%.4f,%.4f", s.x, s.y);
+    char buf[64];
+    if (s.angle != 0) snprintf(buf, sizeof buf, "%.4f,%.4f,%.1f", s.x, s.y, s.angle);
+    else snprintf(buf, sizeof buf, "%.4f,%.4f", s.x, s.y);
     return buf;
 }
 inline bool DecodeSpot(const std::string& s, Spot* out) {
     const size_t comma = s.find(',');
     if (comma == std::string::npos) return false;
-    *out = ClampSpot(Spot{static_cast<float>(std::atof(s.substr(0, comma).c_str())),
-                          static_cast<float>(std::atof(s.substr(comma + 1).c_str()))});
+    const size_t second = s.find(',', comma + 1);
+    Spot r = ClampSpot(Spot{static_cast<float>(std::atof(s.substr(0, comma).c_str())),
+                            static_cast<float>(std::atof(s.substr(comma + 1, second == std::string::npos ? std::string::npos : second - comma - 1).c_str()))});
+    if (second != std::string::npos) r.angle = static_cast<float>(std::fmod(std::atof(s.substr(second + 1).c_str()), 360.0));
+    *out = r;
     return true;
 }
 

@@ -70,6 +70,7 @@ struct Layout {
     int turn = 0;           // quarter turns on the desk (0: its front towards you, the glass on the right)
     Cooler cooler = Cooler::Air;
     Mount radiator = Mount::Top;  // an AIO's radiator: Top or Front
+    bool pumpRgb = false;         // the AIO's pump head is lit, chained on the ARGB header
     bool guessed = true;    // LumaBridge's guess, not yet corrected
 
     int Fans() const {
@@ -93,7 +94,7 @@ struct Layout {
     }
     bool operator==(const Layout& o) const {
         return slots == o.slots && exhaust == o.exhaust && turn == o.turn && guessed == o.guessed && cooler == o.cooler &&
-               radiator == o.radiator;
+               radiator == o.radiator && pumpRgb == o.pumpRgb;
     }
 };
 
@@ -107,15 +108,16 @@ inline Layout Guess(int rgbFans, int plainFans) {
     return l;
 }
 
-// "v1;slots=222111000;exhaust=0110;turn=0;cooler=air" (cooler: air, aio-top or aio-front; ""
-// or anything unreadable: guess).
+// "v1;slots=222111000;exhaust=0110;turn=0;cooler=air" (cooler: air, aio-top or aio-front, with
+// "-rgb" when the pump head is lit; "" or anything unreadable: guess).
 inline std::string Encode(const Layout& l) {
     std::string s = "v1;slots=";
     for (SlotFan f : l.slots) s += static_cast<char>('0' + static_cast<int>(f));
     s += ";exhaust=";
     for (bool e : l.exhaust) s += e ? '1' : '0';
     s += ";turn=" + std::to_string(l.turn);
-    s += std::string(";cooler=") + (l.cooler == Cooler::Air ? "air" : l.radiator == Mount::Front ? "aio-front" : "aio-top");
+    s += std::string(";cooler=") + (l.cooler == Cooler::Air ? "air" : l.radiator == Mount::Front ? "aio-front" : "aio-top") +
+         (l.cooler == Cooler::Aio && l.pumpRgb ? "-rgb" : "");
     return s;
 }
 
@@ -142,10 +144,37 @@ inline bool Decode(const std::string& s, Layout* out) {
     const std::string cooler = field("cooler");  // not in layouts saved before AIO coolers: air
     if (cooler.rfind("aio", 0) == 0) {
         l.cooler = Cooler::Aio;
-        l.radiator = cooler == "aio-front" ? Mount::Front : Mount::Top;
+        l.radiator = cooler.rfind("aio-front", 0) == 0 ? Mount::Front : Mount::Top;
+        l.pumpRgb = cooler.size() > 4 && cooler.compare(cooler.size() - 4, 4, "-rgb") == 0;
     }
     *out = l;
     return true;
+}
+
+// How many fans sit at a mount, and setting it: the first `n` of its slots get a fan (a fan
+// already there stays as it is, a new one is plain), the rest are emptied.
+inline int FansAt(const Layout& l, Mount m) {
+    int n = 0;
+    for (int i = 0; i < kSlots; ++i) n += Slots()[static_cast<size_t>(i)].mount == m && l.slots[static_cast<size_t>(i)] != SlotFan::None;
+    return n;
+}
+inline int SlotsAt(Mount m) {
+    int n = 0;
+    for (const Slot& s : Slots()) n += s.mount == m;
+    return n;
+}
+inline void SetFansAt(Layout* l, Mount m, int n) {
+    int k = 0;
+    for (int i = 0; i < kSlots; ++i) {
+        if (Slots()[static_cast<size_t>(i)].mount != m) continue;
+        SlotFan& f = l->slots[static_cast<size_t>(i)];
+        if (k++ < n) {
+            if (f == SlotFan::None) f = SlotFan::Plain;
+        } else {
+            f = SlotFan::None;
+        }
+    }
+    l->guessed = false;
 }
 
 // Cycles a slot when you click it while editing: empty -> fan -> RGB fan -> empty.

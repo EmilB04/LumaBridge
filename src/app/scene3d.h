@@ -135,6 +135,9 @@ struct Face {
     uint32_t color = 0;
     uint32_t flags = 0;
     int id = -1;  // what it belongs to (for picking); -1 nothing
+    // Added to its distance when sorting: a plate things sit on (a keyboard's base under its
+    // keys, a card under its fans) sorts behind them from any angle.
+    float bias = 0;
 };
 
 struct Glow {
@@ -172,6 +175,12 @@ struct Transform {
         t.origin = at;
         return t;
     }
+    // The same placement seen in a mirror across its own x (left and right swapped).
+    Transform MirroredX() const {
+        Transform t = *this;
+        t.x = x * -1.f;
+        return t;
+    }
     // A frame whose local z points along `normal` (for fans and discs), at `at`.
     static Transform Facing(V3 normal, V3 at) {
         Transform t;
@@ -189,12 +198,16 @@ public:
     std::vector<Face> faces;
     std::vector<Glow> glows;
     std::vector<Line> lines;
-    Transform xf;  // applied to everything added
+    Transform xf;    // applied to everything added
+    float bias = 0;  // added to the sorting distance of faces added (see Face::bias)
 
     void Poly(const V3* pts, int n, uint32_t color, int id, uint32_t flags = 0) {
         Face f;
         f.n = std::min(n, kMaxCorners);
-        for (int i = 0; i < f.n; ++i) f.p[static_cast<size_t>(i)] = xf.Apply(pts[i]);
+        // A mirrored placement turns faces inside out: keep their fronts outside.
+        const bool mirrored = Dot(Cross(xf.x, xf.y), xf.z) < 0;
+        for (int i = 0; i < f.n; ++i) f.p[static_cast<size_t>(i)] = xf.Apply(pts[mirrored ? f.n - 1 - i : i]);
+        f.bias = bias;
         f.color = color;
         f.flags = flags;
         f.id = id;
@@ -288,7 +301,7 @@ inline std::vector<DrawItem> Render(const Scene& scene, const Camera& cam, const
             z += p.z;
         }
         if (!ok) continue;
-        d.depth = z / static_cast<float>(f.n);
+        d.depth = z / static_cast<float>(f.n) + f.bias;
         if (f.flags & kEmissive) {
             d.color = f.color;
         } else {

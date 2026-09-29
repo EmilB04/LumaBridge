@@ -29,6 +29,7 @@
 #include "dcs_lighting.h"
 #include "scene3d.h"
 #include "pc_layout.h"
+#include "display_layout.h"
 #include "war_thunder_lighting.h"
 #include "screen_colors.h"
 #include "smbios.h"
@@ -805,6 +806,19 @@ static void TestScene3d() {
     led.xf = Transform{};
     led.Box({-1, -1, -1}, {1, 1, 1}, Rgba(255, 0, 0), 1, kEmissive);
     for (const auto& d : Render(led, cam, vp)) CHECK(d.color == Rgba(255, 0, 0));
+    // A mirrored placement still shows a box's outside faces (three of them), and a biased
+    // plate sorts behind what sits on it.
+    Scene mirror;
+    mirror.xf = Transform{}.MirroredX();
+    mirror.Box({-5, -5, -5}, {5, 5, 5}, Rgba(200, 200, 200), 1);
+    CHECK(Render(mirror, cam, vp).size() == 3);
+    Scene plate;
+    plate.bias = 40;
+    plate.Box({-20, -1, -20}, {20, 0, 20}, Rgba(60, 60, 60), 1);
+    plate.bias = 0;
+    plate.Box({15, 0, -18}, {17, 1, -16}, Rgba(255, 0, 0), 2);  // a key at the plate's far corner
+    const auto pl = Render(plate, cam, vp);
+    CHECK(pl.back().id == 2);
     // A transform facing +x puts local z along x.
     const Transform f = Transform::Facing({1, 0, 0}, {5, 0, 0});
     const V3 p = f.Apply({0, 0, 2});
@@ -848,7 +862,20 @@ static void TestPcLayout() {
     l.radiator = Mount::Front;
     CHECK(Decode(Encode(l), &back2) && back2 == l && Encode(l).find("cooler=aio-front") != std::string::npos);
     l.radiator = Mount::Top;
-    CHECK(Decode(Encode(l), &back2) && back2.cooler == Cooler::Aio && back2.radiator == Mount::Top);
+    CHECK(Decode(Encode(l), &back2) && back2.cooler == Cooler::Aio && back2.radiator == Mount::Top && !back2.pumpRgb);
+    l.pumpRgb = true;
+    CHECK(Decode(Encode(l), &back2) && back2 == l && Encode(l).find("cooler=aio-top-rgb") != std::string::npos);
+    l.radiator = Mount::Front;
+    CHECK(Decode(Encode(l), &back2) && back2.radiator == Mount::Front && back2.pumpRgb);
+    // Fans per position: 3 front, 2 top, 1 back, whatever was there.
+    Layout counts = Guess(0, 1);
+    SetFansAt(&counts, Mount::Front, 3);
+    SetFansAt(&counts, Mount::Top, 2);
+    SetFansAt(&counts, Mount::Back, 1);
+    CHECK(FansAt(counts, Mount::Front) == 3 && FansAt(counts, Mount::Top) == 2 && FansAt(counts, Mount::Back) == 1 &&
+          counts.Fans() == 6 && !counts.guessed && SlotsAt(Mount::Top) == 3);
+    SetFansAt(&counts, Mount::Front, 1);
+    CHECK(FansAt(counts, Mount::Front) == 1 && counts.slots[0] != SlotFan::None && counts.slots[1] == SlotFan::None);
     CHECK(!Decode("", &back2) && !Decode("v1;slots=22;exhaust=0110", &back2) && !Decode("v1;slots=922110000;exhaust=0110", &back2));
 
     // Airflow starts outside an intake and ends outside an exhaust.
@@ -857,6 +884,51 @@ static void TestPcLayout() {
     CHECK(p1.z < -kCaseD / 2 + 2 || p1.y > kCaseH - 2);      // behind the back or above the top
     Layout none;
     CHECK(AirflowPoint(none, 0, 0, 1, 3).z < -kCaseD / 2);   // no fans: out the back vents
+}
+
+static void TestDisplayLayout() {
+    using namespace luma::app::displays;
+    // Two 27" 1440p monitors side by side, the primary on the left.
+    Display a, b;
+    a.primary = true;
+    a.w = b.w = 2560;
+    a.h = b.h = 1440;
+    a.widthCm = b.widthCm = 59.7f;
+    a.heightCm = b.heightCm = 33.6f;
+    b.x = 2560;
+    auto p = Arrange({a, b});
+    CHECK(p.size() == 2 && std::fabs(p[0].x) < 0.01f && p[0].yaw == 0);
+    CHECK(std::fabs(p[1].x - (59.7f + 1.5f)) < 0.01f && p[1].yaw < 0 && p[1].z > 0);  // turned towards you
+    CHECK(std::fabs(p[0].bottom - 12) < 0.01f && std::fabs(p[1].bottom - 12) < 0.01f);
+    // A 1080p 24" on the left of a 4K 27" (other DPI): still edge to edge.
+    Display k, s;
+    k.primary = true;
+    k.w = 3840;
+    k.h = 2160;
+    k.widthCm = 59.7f;
+    k.heightCm = 33.6f;
+    s.x = -1920;
+    s.w = 1920;
+    s.h = 1080;
+    s.widthCm = 53.1f;
+    s.heightCm = 29.9f;
+    p = Arrange({k, s});
+    CHECK(std::fabs(p[1].x + (59.7f + 53.1f) / 2 + 1.5f) < 0.01f && p[1].yaw > 0);
+    // One above the primary: higher up, straight.
+    Display top = a;
+    top.primary = false;
+    top.x = 0;
+    top.y = -1440;
+    p = Arrange({a, top});
+    CHECK(std::fabs(p[1].x) < 0.01f && std::fabs(p[1].bottom - (12 + 33.6f + 1.5f)) < 0.01f && p[1].yaw == 0);
+    // No size reported: a guess by resolution; portrait turned the right way.
+    Display q;
+    q.w = 1080;
+    q.h = 1920;
+    float w, h;
+    ScreenSize(q, &w, &h);
+    CHECK(h > w && std::fabs(std::sqrt(w * w + h * h) - 24 * 2.54f) < 0.5f);
+    CHECK(Arrange({}).empty());
 }
 
 static void TestFlightSim() {
@@ -1283,6 +1355,8 @@ static void TestDeviceLighting() {
     CHECK(DecodeSpot(EncodeSpot(Spot{0.25f, 0.75f}), &s) && s == (Spot{0.25f, 0.75f}));
     CHECK(DecodeSpot("1.5,-2", &s) && s == (Spot{1, 0}));
     CHECK(!DecodeSpot("0.5", &s));
+    CHECK(DecodeSpot(EncodeSpot(Spot{0.25f, 0.75f, 45}), &s) && s.angle == 45 && s.y == 0.75f);  // turned on the desk
+    CHECK(EncodeSpot(Spot{0.25f, 0.75f}).find(',', 7) == std::string::npos);                    // unturned: as before
     CHECK(FanItem(3) == "fan3");
     const Spot f0 = DefaultSpot("fan0"), f3 = DefaultSpot("fan3");
     CHECK(f3.x > f0.x && f3.y == f0.y);  // the fourth fan starts a second column
@@ -1729,6 +1803,7 @@ int main() {
     TestFlightSim();
     TestScene3d();
     TestPcLayout();
+    TestDisplayLayout();
     TestDcs();
     TestDeviceCatalog();
     TestHyperXRam();

@@ -142,6 +142,7 @@ if(LUMA_ARCH STREQUAL "x64")
         src/app/game_detector.cpp
         src/app/game_library.cpp
         src/app/game_feeds.cpp
+        src/app/displays.cpp
         src/app/screen_capture.cpp
         src/app/vendor_detect.cpp
         src/app/sensors/system_monitor.cpp
