@@ -43,6 +43,9 @@ inline Status Parse(const uint8_t* m, size_t n, bool screenModel) {
     return s;
 }
 
+// Where reading stands, for the UI.
+enum class KrakenState { Off, Searching, CantOpen, NoReply, Reading };
+
 // Reads a Kraken's status about once a second, in the background, while one is plugged in.
 class Kraken {
 public:
@@ -55,11 +58,13 @@ public:
         return status_;
     }
     bool running() const { return thread_.joinable(); }
+    KrakenState state() const { return state_; }
 
 private:
     void Run(uint16_t pid, bool screen);
     std::thread thread_;
     std::atomic<bool> stop_{false};
+    std::atomic<KrakenState> state_{KrakenState::Off};
     mutable std::mutex mutex_;
     Status status_;
 };

@@ -29,7 +29,11 @@ struct Placed {
     float w = 60, h = 34;
     float yaw = 0;
     bool resting = false;  // a small screen (under 16"): no stand, resting on the desk, leaning back
+    float lean = 0;        // how far it leans back (radians)
 };
+
+// A small screen (under 16"): a sensor panel, a portable display.
+inline bool Small(const Placed& p) { return std::sqrt(p.w * p.w + p.h * p.h) < 16 * 2.54f; }
 
 // The screen's size: as reported, else a guess from its resolution (34" ultrawide, 27" for
 // 1440p and up, else 24"), matched to its orientation.
@@ -92,7 +96,9 @@ inline std::vector<Placed> Arrange(const std::vector<Display>& list) {
                 cx[static_cast<size_t>(b)] = cx[static_cast<size_t>(a)] - (pa.w + pb.w) / 2 - kGap;
                 cy[static_cast<size_t>(b)] = cy[static_cast<size_t>(a)] + rowShift;
             } else if (colOverlap && std::abs(db.y - (da.y + da.h)) <= 2) {  // below
-                cy[static_cast<size_t>(b)] = cy[static_cast<size_t>(a)] - (pa.h + pb.h) / 2 - kGap;
+                // A small screen under a monitor sits right under its bottom edge.
+                const float gap = Small(pb) && !Small(pa) ? 0.3f : kGap;
+                cy[static_cast<size_t>(b)] = cy[static_cast<size_t>(a)] - (pa.h + pb.h) / 2 - gap;
                 cx[static_cast<size_t>(b)] = cx[static_cast<size_t>(a)] + colShift;
             } else if (colOverlap && std::abs(da.y - (db.y + db.h)) <= 2) {  // above
                 cy[static_cast<size_t>(b)] = cy[static_cast<size_t>(a)] + (pa.h + pb.h) / 2 + kGap;
@@ -104,26 +110,61 @@ inline std::vector<Placed> Arrange(const std::vector<Display>& list) {
             queue.push_back(b);
         }
     }
-    // Heights: the lowest screen's bottom edge 12 cm above the desk (on its stand).
+    // A small screen right under a bigger one (in Windows' layout) stands on the desk beneath
+    // it; the one above sits on top of it. Other small screens rest on the desk in front.
+    std::vector<int> under(static_cast<size_t>(n), -1);
+    for (int i = 0; i < n; ++i) {
+        if (!Small(out[static_cast<size_t>(i)])) continue;
+        const Display& di = list[static_cast<size_t>(i)];
+        for (int j = 0; j < n && under[static_cast<size_t>(i)] < 0; ++j) {
+            const Display& dj = list[static_cast<size_t>(j)];
+            if (j != i && !Small(out[static_cast<size_t>(j)]) && di.x < dj.x + dj.w && dj.x < di.x + di.w &&
+                std::abs(di.y - (dj.y + dj.h)) <= 2)
+                under[static_cast<size_t>(i)] = j;
+        }
+    }
+    auto loose = [&](int i) { return Small(out[static_cast<size_t>(i)]) && under[static_cast<size_t>(i)] < 0; };
+    // Heights: the lowest screen's bottom edge 12 cm above the desk (on its stand), or on the
+    // desk if that's a small screen under another.
     float lowest = 1e9f;
-    for (int i = 0; i < n; ++i) lowest = std::min(lowest, cy[static_cast<size_t>(i)] - out[static_cast<size_t>(i)].h / 2);
+    int lowestAt = -1;
+    for (int i = 0; i < n; ++i) {
+        if (loose(i)) continue;
+        const float b = cy[static_cast<size_t>(i)] - out[static_cast<size_t>(i)].h / 2;
+        if (b < lowest) lowest = b, lowestAt = i;
+    }
+    const float base = lowestAt >= 0 && under[static_cast<size_t>(lowestAt)] >= 0 ? 0.3f : 12.f;
     const Placed& pp = out[static_cast<size_t>(prim)];
     for (int i = 0; i < n; ++i) {
         Placed& o = out[static_cast<size_t>(i)];
         o.x = cx[static_cast<size_t>(i)];
-        o.bottom = 12 + (cy[static_cast<size_t>(i)] - o.h / 2 - lowest);
-        // A small screen (a sensor panel, a portable display) rests on the desk in front.
-        if (std::sqrt(o.w * o.w + o.h * o.h) < 16 * 2.54f) {
+        if (loose(i)) {
             o.resting = true;
             o.bottom = 0.3f;
             o.z = 16;
+            o.lean = 0.26f;
             continue;
         }
+        o.bottom = base + (cy[static_cast<size_t>(i)] - o.h / 2 - lowest);
+        if (Small(o)) continue;  // placed with the one above it, below
         // Beside the primary (in its row): turned towards you and a little forward.
         const bool beside = std::fabs(o.x) > pp.w / 2 && std::fabs(cy[static_cast<size_t>(i)] - cy[static_cast<size_t>(prim)]) < (o.h + pp.h) / 2;
         if (beside) {
             o.yaw = o.x > 0 ? -0.35f : 0.35f;
             o.z = (std::fabs(o.x) - pp.w / 2) * 0.35f;
+        }
+    }
+    for (int i = 0; i < n; ++i) {
+        const int j = under[static_cast<size_t>(i)];
+        if (j < 0) continue;
+        Placed& o = out[static_cast<size_t>(i)];
+        const Placed& above = out[static_cast<size_t>(j)];
+        o.yaw = above.yaw;
+        o.z = above.z + 6.5f;  // in front of the stand's foot
+        if (o.bottom < 2) {    // on the desk, leaning a little against the stand
+            o.resting = true;
+            o.bottom = 0.3f;
+            o.lean = 0.1f;
         }
     }
     return out;

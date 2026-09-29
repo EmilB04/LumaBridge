@@ -2569,6 +2569,8 @@ std::vector<Rgb> Leds(Controller& ctl, const char* device, double t, int n, bool
 struct Spin {
     std::array<float, 16> angle{};
     double at = -1;
+    double wind = 0;        // how far the airflow has moved (cycles), summed frame by frame
+    double windSpeed = -1;  // its speed, eased towards the fans' so it never jumps
 };
 
 // ---- The scene ------------------------------------------------------------------------------
@@ -2829,27 +2831,46 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
         int n = 0;
         for (double r : m.fanRpm)
             if (r > 0) sum += r, ++n;
-        const double speed = (n ? sum / n : 900) / 1000.0 * 0.3;
+        // The streaks move on by what the fans did this frame (eased), so a new fan reading
+        // changes their speed, never their place.
+        const double target = (n ? sum / n : 900) / 1000.0 * 0.3;
+        spin.windSpeed = spin.windSpeed < 0 ? target : spin.windSpeed + (target - spin.windSpeed) * std::min(1.0, dt * 1.5);
+        spin.wind += dt * spin.windSpeed;
         const Rgb cool{90, 180, 255}, warm{255, 150, 80};
         auto tint = [&](float k) {
             return Rgb{static_cast<uint8_t>(cool.r + (warm.r - cool.r) * k), static_cast<uint8_t>(cool.g + (warm.g - cool.g) * k),
                        static_cast<uint8_t>(cool.b + (warm.b - cool.b) * k)};
         };
-        for (int i = 0; i < 34; ++i) {
-            const uint32_t seed = static_cast<uint32_t>(i) * 2654435761u;
-            const float head = static_cast<float>(std::fmod(t * speed + (seed % 1000u) / 1000.0, 1.0));
-            // A streak: a few segments trailing behind its head, fading towards the tail.
-            constexpr int kSegs = 6;
-            constexpr float kLen = 0.16f;
-            V3 prev = pc::AirflowPoint(m.layout, i, i / 3 + i % 5, head, static_cast<uint32_t>(i));
-            for (int k = 1; k <= kSegs; ++k) {
-                const float ph = head - kLen * static_cast<float>(k) / kSegs;
-                if (ph < 0) break;
-                const V3 at = pc::AirflowPoint(m.layout, i, i / 3 + i % 5, ph, static_cast<uint32_t>(i));
-                const float fade = 1.f - static_cast<float>(k - 1) / kSegs;
-                const int alpha = static_cast<int>(170 * fade * std::sin(std::min(1.f, head) * 3.14159f));
-                sc.AddLine(prev, at, C(tint(ph), alpha), 1.6f);
+        auto smooth = [](float e0, float e1, float x) {
+            const float k = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
+            return k * k * (3 - 2 * k);
+        };
+        constexpr int kStreaks = 40, kSegs = 8;
+        for (int i = 0; i < kStreaks; ++i) {
+            // Each streak runs its path once, then starts on a new one (another intake, another
+            // exhaust, another spot on the fans), faded out at both ends so none pops.
+            const double life = 1.0 + 0.35 * static_cast<double>((static_cast<uint32_t>(i) * 2246822519u) % 1000u) / 1000.0;
+            const double local = spin.wind / life + static_cast<double>((static_cast<uint32_t>(i) * 2654435761u) % 1000u) / 1000.0;
+            const uint32_t cycle = static_cast<uint32_t>(static_cast<int64_t>(std::floor(local)));
+            const uint32_t seed = static_cast<uint32_t>(i) * 7919u + cycle * 104729u;
+            const float len = 0.14f + 0.08f * static_cast<float>((seed * 40503u >> 8) % 100u) / 100.f;
+            const float head = static_cast<float>(local - std::floor(local)) * (1.f + len);
+            const int intake = static_cast<int>((seed * 2654435761u) >> 20), exhaust = static_cast<int>((seed * 2246822519u) >> 20);
+            const float env = smooth(0.f, 0.18f, head) * smooth(0.f, 0.18f, 1.f + len - head);
+            if (env <= 0.01f) continue;
+            V3 prev{};
+            bool have = false;
+            for (int k = 0; k <= kSegs; ++k) {
+                const float ph = head - len * static_cast<float>(k) / kSegs;
+                if (ph > 1.f) continue;
+                if (ph < 0.f) break;
+                const V3 at = pc::AirflowPoint(m.layout, intake, exhaust, ph, seed);
+                if (have) {
+                    const float fade = 1.f - static_cast<float>(k - 1) / kSegs;
+                    sc.AddLine(prev, at, C(tint(ph), static_cast<int>(160 * fade * env)), 1.2f + 0.8f * fade);
+                }
                 prev = at;
+                have = true;
             }
         }
     }
@@ -2868,9 +2889,9 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
             const int id = kMonitor0 + static_cast<int>(i);
             sc.xf = s3d::Transform::YawAt(d.yaw, {d.x, 0, d.z}).Then(group);
             if (d.resting) {
-                // A small screen with no stand, leaning back on the desk.
+                // A small screen with no stand, leaning back on the desk (or on the stand of the one above).
                 s3d::Transform lean;
-                const float a = 0.26f;
+                const float a = d.lean;
                 lean.y = {0, std::cos(a), -std::sin(a)};
                 lean.z = {0, std::sin(a), std::cos(a)};
                 sc.xf = lean.Then(sc.xf);
@@ -3200,7 +3221,8 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilledMultiColor(a, ImVec2(a.x + W, a.y + Hh), Hex(0x141A26), Hex(0x141A26), Hex(0x07090D), Hex(0x07090D));
 
-    ImGui::InvisibleButton("view3d", ImVec2(W, Hh), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+    ImGui::InvisibleButton("view3d", ImVec2(W, Hh),
+                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
     const bool hovered = ImGui::IsItemHovered();
     ImGuiIO& io = ImGui::GetIO();
     if (hovered) ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
@@ -3217,25 +3239,59 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     const int under = hovered ? s3d::Pick(items, io.MousePos.x, io.MousePos.y) : -1;
     const bool canDrag = mode == Mode::MySetup && !ui.setupEdit;
 
-    // Press: on something that moves (My setup), move it; else turn the view.
+    // Sliding the view across the desk (panning), by `dx`, `dy` pixels: the desk follows the mouse.
+    auto pan = [&](float dx, float dy) {
+        s3d::V3 r, u, f;
+        v.cam.Basis(&r, &u, &f);
+        s3d::V3 ahead{f.x, 0, f.z};
+        if (s3d::Length(ahead) < 1e-3f) ahead = {-u.x, 0, -u.z};
+        ahead = s3d::Normalize(ahead);
+        const float k = v.cam.distance / vp.Focal(v.cam);
+        v.cam.target = v.cam.target - s3d::V3{r.x, 0, r.z} * (dx * k) + ahead * (dy * k / std::max(0.35f, std::sin(v.cam.pitch)));
+        v.cam.target.x = std::clamp(v.cam.target.x, -pc::kDeskW / 2 - 30, pc::kDeskW / 2 + 30);
+        v.cam.target.z = std::clamp(v.cam.target.z, -pc::kDeskD / 2 - 30, pc::kDeskD / 2 + 30);
+    };
+
+    // Press: on something that moves (My setup), move it; on the desk, turn the view (Shift:
+    // slide it). The right or middle button slides the view too.
     if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         v.dragObj = -1;
-        v.orbiting = false;
-        const std::string item = canDrag ? DeskItemOf(m, under) : "";
+        v.orbiting = v.panning = false;
+        const std::string item = canDrag && !io.KeyShift ? DeskItemOf(m, under) : "";
+        // Grabbed about where the mouse is on it, so it follows the mouse one to one.
+        float grabY = 0;
+        for (const Anchor& an : anchors)
+            if (an.obj == under) grabY = std::clamp(an.at.y * 0.5f, 0.f, 30.f);
         s3d::V3 hit;
-        if (!item.empty() && s3d::HitPlaneY(s3d::ScreenRay(v.cam, vp, io.MousePos.x, io.MousePos.y), 0, &hit)) {
+        if (!item.empty() && s3d::HitPlaneY(s3d::ScreenRay(v.cam, vp, io.MousePos.x, io.MousePos.y), grabY, &hit)) {
             v.dragObj = under;
+            v.dragHeight = grabY;
             v.dragOffset = DeskSpot(prefs, item) - hit;
+        } else if (io.KeyShift) {
+            v.panning = true;
         } else {
             v.orbiting = true;
         }
     }
+    if (hovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsMouseClicked(ImGuiMouseButton_Middle))) {
+        v.panning = true;
+        v.orbiting = false;
+    }
+    if (hovered && !ImGui::GetIO().WantTextInput) {  // the arrow keys slide the view
+        const float step = 400 * io.DeltaTime;
+        if (ImGui::IsKeyDown(ImGuiKey_LeftArrow)) pan(step, 0);
+        if (ImGui::IsKeyDown(ImGuiKey_RightArrow)) pan(-step, 0);
+        if (ImGui::IsKeyDown(ImGuiKey_UpArrow)) pan(0, step);
+        if (ImGui::IsKeyDown(ImGuiKey_DownArrow)) pan(0, -step);
+    }
     if (ImGui::IsItemActive()) {
-        const bool left = ImGui::IsMouseDown(ImGuiMouseButton_Left), right = ImGui::IsMouseDown(ImGuiMouseButton_Right);
-        const bool moved = ImGui::IsMouseDragging(left ? ImGuiMouseButton_Left : ImGuiMouseButton_Right, 3 * S());
+        const bool left = ImGui::IsMouseDown(ImGuiMouseButton_Left), right = ImGui::IsMouseDown(ImGuiMouseButton_Right),
+                   middle = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+        const ImGuiMouseButton held = left ? ImGuiMouseButton_Left : right ? ImGuiMouseButton_Right : ImGuiMouseButton_Middle;
+        const bool moved = (left || right || middle) && ImGui::IsMouseDragging(held, 3 * S());
         if (moved && left && v.dragObj >= 0) {
             s3d::V3 hit;
-            if (s3d::HitPlaneY(s3d::ScreenRay(v.cam, vp, io.MousePos.x, io.MousePos.y), 0, &hit)) {
+            if (s3d::HitPlaneY(s3d::ScreenRay(v.cam, vp, io.MousePos.x, io.MousePos.y), v.dragHeight, &hit)) {
                 const std::string item = DeskItemOf(m, v.dragObj);
                 Spot s;
                 if (auto it = prefs.setupSpots.find(item); it != prefs.setupSpots.end()) s = it->second;  // keeps its angle
@@ -3244,7 +3300,10 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
                 v.selected = v.dragObj;
             }
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-        } else if (moved && (right || v.orbiting)) {
+        } else if (moved && v.panning) {
+            pan(io.MouseDelta.x, io.MouseDelta.y);
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+        } else if (moved && v.orbiting) {
             v.cam.yaw -= io.MouseDelta.x * 0.008f;
             v.cam.pitch += io.MouseDelta.y * 0.006f;
             v.cam.Clamp();
@@ -3252,7 +3311,8 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     }
     if (ImGui::IsItemDeactivated()) {
         const bool click = !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Left, 3 * S()) &&
-                           !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Right, 3 * S());
+                           !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Right, 3 * S()) &&
+                           !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Middle, 3 * S()) && !v.panning;
         if (v.dragObj >= 0 && !click) ctl.Changed();  // save where it went
         if (click && under >= 0) {
             if (mode == Mode::MySetup && ui.setupEdit && under >= kFan0 && under < kFan0 + pc::kSlots) {
@@ -3269,9 +3329,20 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
             v.selected = -1;
         }
         v.dragObj = -1;
-        v.orbiting = false;
+        v.orbiting = v.panning = false;
     }
-    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && under < 0) DefaultCamera(&v.cam, mode);
+    // Double-click: on something, bring it to the middle of the view; on the desk, start over.
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        const Anchor* on = nullptr;
+        for (const Anchor& an : anchors)
+            if (an.obj == under) on = &an;
+        if (under < 0 || under == kDesk) {
+            DefaultCamera(&v.cam, mode);
+        } else if (on) {
+            v.cam.target = {on->at.x, std::clamp(on->at.y * 0.6f, 5.f, 40.f), on->at.z};
+            v.cam.distance = std::min(v.cam.distance, 110.f);
+        }
+    }
     if (hovered && under >= 0 && v.dragObj < 0 && !v.orbiting) {
         const bool pickable = mode == Mode::Lighting ? DeviceOf(m, under) != nullptr
                               : mode == Mode::MySetup ? (ui.setupEdit ? under >= kFan0 && under < kFan0 + pc::kSlots : !DeskItemOf(m, under).empty())
@@ -3362,10 +3433,11 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     // How to use it, bottom left.
     const char* hint = mode == Mode::MySetup
                            ? (ui.setupEdit ? "Click a slot to add a fan, make it an RGB fan, or take it out.  Drag to turn the view."
-                                           : "Drag things to move them (scroll while dragging turns them).  Drag the desk to turn the view, scroll to zoom.")
+                                           : "Drag things to move them (scroll while dragging turns them); double-click one to center it.\n"
+                                             "Drag the desk to turn the view; right-drag, Shift-drag or the arrow keys slide it; scroll zooms.")
                        : mode == Mode::Lighting ? "Click a lit part to edit its lighting.  Drag to turn the view, scroll to zoom."
                                                 : "Drag to turn the view, scroll to zoom.";
-    dl->AddText(ImVec2(a.x + 12 * S(), a.y + Hh - ImGui::GetTextLineHeight() - 10 * S()), Hex(kMuted, 200), hint);
+    dl->AddText(ImVec2(a.x + 12 * S(), a.y + Hh - ImGui::CalcTextSize(hint).y - 10 * S()), Hex(kMuted, 200), hint);
     for (size_t i = 0; i < m.notes.size() && mode == Mode::MySetup; ++i)
         dl->AddText(ImVec2(a.x + 12 * S(), a.y + 10 * S() + static_cast<float>(i) * ImGui::GetTextLineHeightWithSpacing()), Hex(kAmber, 220),
                     m.notes[i].c_str());
@@ -3526,11 +3598,6 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
     }
     if (m.aio) {
         Muted("Found on USB: %s%s.", m.aio->name, m.aio->lcd ? " (with a screen)" : "");
-        if (m.kraken.valid)
-            Muted("Read from the Kraken: liquid %.1f \xC2\xB0" "C, pump %d RPM%s.", m.kraken.liquidC, m.kraken.pumpRpm,
-                  m.kraken.fanRpm > 0 ? (", fans " + std::to_string(m.kraken.fanRpm) + " RPM").c_str() : "");
-        else if (m.aio->vid == nzxt::kVid)
-            Muted("Waiting for its first status reading...");
         if (l.cooler != pc::Cooler::Aio) {
             ImGui::SameLine();
             if (ImGui::SmallButton("Show it")) {
@@ -3539,6 +3606,24 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
                 SaveLayout(ctl, c);
             }
         }
+        if (m.kraken.valid)
+            Muted("Read from the Kraken: liquid %.1f \xC2\xB0" "C, pump %d RPM%s.", m.kraken.liquidC, m.kraken.pumpRpm,
+                  m.kraken.fanRpm > 0 ? (", fans " + std::to_string(m.kraken.fanRpm) + " RPM").c_str() : "");
+        else if (m.aio->vid == nzxt::kVid) {
+            switch (ctl.krakenState()) {
+                case nzxt::KrakenState::CantOpen: Muted("Windows won't let LumaBridge open the Kraken (details in the log)."); break;
+                case nzxt::KrakenState::NoReply: Muted("The Kraken isn't answering status requests yet; still trying."); break;
+                case nzxt::KrakenState::Searching: Muted("Looking for the Kraken's USB interface..."); break;
+                default: Muted("Waiting for its first status reading..."); break;
+            }
+        }
+    } else {
+        // Nothing known: list what NZXT has on USB, so a new model can be added.
+        std::string nzxtIds;
+        char b[16];
+        for (const auto& [vid, pid] : ctl.presence().usb)
+            if (vid == nzxt::kVid) snprintf(b, sizeof b, "%s%04X", nzxtIds.empty() ? "" : ", ", pid), nzxtIds += b;
+        if (!nzxtIds.empty()) Muted("NZXT on USB (product %s): not a cooler LumaBridge knows yet.", nzxtIds.c_str());
     }
     if (l.cooler == pc::Cooler::Aio) {
         ImGui::AlignTextToFramePadding();
@@ -4927,6 +5012,38 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
     }
 }
 
+// An NZXT Kraken AIO: its own readings (read only; NZXT CAM keeps its lighting and screen).
+void NzxtCard(Controller& ctl, const Fonts& f) {
+    const catalog::AioModel* aio = catalog::FindAio(ctl.presence().usb);
+    if (!aio || aio->vid != nzxt::kVid) return;
+    BeginCard("nzxt");
+    IconItem(Icon::Fan, 18 * S(), Hex(kAccent));
+    ImGui::SameLine(0, 10 * S());
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted(aio->name);
+    ImGui::PopFont();
+    ImGui::SameLine();
+    const nzxt::Status k = ctl.kraken();
+    const nzxt::KrakenState st = ctl.krakenState();
+    if (k.valid) Pill("Reading", kGreen);
+    else if (st == nzxt::KrakenState::CantOpen || st == nzxt::KrakenState::NoReply) Pill("No reply", kAmber);
+    else Pill("Connecting", kMuted);
+    char pid[64];
+    snprintf(pid, sizeof pid, "USB 1E71:%04X%s", aio->pid, aio->lcd ? ", with a screen" : "");
+    Muted("%s", pid);
+    if (k.valid) {
+        ImGui::Text("Liquid %.1f \xC2\xB0" "C    Pump %d RPM (%d%%)", k.liquidC, k.pumpRpm, k.pumpDuty);
+        if (k.fanRpm > 0) ImGui::Text("Radiator fans %d RPM (%d%%)", k.fanRpm, k.fanDuty);
+    } else if (st == nzxt::KrakenState::CantOpen) {
+        Muted("Windows won't let LumaBridge open it. Details are in the log (Settings).");
+    } else if (st == nzxt::KrakenState::NoReply) {
+        Muted("It isn't answering status requests; LumaBridge keeps trying. The log (Settings) lists its interfaces.");
+    }
+    Muted("Read only: the liquid temperature and pump and fan speeds show on the dashboard and in My setup. "
+          "NZXT CAM keeps the lighting, the fan curves and the pump's screen.");
+    EndCard();
+}
+
 // Devices with Windows' lighting standard built in: nothing to install.
 void LampArrayCard(Controller& ctl, const Fonts& f) {
     BeginCard("lamparray");
@@ -5074,6 +5191,7 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
 
     LampArrayCard(ctl, f);
     OpenRgbCard(ctl, f);
+    NzxtCard(ctl, f);
 
     Muted("Counter-Strike 2, Rocket League and War Thunder light up through their own official data "
           "instead: set them up on the Games List page.");

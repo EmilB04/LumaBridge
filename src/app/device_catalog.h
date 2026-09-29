@@ -108,6 +108,7 @@ inline const std::vector<AioModel>& AioModels() {
         {0x1E71, 0x300C, "NZXT Kraken Elite", true, false},
         {0x1E71, 0x300E, "NZXT Kraken", true, false},
         {0x1E71, 0x3012, "NZXT Kraken Elite RGB", true, true},
+        {0x1E71, 0x3014, "NZXT Kraken Plus", true, true},
         {0x1B1C, 0x0C12, "Corsair Hydro H150i Pro", false, true},
         {0x1B1C, 0x0C13, "Corsair Hydro H115i Pro", false, true},
         {0x1B1C, 0x0C15, "Corsair Hydro H100i Pro", false, true},
@@ -122,11 +123,18 @@ inline const std::vector<AioModel>& AioModels() {
     return k;
 }
 
-// The AIO cooler among USB (vendor, product) pairs, or nullptr.
+// The AIO cooler among USB (vendor, product) pairs, or nullptr. NZXT numbers its screen
+// Krakens 0x30xx, so a newer one than listed is still recognised as one.
 inline const AioModel* FindAio(const std::vector<std::pair<uint16_t, uint16_t>>& usb) {
     for (const auto& [vid, pid] : usb)
         for (const AioModel& m : AioModels())
             if (m.vid == vid && m.pid == pid) return &m;
+    static thread_local AioModel newer{};
+    for (const auto& [vid, pid] : usb)
+        if (vid == 0x1E71 && pid >= 0x3000 && pid <= 0x30FF) {
+            newer = {vid, pid, "NZXT Kraken", true, true};
+            return &newer;
+        }
     return nullptr;
 }
 

@@ -893,6 +893,9 @@ static void TestAioCatalog() {
     CHECK(k && std::string(k->name).find("Kraken Z") != std::string::npos && k->lcd);
     CHECK(FindAio({{0x1E71, 0x2007}}) && !FindAio({{0x1E71, 0x2007}})->lcd);
     CHECK(!FindAio({{0x1E71, 0x1234}, {0x046D, 0xC547}}));  // NZXT, but not a cooler LumaBridge knows
+    CHECK(FindAio({{0x1E71, 0x3014}}) && FindAio({{0x1E71, 0x3014}})->lcd);  // Kraken 2024 Plus
+    CHECK(FindAio({{0x1E71, 0x3020}}) && FindAio({{0x1E71, 0x3020}})->pid == 0x3020);  // a newer screen Kraken
+    CHECK(!FindAio({{0x1E71, 0x2019}}));  // NZXT's RGB & fan controller is no cooler
     // A Kraken status report: 31.5 °C liquid, pump at 2400 RPM / 60 %, fans (screen models) 1200 RPM / 45 %.
     uint8_t r[64] = {0x75, 0x01};
     r[15] = 31;
@@ -963,7 +966,25 @@ static void TestDisplayLayout() {
     tiny.widthCm = 15.4f;
     tiny.heightCm = 9.0f;
     p = Arrange({a, tiny});
-    CHECK(p[1].resting && p[1].bottom < 1 && !p[0].resting);
+    CHECK(p[1].resting && p[1].bottom < 1 && !p[0].resting && p[1].z > 10);
+    // A 10.1" screen right under the primary (and a portrait one to its right): it stands on
+    // the desk beneath it, and the primary sits right on top of it.
+    Display small, side;
+    small.x = 400;
+    small.y = 1440;
+    small.w = 1280;
+    small.h = 800;
+    small.widthCm = 21.7f;
+    small.heightCm = 13.6f;
+    side.x = 2560;
+    side.y = -200;
+    side.w = 1080;
+    side.h = 1920;
+    p = Arrange({a, side, small});
+    CHECK(p[2].resting && p[2].bottom < 1 && p[2].lean < 0.2f && p[2].z > p[0].z);
+    CHECK(std::fabs(p[0].bottom - (0.3f + 13.6f + 0.3f)) < 0.01f);  // no gap between them
+    CHECK(p[2].x > -59.7f / 2 && p[2].x + 21.7f / 2 < 59.7f / 2);    // under it, not beside it
+    CHECK(!p[1].resting && p[1].bottom > 0 && p[1].yaw < 0);  // the portrait one, on a stand, turned
 }
 
 static void TestFlightSim() {

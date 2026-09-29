@@ -44,7 +44,8 @@ struct UiState {
         bool camSet = false;
         int dragObj = -1;        // the object being moved on the desk (-1: none)
         s3d::V3 dragOffset;      // from where the mouse meets the desk to the object's spot
-        bool orbiting = false;
+        float dragHeight = 0;    // the height it was grabbed at (it follows the mouse there)
+        bool orbiting = false, panning = false;
         int selected = -1;       // My setup: what was clicked last on the desk (to turn it)
     };
     View3d setupView, lightView, guideView;

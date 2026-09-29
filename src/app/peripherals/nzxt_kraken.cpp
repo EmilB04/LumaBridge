@@ -17,18 +17,25 @@ extern "C" {
 namespace luma::app::nzxt {
 namespace {
 
-// The Kraken's HID interface (its path), or "" if it isn't plugged in.
-std::wstring FindPath(uint16_t pid) {
-    std::wstring found;
+// One of the Kraken's HID interfaces (a Kraken can have several): its path and report sizes.
+struct Interface {
+    std::wstring path;
+    DWORD inLen = 0, outLen = 0;
+    USHORT usagePage = 0;
+};
+
+std::vector<Interface> FindInterfaces(uint16_t pid) {
+    std::vector<Interface> found;
     GUID hid;
     HidD_GetHidGuid(&hid);
     HDEVINFO set = SetupDiGetClassDevsW(&hid, nullptr, nullptr, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
     if (set == INVALID_HANDLE_VALUE) return found;
     SP_DEVICE_INTERFACE_DATA iface{};
     iface.cbSize = sizeof iface;
-    for (DWORD i = 0; found.empty() && SetupDiEnumDeviceInterfaces(set, nullptr, &hid, i, &iface); ++i) {
+    for (DWORD i = 0; SetupDiEnumDeviceInterfaces(set, nullptr, &hid, i, &iface); ++i) {
         DWORD need = 0;
         SetupDiGetDeviceInterfaceDetailW(set, &iface, nullptr, 0, &need, nullptr);
+        if (!need) continue;
         std::vector<BYTE> buf(need);
         auto* detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W*>(buf.data());
         detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
@@ -37,10 +44,29 @@ std::wstring FindPath(uint16_t pid) {
         if (q == INVALID_HANDLE_VALUE) continue;
         HIDD_ATTRIBUTES attr{};
         attr.Size = sizeof attr;
-        if (HidD_GetAttributes(q, &attr) && attr.VendorID == kVid && attr.ProductID == pid) found = detail->DevicePath;
+        if (HidD_GetAttributes(q, &attr) && attr.VendorID == kVid && attr.ProductID == pid) {
+            Interface f;
+            f.path = detail->DevicePath;
+            PHIDP_PREPARSED_DATA pre = nullptr;
+            HIDP_CAPS caps{};
+            if (HidD_GetPreparsedData(q, &pre) && HidP_GetCaps(pre, &caps) == HIDP_STATUS_SUCCESS) {
+                f.inLen = caps.InputReportByteLength;
+                f.outLen = caps.OutputReportByteLength;
+                f.usagePage = caps.UsagePage;
+            }
+            if (pre) HidD_FreePreparsedData(pre);
+            found.push_back(f);
+        }
         CloseHandle(q);
     }
     SetupDiDestroyDeviceInfoList(set);
+    // The status comes on the vendor interface with 64-byte reports both ways: that one first.
+    std::stable_sort(found.begin(), found.end(), [](const Interface& a, const Interface& b) {
+        auto score = [](const Interface& f) {
+            return (f.inLen >= 64 ? 4 : 0) + (f.outLen >= 64 ? 2 : 0) + (f.usagePage >= 0xFF00 ? 1 : 0);
+        };
+        return score(a) > score(b);
+    });
     return found;
 }
 
@@ -49,6 +75,7 @@ std::wstring FindPath(uint16_t pid) {
 void Kraken::Start(uint16_t pid, bool screen) {
     if (thread_.joinable() || !pid) return;
     stop_ = false;
+    state_ = KrakenState::Searching;
     thread_ = std::thread(&Kraken::Run, this, pid, screen);
 }
 
@@ -56,6 +83,7 @@ void Kraken::Stop() {
     if (!thread_.joinable()) return;
     stop_ = true;
     thread_.join();
+    state_ = KrakenState::Off;
     std::lock_guard<std::mutex> lock(mutex_);
     status_ = {};
 }
@@ -65,9 +93,15 @@ void Kraken::Run(uint16_t pid, bool screen) {
     HANDLE ev = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     uint64_t nextLook = 0;
     bool logged = false;
-    DWORD inLen = 64, outLen = 64;  // report sizes (with the report ID), from the device
+    int misses = 0;
+    size_t which = 0;  // which of its interfaces is being tried
+    DWORD inLen = 64, outLen = 64;
     auto nap = [&](int ms) {
         for (int t = 0; t < ms && !stop_; t += 100) Sleep(100);
+    };
+    auto close = [&] {
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        h = INVALID_HANDLE_VALUE;
     };
     while (!stop_) {
         if (h == INVALID_HANDLE_VALUE) {
@@ -76,24 +110,31 @@ void Kraken::Run(uint16_t pid, bool screen) {
                 nap(500);
                 continue;
             }
-            nextLook = now + 10000;
-            const std::wstring path = FindPath(pid);
-            if (path.empty()) continue;
-            h = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
-                            FILE_FLAG_OVERLAPPED, nullptr);
-            if (h == INVALID_HANDLE_VALUE) {
-                if (!logged) LUMA_WARN("NZXT Kraken: couldn't open it (error %lu)", GetLastError());
+            nextLook = now + 5000;
+            const std::vector<Interface> all = FindInterfaces(pid);
+            if (all.empty()) {
+                state_ = KrakenState::Searching;
+                if (!logged) LUMA_INFO("NZXT Kraken %04X: no HID interface found", pid);
                 logged = true;
                 continue;
             }
-            PHIDP_PREPARSED_DATA pre = nullptr;
-            HIDP_CAPS caps{};
-            if (HidD_GetPreparsedData(h, &pre) && HidP_GetCaps(pre, &caps) == HIDP_STATUS_SUCCESS) {
-                if (caps.InputReportByteLength) inLen = std::min<DWORD>(caps.InputReportByteLength, 256);
-                if (caps.OutputReportByteLength) outLen = std::min<DWORD>(caps.OutputReportByteLength, 256);
+            if (!logged)
+                for (const Interface& f : all)
+                    LUMA_INFO("NZXT Kraken %04X: HID interface, usage page %04X, reports in %lu / out %lu bytes", pid, f.usagePage,
+                              f.inLen, f.outLen);
+            logged = true;
+            const Interface& f = all[which % all.size()];
+            h = CreateFileW(f.path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                            FILE_FLAG_OVERLAPPED, nullptr);
+            if (h == INVALID_HANDLE_VALUE) {
+                LUMA_WARN("NZXT Kraken: couldn't open it (error %lu)", GetLastError());
+                state_ = KrakenState::CantOpen;
+                ++which;
+                continue;
             }
-            if (pre) HidD_FreePreparsedData(pre);
-            LUMA_INFO("NZXT Kraken %04X: reading its status (reports %lu / %lu bytes)", pid, inLen, outLen);
+            inLen = std::clamp<DWORD>(f.inLen ? f.inLen : 64, 2, 256);
+            outLen = std::clamp<DWORD>(f.outLen ? f.outLen : 64, 2, 256);
+            misses = 0;
         }
         // Screen models answer a status request; the X models report on their own.
         if (screen) {
@@ -102,13 +143,14 @@ void Kraken::Run(uint16_t pid, bool screen) {
             ow.hEvent = ev;
             ResetEvent(ev);
             DWORD done = 0;
-            if (!WriteFile(h, req, outLen, nullptr, &ow) && GetLastError() == ERROR_IO_PENDING &&
-                WaitForSingleObject(ev, 500) != WAIT_OBJECT_0)
-                CancelIo(h);
-            GetOverlappedResult(h, &ow, &done, FALSE);
+            if (WriteFile(h, req, outLen, nullptr, &ow) || GetLastError() == ERROR_IO_PENDING) {
+                if (WaitForSingleObject(ev, 500) != WAIT_OBJECT_0) CancelIo(h);
+                GetOverlappedResult(h, &ow, &done, TRUE);
+            }
         }
         Status got;
-        const uint64_t until = GetTickCount64() + 1200;
+        bool gone = false;
+        const uint64_t until = GetTickCount64() + 1500;
         while (!got.valid && GetTickCount64() < until && !stop_) {
             uint8_t msg[256] = {};
             OVERLAPPED ov{};
@@ -116,9 +158,7 @@ void Kraken::Run(uint16_t pid, bool screen) {
             ResetEvent(ev);
             DWORD n = 0;
             if (!ReadFile(h, msg, inLen, nullptr, &ov) && GetLastError() != ERROR_IO_PENDING) {
-                LUMA_INFO("NZXT Kraken: unplugged");
-                CloseHandle(h);
-                h = INVALID_HANDLE_VALUE;
+                gone = true;
                 break;
             }
             if (WaitForSingleObject(ev, 500) != WAIT_OBJECT_0) {
@@ -129,13 +169,29 @@ void Kraken::Run(uint16_t pid, bool screen) {
             if (!GetOverlappedResult(h, &ov, &n, FALSE)) continue;
             got = Parse(msg, n, screen);
         }
+        if (gone) {
+            LUMA_INFO("NZXT Kraken: unplugged");
+            close();
+            state_ = KrakenState::Searching;
+        } else if (got.valid) {
+            if (state_ != KrakenState::Reading) LUMA_INFO("NZXT Kraken: reading (liquid %.1f C, pump %d RPM)", got.liquidC, got.pumpRpm);
+            state_ = KrakenState::Reading;
+            misses = 0;
+        } else if (++misses >= 5) {
+            // No status on this interface: try the next one.
+            LUMA_INFO("NZXT Kraken: no status reports on this interface");
+            close();
+            state_ = KrakenState::NoReply;
+            ++which;
+            nextLook = 0;
+        }
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (got.valid || h == INVALID_HANDLE_VALUE) status_ = got;
         }
         nap(1000);
     }
-    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    close();
     CloseHandle(ev);
 }
 
