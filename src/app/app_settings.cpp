@@ -220,6 +220,8 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (!v.empty()) p.logitechForce = v != L"0";
     v = Read(ini, L"Games", L"ForzaPort");
     if (!v.empty() && _wtoi(v.c_str()) > 0 && _wtoi(v.c_str()) < 65536) p.forzaPort = _wtoi(v.c_str());
+    v = Read(ini, L"Games", L"F1Port");
+    if (!v.empty() && _wtoi(v.c_str()) > 0 && _wtoi(v.c_str()) < 65536) p.f1Port = _wtoi(v.c_str());
     v = Read(ini, L"Dashboard", L"LhmPort");
     if (!v.empty()) p.lhmPort = _wtoi(v.c_str());
     for (const char* id : device::All()) {
@@ -310,6 +312,7 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"DashboardKnown", Widen(known));
     WriteConfigValue(ini, L"Dashboard", L"LhmPort", Num(p.lhmPort));
     WriteConfigValue(ini, L"Games", L"ForzaPort", Num(p.forzaPort));
+    WriteConfigValue(ini, L"Games", L"F1Port", Num(p.f1Port));
     WriteConfigValue(ini, L"App", L"LogitechDevices", p.logitechDevices ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"LogitechKeepInGames", p.logitechForce ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"AzothKeyboard", p.azothKeyboard ? L"1" : L"0");

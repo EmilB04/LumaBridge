@@ -105,20 +105,22 @@ void GameFeeds::Start() {
     wtThread_ = std::thread(&GameFeeds::WarThunderLoop, this);
     leagueThread_ = std::thread(&GameFeeds::LeagueLoop, this);
     forzaThread_ = std::thread(&GameFeeds::ForzaLoop, this);
+    f1Thread_ = std::thread(&GameFeeds::F1Loop, this);
     msfsThread_ = std::thread(&GameFeeds::FlightSimLoop, this);
     dcsThread_ = std::thread(&GameFeeds::DcsLoop, this);
 }
 
 void GameFeeds::Stop() {
     if (!cs2Thread_.joinable() && !rlThread_.joinable() && !wtThread_.joinable() && !leagueThread_.joinable() &&
-        !forzaThread_.joinable() && !msfsThread_.joinable() && !dcsThread_.joinable())
+        !forzaThread_.joinable() && !f1Thread_.joinable() && !msfsThread_.joinable() && !dcsThread_.joinable())
         return;
     stop_ = true;
     if (cs2Listen_ != INVALID_SOCKET) {
         closesocket(cs2Listen_);  // ends accept()
         cs2Listen_ = INVALID_SOCKET;
     }
-    for (std::thread* t : {&cs2Thread_, &rlThread_, &wtThread_, &leagueThread_, &forzaThread_, &msfsThread_, &dcsThread_})
+    for (std::thread* t :
+         {&cs2Thread_, &rlThread_, &wtThread_, &leagueThread_, &forzaThread_, &f1Thread_, &msfsThread_, &dcsThread_})
         if (t->joinable()) t->join();
     if (wsa_) WSACleanup();
     wsa_ = false;
@@ -152,6 +154,11 @@ GameFeeds::Feed GameFeeds::League(uint64_t now) {
 GameFeeds::Feed GameFeeds::Forza(uint64_t now) {
     std::lock_guard<std::mutex> lock(mutex_);
     return Feed{forza_.Active(now), forza_.Current()};
+}
+
+GameFeeds::Feed GameFeeds::F1(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{f1_.Active(now), f1_.Current()};
 }
 
 GameFeeds::Feed GameFeeds::FlightSim(uint64_t now) {
@@ -329,6 +336,58 @@ void GameFeeds::ForzaLoop() {
             std::lock_guard<std::mutex> lock(mutex_);
             if (forza_.OnPacket(buf, static_cast<size_t>(n), GetTickCount64()) && !forzaSeen_.exchange(true))
                 LUMA_INFO("games: Forza is sending its Data Out telemetry");
+        }
+    }
+    if (s != INVALID_SOCKET) closesocket(s);
+}
+
+// ---- F1 24 / F1 25 --------------------------------------------------------------------------
+
+void GameFeeds::F1Loop() {
+    SOCKET s = INVALID_SOCKET;
+    int boundPort = 0;
+    while (!stop_) {
+        if (!f1Running_ || boundPort != f1Port_) {
+            if (s != INVALID_SOCKET) {
+                closesocket(s);
+                s = INVALID_SOCKET;
+                boundPort = 0;
+            }
+            if (!f1Running_) {
+                f1Busy_ = false;
+                Nap(stop_, 1000);
+                continue;
+            }
+        }
+        if (s == INVALID_SOCKET) {
+            s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            BOOL exclusive = TRUE;
+            setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&exclusive), sizeof exclusive);
+            sockaddr_in a{};
+            a.sin_family = AF_INET;
+            a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            a.sin_port = htons(static_cast<u_short>(f1Port_.load()));
+            if (bind(s, reinterpret_cast<sockaddr*>(&a), sizeof a) != 0) {
+                if (!f1Busy_.exchange(true))
+                    LUMA_WARN("games: UDP port %d is taken (another telemetry app?) - F1 lighting unavailable",
+                              f1Port_.load());
+                closesocket(s);
+                s = INVALID_SOCKET;
+                Nap(stop_, 3000);
+                continue;
+            }
+            f1Busy_ = false;
+            boundPort = f1Port_;
+            DWORD timeout = 500;
+            setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof timeout);
+            LUMA_INFO("games: listening for F1's telemetry on 127.0.0.1:%d", boundPort);
+        }
+        uint8_t buf[1500];
+        const int n = recv(s, reinterpret_cast<char*>(buf), sizeof buf, 0);
+        if (n > 0) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (f1_.OnPacket(buf, static_cast<size_t>(n), GetTickCount64()) && !f1Seen_.exchange(true))
+                LUMA_INFO("games: F1 is sending its telemetry");
         }
     }
     if (s != INVALID_SOCKET) closesocket(s);

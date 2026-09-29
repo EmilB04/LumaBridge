@@ -24,6 +24,7 @@
 #include "rocket_league_lighting.h"
 #include "dota2_lighting.h"
 #include "league_lighting.h"
+#include "f1_lighting.h"
 #include "forza_lighting.h"
 #include "flight_sim_lighting.h"
 #include "dcs_lighting.h"
@@ -1109,6 +1110,48 @@ static void TestForza() {
     CHECK(FindProfile("dota2.exe", "")->feed == Feed::Dota2Gsi && FindProfile("x.exe", "Forza Motorsport") != nullptr);
 }
 
+static void TestF1() {
+    using namespace luma::app::games;
+    using luma::fx::Kind;
+    F1Lighting f;
+    // A Car Telemetry packet (id 6) with `playerIdx`'s car set from `rpm` and `revPercent`; every
+    // other car left zeroed.
+    auto packet = [](uint8_t playerIdx, uint16_t rpm, uint8_t revPercent, int8_t gear) {
+        std::vector<uint8_t> p(F1Lighting::kHeaderSize + 22 * F1Lighting::kCarTelemetrySize + 3, 0);
+        p[6] = F1Lighting::kCarTelemetryPacketId;
+        p[27] = playerIdx;
+        const size_t off = F1Lighting::kHeaderSize + static_cast<size_t>(playerIdx) * F1Lighting::kCarTelemetrySize;
+        p[off + 15] = static_cast<uint8_t>(gear);
+        std::memcpy(&p[off + 16], &rpm, 2);
+        p[off + 19] = revPercent;
+        return p;
+    };
+    CHECK(!f.OnPacket(packet(0, 8000, 0, 1).data(), 10, 1000));  // too short
+    auto p = packet(2, 0, 0, 0);
+    p[6] = 4;  // not a Car Telemetry packet
+    CHECK(!f.OnPacket(p.data(), p.size(), 1000));
+    p = packet(2, 0, 0, 0);  // engine off: not racing
+    CHECK(f.OnPacket(p.data(), p.size(), 1000) && !f.Active(1000));
+    p = packet(2, 3000, 20, 3);
+    f.OnPacket(p.data(), p.size(), 2000);
+    CHECK((f.Active(2000) && f.Current().kind == Kind::Static && f.Current().color1 == luma::Rgb{0, 90, 255}));
+    CHECK(f.gear() == 3);
+    p = packet(2, 11000, 86, 5);  // yellow into red
+    f.OnPacket(p.data(), p.size(), 3000);
+    CHECK(f.Current().color1.r == 255 && f.Current().color1.g < 220);
+    p = packet(2, 12000, 100, 8);  // shift lights full
+    f.OnPacket(p.data(), p.size(), 4000);
+    CHECK(f.Current().kind == Kind::Strobe);
+    CHECK(!f.Active(4000 + F1Lighting::kStaleMs + 1));
+    // A different player car index than the one carrying data: the other car's zeroed telemetry
+    // (engine off) is read, not the one we set up above.
+    p = packet(2, 12000, 100, 8);
+    p[27] = 5;
+    CHECK(f.OnPacket(p.data(), p.size(), 5000) && !f.Active(5000));
+    CHECK(FindProfile("F1_24.exe", "")->feed == Feed::F1Telemetry);
+    CHECK(FindProfile("x.exe", "F1 25")->feed == Feed::F1Telemetry);
+}
+
 static void TestWarThunder() {
     using namespace luma::app::games;
     using luma::fx::Kind;
@@ -1878,6 +1921,7 @@ int main() {
     TestDota2();
     TestLeague();
     TestForza();
+    TestF1();
     TestFlightSim();
     TestScene3d();
     TestPcLayout();

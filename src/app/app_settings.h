@@ -70,6 +70,7 @@ struct Prefs {
     std::vector<std::string> dashboard = DefaultDashboard();
     int lhmPort = 8085;  // LibreHardwareMonitor's web server
     int forzaPort = 5300;  // where Forza's Data Out sends (set the same in the game)
+    int f1Port = 20777;    // where F1 24 / F1 25's telemetry sends (set the same in the game)
     // Light Logitech devices (G HUB) along with Aura.
     bool logitechDevices = true;
     // Keep Logitech devices with LumaBridge even while a game lights them itself (through

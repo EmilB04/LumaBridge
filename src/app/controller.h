@@ -266,7 +266,7 @@ private:
     uint64_t sensorsPushedAt_ = 0;
     std::string logitechNote_;
     void UpdateLogitech();
-    bool feedActive_[8] = {};
+    bool feedActive_[9] = {};
     std::future<std::vector<InstalledGame>> libraryJob_;
     Presence presence_;
     std::string presenceLogged_;  // what the log last said about NZXT devices

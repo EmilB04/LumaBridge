@@ -52,6 +52,7 @@ bool Controller::Init() {
     detector_.SetExtraGames(prefs_.manualGames);
     RescanLibrary();
     feeds_.SetForzaPort(prefs_.forzaPort);
+    feeds_.SetF1Port(prefs_.f1Port);
     feeds_.Start();
     monitor_.Start(prefs_.lhmPort);
     if (prefs_.logitechDevices) logitech_.Start(AppDirectory() + L"\\integrations\\LumaBridge_x64.dll");
@@ -212,6 +213,7 @@ void Controller::RefreshFeedSettings() {
     const std::wstring rl = GameDir("rocketleague");
     if (!rl.empty()) feeds_.SetRocketLeaguePort(RocketLeagueStatsPort(rl));
     feeds_.SetForzaPort(prefs_.forzaPort);
+    feeds_.SetF1Port(prefs_.f1Port);
 }
 
 void Controller::RescanLibrary() {
@@ -586,6 +588,7 @@ void Controller::UpdateFeeds(uint64_t now) {
             running.forza |= g.profile->feed == games::Feed::ForzaDataOut;
             running.flightSim |= g.profile->feed == games::Feed::FlightSimConnect;
             running.dcs |= g.profile->feed == games::Feed::DcsExport;
+            running.f1 |= g.profile->feed == games::Feed::F1Telemetry;
         }
     feeds_.SetRunning(running);
     struct {
@@ -601,6 +604,7 @@ void Controller::UpdateFeeds(uint64_t now) {
         {feeds_.Forza(now), "Data Out telemetry", "Forza"},
         {feeds_.FlightSim(now), "SimConnect", "Microsoft Flight Simulator"},
         {feeds_.Dcs(now), "export script", "DCS World"},
+        {feeds_.F1(now), "UDP telemetry", "F1"},
     };
     static_assert(sizeof(feeds) / sizeof(feeds[0]) == sizeof(feedActive_) / sizeof(feedActive_[0]), "one flag per feed");
     for (size_t i = 0; i < std::size(feeds); ++i) {

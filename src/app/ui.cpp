@@ -1520,6 +1520,7 @@ void TopGame(DashCtx& c) {
         case games::Feed::ForzaDataOut: return feeds.ForzaSeen();
         case games::Feed::FlightSimConnect: return feeds.FlightSimSeen();
         case games::Feed::DcsExport: return feeds.DcsSeen();
+        case games::Feed::F1Telemetry: return feeds.F1Seen();
         default: return false;
         }
     };
@@ -5350,6 +5351,9 @@ void FeedPill(const Controller& ctl, const UiState& ui, const std::string& key) 
     } else if (key == "forza") {
         if (feeds.ForzaPortBusy()) Pill("Port busy", kRed);
         else Pill(feeds.ForzaSeen() ? "Receiving" : "Switch on in the game", feeds.ForzaSeen() ? kGreen : kAmber);
+    } else if (key == "f1") {
+        if (feeds.F1PortBusy()) Pill("Port busy", kRed);
+        else Pill(feeds.F1Seen() ? "Receiving" : "Switch on in the game", feeds.F1Seen() ? kGreen : kAmber);
     } else if (key == "msfs") {
         if (feeds.FlightSimSeen()) Pill("Receiving", kGreen);
         else if (feeds.FlightSimDll() == 0) Pill("Needs SimConnect", kAmber);
@@ -5449,6 +5453,24 @@ void FeedSetup(Controller& ctl, Integrations& in, UiState& ui, const std::string
                                             "the game."
                     : feeds.ForzaSeen() ? "Receiving while you drive."
                                         : "Works while you drive, once Data Out is on.");
+    } else if (key == "f1") {
+        Muted("In the game: Settings > Telemetry Settings > UDP Telemetry: On, UDP IP Address: 127.0.0.1, UDP Port: "
+              "the port below.");
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Port");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(110 * S());
+        int port = ctl.prefs().f1Port;
+        if (ImGui::InputInt("##f1port", &port, 0, 0) && port > 1024 && port < 65536) {
+            ctl.prefs().f1Port = port;
+            ctl.Changed();
+            ctl.RefreshFeedSettings();
+        }
+        ImGui::SameLine();
+        Muted("%s", feeds.F1PortBusy() ? "Taken by another program (a telemetry app?) - pick another port here and in "
+                                          "the game."
+                    : feeds.F1Seen() ? "Receiving while you drive."
+                                     : "Works while you drive, once UDP Telemetry is on.");
     } else if (key == "msfs") {
         if (feeds.FlightSimSeen())
             Muted("Flight Simulator is sending your aircraft's state.");
@@ -5750,7 +5772,7 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
     ImGui::PopFont();
     Muted("These games light up through their own official data, no vendor software needed. Click one to set it up.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
-    static const char* kBuiltIn[] = {"cs2", "rocketleague", "warthunder", "dota2", "league", "forza", "msfs", "dcs"};
+    static const char* kBuiltIn[] = {"cs2", "rocketleague", "warthunder", "dota2", "league", "forza", "f1", "msfs", "dcs"};
     const float avail = ImGui::GetContentRegionAvail().x;
     const int cols = avail > 700 * S() ? 3 : 1;
     if (ImGui::BeginTable("builtin", cols, ImGuiTableFlags_SizingStretchSame)) {

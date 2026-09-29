@@ -16,7 +16,7 @@ enum class ProfileKind {
     NotAGame,   // a tool that looks like a game; ignored in Auto mode
 };
 
-enum class Feed { None, Cs2Gsi, RocketLeagueStats, WarThunderApi, Dota2Gsi, LeagueLiveClient, ForzaDataOut, FlightSimConnect, DcsExport };
+enum class Feed { None, Cs2Gsi, RocketLeagueStats, WarThunderApi, Dota2Gsi, LeagueLiveClient, ForzaDataOut, FlightSimConnect, DcsExport, F1Telemetry };
 
 struct GameProfile {
     const char* key;        // stable id ("cs2")
@@ -61,6 +61,10 @@ inline const GameProfile* Profiles(size_t* count) {
          ProfileKind::BuiltIn, Feed::ForzaDataOut, "Built in: the game's Data Out telemetry",
          "Rev lights: blue at low revs, then green, yellow and red as the engine climbs, and a red "
          "flash at the limiter. Switch on Data Out in the game's settings (its page says how)."},
+        {"f1", "F1 24 / F1 25", {"f1_24.exe", "f1_25.exe"}, {"f124", "f125"}, ProfileKind::BuiltIn,
+         Feed::F1Telemetry, "Built in: the game's UDP telemetry",
+         "Rev lights from the shift lights: blue at low revs, then green, yellow and red as they climb, and a fast "
+         "red flash once they're full. Switch on Telemetry in the game's settings (its page says how)."},
         {"msfs", "Microsoft Flight Simulator", {"flightsimulator.exe", "flightsimulator2024.exe"},
          {"microsoftflightsimulator", "microsoftflightsimulator2020", "microsoftflightsimulator2024"},
          ProfileKind::BuiltIn, Feed::FlightSimConnect, "Built in: SimConnect, the sim's own add-on interface",
