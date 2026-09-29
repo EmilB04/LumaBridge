@@ -2206,7 +2206,7 @@ void RamSlotsCard(Controller& ctl, const Fonts& f) {
     const SetupHardware hw = DetectSetup(ctl.monitor().Snapshot().smbios);
     BeginCard("ramslots");
     CardTitle(f, "Memory slots", Icon::Memory);
-    Muted("%s Click a slot to change it (from the CPU outward, as printed on the board).",
+    Muted("%s Click a slot to put a stick in or take it out (A1 is nearest the CPU, as printed on the board).",
           ctl.prefs().ramSlots >= 0 ? "Set by you."
           : hw.slotsKnown         ? "As your board reports them."
                                   : "Your board doesn't say which slots are used, so this is a guess.");
@@ -2218,20 +2218,71 @@ void RamSlotsCard(Controller& ctl, const Fonts& f) {
             names += (names.empty() ? "" : ",  ") + ("\"" + m.slot + "\"") + (m.bank.empty() ? "" : " (\"" + m.bank + "\")");
         if (!names.empty()) Muted("Your board names them: %s", names.c_str());
     }
+    // The board around the socket, as you see it with the side panel off: the CPU, then the
+    // four slots outward. A stick sits in a filled slot; click a slot to put one in or take it out.
     std::array<bool, 4> slots = RamSlotsShown(ctl, hw);
     static const char* kNames[] = {"A1", "A2", "B1", "B2"};
+    const float h = 200 * S(), slotW = 26 * S(), gap = 14 * S(), pairGap = 26 * S(), cpu = 110 * S();
+    const float w = 24 * S() + cpu + 36 * S() + 4 * slotW + 2 * gap + pairGap + 24 * S();
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(o, ImVec2(o.x + w, o.y + h), Hex(0x151A22), 10 * S());
+    dl->AddRect(o, ImVec2(o.x + w, o.y + h), Hex(0x262D3A), 10 * S());
+    // The CPU socket.
+    const ImVec2 ca(o.x + 24 * S(), o.y + h / 2 - cpu / 2), cb(ca.x + cpu, ca.y + cpu);
+    dl->AddRectFilled(ca, cb, Hex(0x222834), 6 * S());
+    dl->AddRect(ImVec2(ca.x + 10 * S(), ca.y + 10 * S()), ImVec2(cb.x - 10 * S(), cb.y - 10 * S()), Hex(0x3A4252), 4 * S(), 0, 1.5f * S());
+    const ImVec2 cs = ImGui::CalcTextSize("CPU");
+    dl->AddText(ImVec2((ca.x + cb.x) / 2 - cs.x / 2, (ca.y + cb.y) / 2 - cs.y / 2), Hex(kMuted), "CPU");
+    const Rgb stick = ctl.prefs().ramLighting ? Rgb{124, 108, 255} : Rgb{90, 96, 110};
+    float x = cb.x + 36 * S();
+    bool changed = false;
     for (int i = 0; i < 4; ++i) {
-        if (i) ImGui::SameLine();
+        if (i == 2) x += pairGap - gap;
+        const ImVec2 a(x, o.y + 30 * S()), b(x + slotW, o.y + h - 16 * S());
+        ImGui::SetCursorScreenPos(ImVec2(a.x - 4 * S(), o.y + 6 * S()));
         ImGui::PushID(i);
-        char label[24];
-        snprintf(label, sizeof label, "%s  %s", kNames[i], slots[static_cast<size_t>(i)] ? "stick" : "empty");
-        if (slots[static_cast<size_t>(i)] ? PrimaryButton(label, ImVec2(96 * S(), 0)) : ImGui::Button(label, ImVec2(96 * S(), 0))) {
-            slots[static_cast<size_t>(i)] = !slots[static_cast<size_t>(i)];
-            ctl.prefs().ramSlots = (slots[0] ? 1 : 0) | (slots[1] ? 2 : 0) | (slots[2] ? 4 : 0) | (slots[3] ? 8 : 0);
-            ctl.Changed();
-        }
+        const bool click = ImGui::InvisibleButton("slot", ImVec2(slotW + 8 * S(), h - 16 * S()));
+        const bool hovered = ImGui::IsItemHovered();
         ImGui::PopID();
+        const bool full = slots[static_cast<size_t>(i)];
+        // The slot: a long socket with a latch at each end.
+        dl->AddRectFilled(ImVec2(a.x + 6 * S(), a.y), ImVec2(b.x - 6 * S(), b.y), Hex(0x0B0E13), 3 * S());
+        dl->AddRectFilled(ImVec2(a.x + 4 * S(), a.y - 6 * S()), ImVec2(b.x - 4 * S(), a.y + 4 * S()), Hex(0x3A4252), 2 * S());
+        dl->AddRectFilled(ImVec2(a.x + 4 * S(), b.y - 4 * S()), ImVec2(b.x - 4 * S(), b.y + 6 * S()), Hex(0x3A4252), 2 * S());
+        if (full) {
+            // A stick: its heat spreader, with a light bar along the top when RAM lighting is on.
+            dl->AddRectFilled(ImVec2(a.x, a.y + 4 * S()), ImVec2(b.x, b.y - 4 * S()), Hex(0x2B313D), 4 * S());
+            dl->AddRectFilled(ImVec2(a.x + 3 * S(), a.y + 8 * S()), ImVec2(b.x - 3 * S(), b.y - 8 * S()), Hex(0x39414F), 3 * S());
+            dl->AddRectFilled(ImVec2(a.x, a.y + 4 * S()), ImVec2(a.x + 5 * S(), b.y - 4 * S()), Col(stick, ctl.prefs().ramLighting ? 230 : 120), 2 * S());
+            for (int k = 0; k < 4; ++k) {  // chips
+                const float cy = a.y + 24 * S() + static_cast<float>(k) * (b.y - a.y - 48 * S()) / 3.f;
+                dl->AddRectFilled(ImVec2(a.x + 9 * S(), cy - 7 * S()), ImVec2(b.x - 5 * S(), cy + 7 * S()), Hex(0x1C2029), 2 * S());
+            }
+        } else if (hovered) {
+            dl->AddRect(ImVec2(a.x, a.y + 4 * S()), ImVec2(b.x, b.y - 4 * S()), Hex(kAccent, 160), 4 * S(), 0, 1.5f * S());
+        }
+        if (hovered) {
+            dl->AddRect(ImVec2(a.x - 3 * S(), a.y - 9 * S()), ImVec2(b.x + 3 * S(), b.y + 9 * S()), Hex(kAccentHover, 200), 5 * S(), 0, 1.5f * S());
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            ImGui::SetTooltip("%s: %s. Click to %s.", kNames[i], full ? "a stick" : "empty", full ? "take it out" : "put a stick in");
+        }
+        const ImVec2 ns = ImGui::CalcTextSize(kNames[i]);
+        dl->AddText(ImVec2((a.x + b.x) / 2 - ns.x / 2, o.y + 8 * S()), Hex(full ? kText : kMuted), kNames[i]);
+        if (click) {
+            slots[static_cast<size_t>(i)] = !full;
+            changed = true;
+        }
+        x += slotW + gap;
     }
+    if (changed) {
+        ctl.prefs().ramSlots = (slots[0] ? 1 : 0) | (slots[1] ? 2 : 0) | (slots[2] ? 4 : 0) | (slots[3] ? 8 : 0);
+        ctl.Changed();
+    }
+    ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + h));
+    ImGui::Dummy(ImVec2(w, 6 * S()));
+    const int n = static_cast<int>(slots[0]) + slots[1] + slots[2] + slots[3];
+    Muted("%d stick%s. Most boards want two in A2 and B2.", n, n == 1 ? "" : "s");
     if (ctl.prefs().ramSlots >= 0) {
         ImGui::SameLine(0, 16 * S());
         if (ImGui::Button("As the board says")) {
@@ -5493,10 +5544,16 @@ void NzxtCard(Controller& ctl, const Fonts& f) {
         ImGui::Text("Liquid %.1f \xC2\xB0" "C    Pump %d RPM (%d%%)", k.liquidC, k.pumpRpm, k.pumpDuty);
         if (k.fanRpm > 0) ImGui::Text("Radiator fans %d RPM (%d%%)", k.fanRpm, k.fanDuty);
     } else if (st == nzxt::KrakenState::CantOpen) {
-        Muted("Windows won't let LumaBridge open it. Details are in the log (Settings).");
+        const unsigned long err = ctl.krakenError();
+        Muted("Windows won't let LumaBridge open it (error %lu%s). Details are in the log (Settings).", err,
+              err == 32 ? ": another app has it to itself, most likely NZXT CAM" : err == 5 ? ": access denied" : "");
     } else if (st == nzxt::KrakenState::NoReply) {
-        Muted("It isn't answering status requests; LumaBridge keeps trying. The log (Settings) lists its interfaces.");
+        Muted(ctl.krakenListening()
+                  ? "NZXT CAM has the Kraken open, so LumaBridge listens to the readings CAM asks for: none came yet. "
+                    "With CAM running (even in the tray) they appear here."
+                  : "It isn't answering status requests; LumaBridge keeps trying. The log (Settings) lists its interfaces.");
     }
+    if (k.valid && ctl.krakenListening()) Muted("Read alongside NZXT CAM (listening to the readings it asks for).");
     Muted("Read only: the liquid temperature and pump and fan speeds show on the dashboard and in My setup. "
           "NZXT CAM keeps the lighting, the fan curves and the pump's screen.");
     EndCard();

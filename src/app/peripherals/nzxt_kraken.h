@@ -68,12 +68,18 @@ public:
     }
     bool running() const { return thread_.joinable(); }
     KrakenState state() const { return state_; }
+    // Opened to listen only (NZXT CAM has it open and shares it for reading, not writing):
+    // LumaBridge then reads the status replies CAM asks for.
+    bool listening() const { return listening_; }
+    unsigned long lastError() const { return lastError_; }  // Windows' error opening it (0: none)
 
 private:
     void Run(uint16_t pid, bool screen);
     std::thread thread_;
     std::atomic<bool> stop_{false};
     std::atomic<KrakenState> state_{KrakenState::Off};
+    std::atomic<bool> listening_{false};
+    std::atomic<unsigned long> lastError_{0};
     mutable std::mutex mutex_;
     Status status_;
 };

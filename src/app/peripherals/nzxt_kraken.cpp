@@ -161,20 +161,34 @@ void Kraken::Run(uint16_t pid, bool screen) {
                               f.inLen, f.outLen);
             logged = true;
             const Interface& f = all[which % all.size()];
+            // To ask for the status (read and write); else, when NZXT CAM has it open and
+            // doesn't share writing, to listen to the replies CAM asks for (read only).
+            listening_ = false;
             h = CreateFileW(f.path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                             FILE_FLAG_OVERLAPPED, nullptr);
+            const DWORD rwError = h == INVALID_HANDLE_VALUE ? GetLastError() : 0;
             if (h == INVALID_HANDLE_VALUE) {
-                LUMA_WARN("NZXT Kraken: couldn't open it (error %lu)", GetLastError());
+                h = CreateFileW(f.path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                                FILE_FLAG_OVERLAPPED, nullptr);
+                if (h != INVALID_HANDLE_VALUE) {
+                    listening_ = true;
+                    LUMA_INFO("NZXT Kraken: can't ask it (error %lu, NZXT CAM holds it?); listening to its replies instead", rwError);
+                }
+            }
+            if (h == INVALID_HANDLE_VALUE) {
+                lastError_ = GetLastError();
+                LUMA_WARN("NZXT Kraken: couldn't open it (error %lu, read only: %lu)", rwError, lastError_.load());
                 state_ = KrakenState::CantOpen;
                 ++which;
                 continue;
             }
+            lastError_ = 0;
             inLen = std::clamp<DWORD>(f.inLen ? f.inLen : 64, 2, 256);
             outLen = std::clamp<DWORD>(f.outLen ? f.outLen : 64, 2, 256);
             misses = 0;
         }
         // Screen models answer a status request; the X models report on their own.
-        if (screen) {
+        if (screen && !listening_) {
             uint8_t req[256] = {0x74, 0x01};
             OVERLAPPED ow{};
             ow.hEvent = ev;
@@ -214,7 +228,7 @@ void Kraken::Run(uint16_t pid, bool screen) {
             if (state_ != KrakenState::Reading) LUMA_INFO("NZXT Kraken: reading (liquid %.1f C, pump %d RPM)", got.liquidC, got.pumpRpm);
             state_ = KrakenState::Reading;
             misses = 0;
-        } else if (++misses >= 5) {
+        } else if (++misses >= (listening_ ? 15 : 5)) {
             // No status on this interface: try the next one.
             LUMA_INFO("NZXT Kraken: no status reports on this interface");
             close();

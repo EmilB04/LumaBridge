@@ -180,6 +180,8 @@ public:
     // An NZXT Kraken's own readings (liquid temperature, pump and fan speeds), when one is plugged in.
     nzxt::Status kraken() const { return kraken_.status(); }
     nzxt::KrakenState krakenState() const { return kraken_.state(); }
+    bool krakenListening() const { return kraken_.listening(); }
+    unsigned long krakenError() const { return kraken_.lastError(); }
     void RescanPresence();
 
     // ASUS ROG Azoth over USB (wired).
