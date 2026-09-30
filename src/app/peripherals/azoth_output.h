@@ -30,6 +30,9 @@ public:
     State state() const { return state_; }
     // How it was last found (meaningful while Active).
     bool wireless() const { return link_ == azoth::Link::Wireless; }
+    // Windows' error from the last failed write, if State is NotFound because of one (0: it
+    // was simply never found, the more common case).
+    unsigned long lastWriteError() const { return lastWriteError_; }
 
 private:
     void Run();
@@ -39,6 +42,7 @@ private:
     std::atomic<State> state_{State::Off};
     std::atomic<bool> asleep_{false};
     std::atomic<azoth::Link> link_{azoth::Link::Wired};
+    std::atomic<unsigned long> lastWriteError_{0};
     std::mutex mutex_;
     fx::Params effect_;
     double brightness_ = 1.0;

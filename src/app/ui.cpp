@@ -4652,12 +4652,32 @@ void AzothCard(Controller& ctl, const Fonts& f) {
     BeginCard("azoth");
     CardTitle(f, "Settings", Icon::Gear);
     Muted("Every key shows LumaBridge's effect on its own, so waves and gradients run across the keyboard, by cable "
-          "or through its ROG Omni receiver (a little slower there, to spare the battery). LumaBridge never sends "
-          "Armoury Crate's save command, so your saved Armoury Crate lighting stays in the keyboard. When LumaBridge lets go, the "
-          "keyboard keeps the last colors until it restarts or Armoury Crate sets it again.");
+          "or through its ROG Omni receiver (a little slower there, to spare the battery). LumaBridge talks to the "
+          "keyboard directly (no Armoury Crate needed), and never sends Armoury Crate's save command, so your saved "
+          "Armoury Crate lighting stays in the keyboard. When LumaBridge lets go, the keyboard keeps the last colors "
+          "until it restarts or Armoury Crate sets it again.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
     bool enabled = ctl.prefs().azothKeyboard;
     if (Toggle("Light the ROG Azoth", &enabled)) ctl.SetAzothEnabled(enabled);
+    if (enabled) {
+        ImGui::SameLine();
+        using A_ = AzothOutput::State;
+        const A_ st = ctl.azoth().state();
+        if (st == A_::Active) Pill(ctl.azoth().wireless() ? "Active (wireless)" : "Active (wired)", kGreen);
+        else if (st == A_::Released) Pill("Handed off", kMuted);
+        else Pill("Not found", kAmber);
+        if (st == A_::NotFound) {
+            const unsigned long err = ctl.azoth().lastWriteError();
+            if (err)
+                Muted("It was connected, then a write failed (error %lu) - unplugged, asleep, or a cable/receiver "
+                      "issue. LumaBridge keeps trying. Details are in the log (Settings).",
+                      err);
+            else
+                Muted("Not found yet, by cable or its Omni receiver; LumaBridge keeps trying every few seconds. "
+                      "It doesn't need Armoury Crate or any ASUS software running - if it's plugged in and still "
+                      "not showing up, run the device probe below to see what LumaBridge actually sees.");
+        }
+    }
     ImGui::Dummy(ImVec2(0, 4 * S()));
     if (SleepControls("azothsleep", &ctl.prefs().azothSleep, &ctl.prefs().azothSleepSec,
                       &ctl.prefs().azothSleepIgnoreDynamic))

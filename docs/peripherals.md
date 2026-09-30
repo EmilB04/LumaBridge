@@ -108,6 +108,13 @@ sleeps as usual.
 
 ## ASUS ROG Azoth (wired or wireless, experimental)
 
+LumaBridge talks to the keyboard directly over raw HID; **Armoury Crate isn't needed** to
+run it, installed or otherwise. Detection (`setup_plan.h`, `azoth_output.cpp`) matches only
+the two product IDs below, found on one wired unit - a different region, SKU or firmware
+revision reporting a different PID won't be found (the Azoth card on its Devices page shows
+"Not found" with a diagnostic in that case; run `tools\device-probe.exe` to see what
+LumaBridge actually sees).
+
 Captured from Armoury Crate with USBPcap on a wired Azoth (USB `0B05:1A83`, firmware
 rev 0418). The vendor interface is `MI_01`, usage page `0xFF00`, 64-byte reports with
 report ID 0, and the commands go on interrupt OUT endpoint 2.

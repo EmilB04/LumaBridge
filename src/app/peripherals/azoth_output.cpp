@@ -124,6 +124,7 @@ void AzothOutput::Run() {
             if (dev == INVALID_HANDLE_VALUE) {
                 if (!loggedMissing) LUMA_INFO("ROG Azoth: not found (neither by cable nor its Omni receiver)");
                 loggedMissing = true;
+                lastWriteError_ = 0;
                 state_ = State::NotFound;
                 nextFind = now + 3000;
                 continue;
@@ -132,10 +133,13 @@ void AzothOutput::Run() {
             link_ = link;
             loggedMissing = false;
             lastSent = 0;
+            lastWriteError_ = 0;
         }
         const double t = fx::Seconds(effect, now, since);
         auto lost = [&] {
-            LUMA_WARN("ROG Azoth: write failed (error %lu) - unplugged?", GetLastError());
+            const DWORD err = GetLastError();
+            LUMA_WARN("ROG Azoth: write failed (error %lu) - unplugged?", err);
+            lastWriteError_ = err;
             CloseHandle(dev);
             dev = INVALID_HANDLE_VALUE;
             nextFind = now + 3000;
