@@ -217,12 +217,26 @@ bool Toggle(const char* label, bool* v) {
     return clicked;
 }
 
+// ImGui::Button, with the hand cursor on hover that Dear ImGui doesn't set by itself.
+bool Btn(const char* label, ImVec2 size = ImVec2(0, 0)) {
+    const bool r = ImGui::Button(label, size);
+    if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    return r;
+}
+
+// ImGui::SmallButton, with the hand cursor on hover.
+bool SmallBtn(const char* label) {
+    const bool r = ImGui::SmallButton(label);
+    if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    return r;
+}
+
 bool PrimaryButton(const char* label, ImVec2 size = ImVec2(0, 0)) {
     ImGui::PushStyleColor(ImGuiCol_Button, V4(kAccent));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, V4(kAccentHover));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, V4(kAccent));
     ImGui::PushStyleColor(ImGuiCol_Text, V4(0xFFFFFF));
-    bool r = ImGui::Button(label, size);
+    bool r = Btn(label, size);
     ImGui::PopStyleColor(4);
     return r;
 }
@@ -1554,7 +1568,7 @@ void TopGame(DashCtx& c) {
         Muted("Also supported: %s", others.c_str());
     }
     ImGui::Dummy(ImVec2(0, 2 * S()));
-    if (ImGui::Button("Games list", ImVec2(120 * S(), 0))) c.ui.page = Page::GamesList;
+    if (Btn("Games list", ImVec2(120 * S(), 0))) c.ui.page = Page::GamesList;
 }
 
 // ---- Layout ---------------------------------------------------------------------------
@@ -1661,7 +1675,7 @@ void DashboardCustomize(Controller& ctl, UiState& ui, const Fonts& f) {
         ImGui::PopID();
     }
     ImGui::Dummy(ImVec2(0, 4 * S()));
-    if (ImGui::Button("Reset to default")) {
+    if (Btn("Reset to default")) {
         order = DefaultDashboard();
         changed = true;
     }
@@ -1733,7 +1747,7 @@ void DashboardPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
         }
     }
 
-    if (ImGui::Button(ui.dashEdit ? "Close" : "Customize", ImVec2(110 * S(), 0))) ui.dashEdit = !ui.dashEdit;
+    if (Btn(ui.dashEdit ? "Close" : "Customize", ImVec2(110 * S(), 0))) ui.dashEdit = !ui.dashEdit;
     ImGui::SameLine(0, 10 * S());
     ImGui::AlignTextToFramePadding();
     Muted("Hide and reorder the cards below.");
@@ -2272,7 +2286,7 @@ bool RainbowCard(Controller&, const Fonts& f, Look& p, bool showSpread) {
         }
     }
     ImGui::Dummy(ImVec2(0, 2 * S()));
-    if (ImGui::Button("Reset rainbow")) {
+    if (Btn("Reset rainbow")) {
         p.hueStart = 0;
         p.hueSpan = 360;
         p.saturation = 1;
@@ -2335,7 +2349,7 @@ bool LookEditor(Controller& ctl, UiState& ui, const Fonts& f, Look& p) {
                          ui.colorSlot == 1, tabW))
                 ui.colorSlot = 1;
             ImGui::SameLine(0, gap);
-            if (ImGui::Button("Swap", ImVec2(swapW, 44 * S()))) {
+            if (Btn("Swap", ImVec2(swapW, 44 * S()))) {
                 std::swap(p.color1, p.color2);
                 changed = true;
             }
@@ -2465,7 +2479,7 @@ void RamSlotsCard(Controller& ctl, const Fonts& f) {
     Muted("%d stick%s. Most boards want two in A2 and B2.", n, n == 1 ? "" : "s");
     if (ctl.prefs().ramSlots >= 0) {
         ImGui::SameLine(0, 16 * S());
-        if (ImGui::Button("As the board says")) {
+        if (Btn("As the board says")) {
             ctl.prefs().ramSlots = -1;
             ctl.Changed();
         }
@@ -3704,13 +3718,13 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
         ImGui::AlignTextToFramePadding();
         ImGui::Text("%s", name.c_str());
         ImGui::SameLine(0, 12 * S());
-        if (ImGui::Button("Turn left")) TurnItem(ctl, item, 15);
+        if (Btn("Turn left")) TurnItem(ctl, item, 15);
         ImGui::SameLine();
-        if (ImGui::Button("Turn right")) TurnItem(ctl, item, -15);
+        if (Btn("Turn right")) TurnItem(ctl, item, -15);
         ImGui::SameLine();
-        if (ImGui::Button("Quarter turn")) TurnItem(ctl, item, 90);
+        if (Btn("Quarter turn")) TurnItem(ctl, item, 90);
         ImGui::SameLine();
-        if (ImGui::Button("Straight")) TurnItem(ctl, item, -DeskAngle(prefs, item) / 0.01745329f);
+        if (Btn("Straight")) TurnItem(ctl, item, -DeskAngle(prefs, item) / 0.01745329f);
         ImGui::SameLine();
         Muted("Scroll while dragging turns it too.");
     }
@@ -4120,7 +4134,7 @@ void SetupCard(Controller& ctl, UiState& ui, const Fonts& f, bool selectable) {
     ImGui::Dummy(ImVec2(0, 4 * S()));
     SetupCanvas(ctl, ui, selectable);
     if (flat) {
-        if (ImGui::Button("Reset layout")) {  // the 2D places only (the desk's are My setup's)
+        if (Btn("Reset layout")) {  // the 2D places only (the desk's are My setup's)
             auto& spots = ctl.prefs().setupSpots;
             for (auto it = spots.begin(); it != spots.end();)
                 it = it->first.rfind("desk:", 0) == 0 ? std::next(it) : spots.erase(it);
@@ -4129,7 +4143,7 @@ void SetupCard(Controller& ctl, UiState& ui, const Fonts& f, bool selectable) {
         ImGui::SameLine();
         Muted("The memory sits in the motherboard's slots: click the sticks to select it.");
     } else {
-        if (ImGui::Button("Reset view")) (selectable ? ui.lightView : ui.guideView).camSet = false;
+        if (Btn("Reset view")) (selectable ? ui.lightView : ui.guideView).camSet = false;
         ImGui::SameLine();
         Muted("Move things around and correct the fans on the My setup page.");
     }
@@ -4156,17 +4170,17 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
     ImGui::SameLine(0, 22 * S());
     Toggle("Names", &ui.setupLabels);
     ImGui::SameLine(0, 22 * S());
-    if (ui.setupEdit ? PrimaryButton("Done editing fans") : ImGui::Button("Edit fans")) ui.setupEdit = !ui.setupEdit;
+    if (ui.setupEdit ? PrimaryButton("Done editing fans") : Btn("Edit fans")) ui.setupEdit = !ui.setupEdit;
     ImGui::SameLine();
-    if (ImGui::Button("Turn the case")) {
+    if (Btn("Turn the case")) {
         pc::Layout l = m.layout;
         l.turn = (l.turn + 1) % 4;
         SaveLayout(ctl, l);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Reset view")) ui.setupView.camSet = false;
+    if (Btn("Reset view")) ui.setupView.camSet = false;
     ImGui::SameLine();
-    if (ImGui::Button("Put everything back")) {
+    if (Btn("Put everything back")) {
         for (const char* item : pc::DeskItems()) ctl.prefs().setupSpots.erase(item);
         ctl.Changed();
     }
@@ -4203,7 +4217,7 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
         ImGui::TextUnformatted(pc::MountName(mt));
         ImGui::SameLine(80 * S());
         ImGui::BeginDisabled(fans == 0);
-        if (ImGui::Button("-", ImVec2(28 * S(), 0))) {
+        if (Btn("-", ImVec2(28 * S(), 0))) {
             pc::Layout c = l;
             pc::SetFansAt(&c, mt, fans - 1);
             SaveLayout(ctl, c);
@@ -4214,7 +4228,7 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
         ImGui::Text("%d", fans);
         ImGui::SameLine();
         ImGui::BeginDisabled(fans >= slots);
-        if (ImGui::Button("+", ImVec2(28 * S(), 0))) {
+        if (Btn("+", ImVec2(28 * S(), 0))) {
             pc::Layout c = l;
             pc::SetFansAt(&c, mt, fans + 1);
             SaveLayout(ctl, c);
@@ -4251,7 +4265,7 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
         Muted("Found on USB: %s%s.", m.aio->name, m.aio->lcd ? " (with a screen)" : "");
         if (l.cooler != pc::Cooler::Aio) {
             ImGui::SameLine();
-            if (ImGui::SmallButton("Show it")) {
+            if (SmallBtn("Show it")) {
                 pc::Layout c = l;
                 c.cooler = pc::Cooler::Aio;
                 SaveLayout(ctl, c);
@@ -4308,7 +4322,7 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
         Muted("The ARGB header is set up for %d fan%s (Devices > Fans); %d are marked RGB here.", argb, argb == 1 ? "" : "s", l.RgbFans());
     if (!l.guessed) {
         ImGui::Dummy(ImVec2(0, 2 * S()));
-        if (ImGui::Button("Back to LumaBridge's guess")) {
+        if (Btn("Back to LumaBridge's guess")) {
             ctl.prefs().caseLayout.clear();
             ctl.Changed();
         }
@@ -4651,7 +4665,7 @@ void AzothCard(Controller& ctl, const Fonts& f) {
     Muted("When you haven't typed for a while, the keys fade out and LumaBridge stops sending, so the keyboard can "
           "sleep (and save its battery wirelessly). The next key press lights it up again.");
     ImGui::SameLine();
-    if (ImGui::SmallButton("Run the device probe")) {
+    if (SmallBtn("Run the device probe")) {
         const std::wstring exe = AppDirectory() + L"\\tools\\device-probe.exe";
         ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
@@ -4720,9 +4734,9 @@ void HardwareCard(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f
         SetUpHelperButton(in, setup);
     } else {
         ImGui::BeginDisabled(in.Busy());
-        if (ImGui::SmallButton("Set up again")) in.Install("helper");
+        if (SmallBtn("Set up again")) in.Install("helper");
         ImGui::SameLine();
-        if (ImGui::SmallButton("Remove")) in.Remove("helper");
+        if (SmallBtn("Remove")) in.Remove("helper");
         ImGui::EndDisabled();
     }
     HelperMessage(in);
@@ -4809,7 +4823,7 @@ DeviceStatus AuraStatus(Controller& ctl, const AuraDeviceInfo& d) {
 // The top of a device's page: a way back, its name and how it's doing.
 bool DeviceHeader(UiState& ui, const Fonts& f, Icon icon, const std::string& name, const DeviceStatus& st,
                   bool experimental, const std::string& detail) {
-    if (ImGui::Button("<  All devices")) {
+    if (Btn("<  All devices")) {
         ui.deviceDetail.clear();
         return false;
     }
@@ -4885,7 +4899,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
     if (id == "aio") {
         const catalog::AioModel* aio = ctl.presence().Aio();
         if (!aio) {
-            if (ImGui::Button("<  All devices")) ui.deviceDetail.clear();
+            if (Btn("<  All devices")) ui.deviceDetail.clear();
             Muted("The cooler isn't there any more. Rescan devices on the list.");
             return;
         }
@@ -4904,7 +4918,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
                   l.radiator == pc::Mount::Top ? "on top" : "in front");
         } else {
             Muted("My setup shows an air cooler.");
-            if (ImGui::Button("Show this AIO in My setup")) {
+            if (Btn("Show this AIO in My setup")) {
                 l.cooler = pc::Cooler::Aio;
                 SaveLayout(ctl, l);
             }
@@ -4916,7 +4930,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
     if (id == "gpu") {
         const sensors::GpuStat* g = MainGpu(snap);
         if (!g) {
-            if (ImGui::Button("<  All devices")) ui.deviceDetail.clear();
+            if (Btn("<  All devices")) ui.deviceDetail.clear();
             Muted("No graphics card reported.");
             return;
         }
@@ -4962,7 +4976,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         for (const auto& x : devs)
             if ("aura:" + Utf8(x.name) == id) d = &x;
         if (!d) {
-            if (ImGui::Button("<  All devices")) ui.deviceDetail.clear();
+            if (Btn("<  All devices")) ui.deviceDetail.clear();
             Muted("This device isn't there any more. Rescan devices on the list.");
             return;
         }
@@ -5047,7 +5061,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
             DeviceLightingCard(ctl, ui, f, device::kOther);
             return;
         }
-        if (ImGui::Button("<  All devices")) ui.deviceDetail.clear();
+        if (Btn("<  All devices")) ui.deviceDetail.clear();
         Muted("This device isn't there any more.");
         return;
     }
@@ -5073,7 +5087,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
             DeviceLightingCard(ctl, ui, f, device::kOther);
             return;
         }
-        if (ImGui::Button("<  All devices")) ui.deviceDetail.clear();
+        if (Btn("<  All devices")) ui.deviceDetail.clear();
         Muted("OpenRGB doesn't list this device any more.");
         return;
     }
@@ -5113,7 +5127,7 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
         Muted("LumaBridge couldn't find the motherboard's Aura USB controller. Details are in the log.");
     }
     ImGui::Dummy(ImVec2(0, 4 * S()));
-    if (ImGui::Button("Rescan devices")) ctl.RescanDevices();
+    if (Btn("Rescan devices")) ctl.RescanDevices();
     EndCard();
 
     // Every device, like the games list: click one for its settings.
@@ -5399,7 +5413,7 @@ void FeedSetup(Controller& ctl, Integrations& in, UiState& ui, const std::string
         } else if (ui.cs2Installed) {
             Muted("%s", feeds.Cs2Seen() ? "CS2 is sending its game state." : "Set up. Restart CS2 once so it picks it up.");
             ImGui::BeginDisabled(in.Busy());
-            if (ImGui::Button("Remove##cs2"))
+            if (Btn("Remove##cs2"))
                 WriteFeedFile(in, ui, "cs2", "Counter-Strike 2 feed removed", Cs2ConfigPath(ui.cs2Dir), "", true);
             ImGui::EndDisabled();
         } else {
@@ -5423,7 +5437,7 @@ void FeedSetup(Controller& ctl, Integrations& in, UiState& ui, const std::string
                 Muted("%s", feeds.RocketLeagueConnected() ? "Connected to the game."
                                                           : "Switched on. Restart Rocket League if it's running.");
             ImGui::BeginDisabled(in.Busy());
-            if (on ? ImGui::Button("Switch off##rl") : PrimaryButton("Switch on##rl"))
+            if (on ? Btn("Switch off##rl") : PrimaryButton("Switch on##rl"))
                 WriteFeedFile(in, ui, "rocketleague",
                               on ? "Rocket League Stats API switched off" : "Rocket League Stats API switched on - restart the game",
                               RocketLeagueStatsIni(ui.rlDir), RocketLeagueStatsText(ui.rlDir, !on), false);
@@ -5441,7 +5455,7 @@ void FeedSetup(Controller& ctl, Integrations& in, UiState& ui, const std::string
                                           : "Set up. In Steam, add -gamestateintegration to Dota 2's launch options "
                                             "(Properties > General), then restart Dota 2.");
             ImGui::BeginDisabled(in.Busy());
-            if (ImGui::Button("Remove##dota2"))
+            if (Btn("Remove##dota2"))
                 WriteFeedFile(in, ui, "dota2", "Dota 2 feed removed", Dota2ConfigPath(ui.dotaDir), "", true);
             ImGui::EndDisabled();
         } else {
@@ -5512,7 +5526,7 @@ void FeedSetup(Controller& ctl, Integrations& in, UiState& ui, const std::string
             Muted("%s", feeds.DcsPortBusy() ? "UDP port 49717 is taken by another program."
                         : feeds.DcsSeen() ? "DCS is sending your aircraft's state."
                                           : "Set up. It lights up in your next mission (restart DCS if it's running).");
-            if (ImGui::Button("Remove##dcs")) {
+            if (Btn("Remove##dcs")) {
                 const std::string err = DcsSetUpScripts(true);
                 ui.feedMessageId = "dcs";
                 ui.feedMessage = err.empty() ? "Done: DCS World export removed" : "Failed: " + err;
@@ -5557,7 +5571,7 @@ void GameDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts&
     const games::GameProfile* profile =
         !ui.gameDetailProfile.empty() ? games::ProfileByKey(ui.gameDetailProfile.c_str()) : ProfileFor(g, running, ui.gameDetail);
 
-    if (ImGui::Button("<  All games")) {
+    if (Btn("<  All games")) {
         ui.gameDetail.clear();
         return;
     }
@@ -5660,7 +5674,7 @@ void GameDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts&
         BeginCard("game-remove");
         CardTitle(f, "Added by you", Icon::Info);
         Muted("You added this game to the list yourself.");
-        if (ImGui::Button("Remove from the list")) {
+        if (Btn("Remove from the list")) {
             const std::wstring exe = g->exePath;
             ui.gameDetail.clear();
             ctl.RemoveManualGame(exe);
@@ -5689,7 +5703,7 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(ctl.libraryScanning());
-    if (ImGui::Button(ctl.libraryScanning() ? "Scanning..." : "Rescan")) ctl.RescanLibrary();
+    if (Btn(ctl.libraryScanning() ? "Scanning..." : "Rescan")) ctl.RescanLibrary();
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::SetNextItemWidth(std::max(120 * S(), ImGui::GetContentRegionAvail().x));
@@ -5992,20 +6006,20 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
                 if (!dir.empty()) in.Install("corsair", dir);
             }
             ImGui::SameLine();
-            if (ImGui::Button("Remove from a game...")) {
+            if (Btn("Remove from a game...")) {
                 std::wstring dir = PickFolder(hwnd, L"Choose the game's folder");
                 if (!dir.empty()) in.Remove("corsair", dir);
             }
         } else if ((it.id == "handback" || it.id == "helper") && it.state != IntegrationState::NotInstalled) {
             // Setting it up again replaces the task (needed after updates that change it).
-            if (it.state == IntegrationState::Problem ? PrimaryButton("Update") : ImGui::Button("Set up again"))
+            if (it.state == IntegrationState::Problem ? PrimaryButton("Update") : Btn("Set up again"))
                 in.Install(it.id);
             ImGui::SameLine();
-            if (ImGui::Button("Remove")) in.Remove(it.id);
+            if (Btn("Remove")) in.Remove(it.id);
         } else if (it.state == IntegrationState::Active) {
-            if (ImGui::Button("Remove")) in.Remove(it.id);
+            if (Btn("Remove")) in.Remove(it.id);
         } else if (it.state == IntegrationState::Conflict) {
-            if (ImGui::Button("Replace vendor runtime")) in.Install(it.id, L"", true);
+            if (Btn("Replace vendor runtime")) in.Install(it.id, L"", true);
         } else {
             if (PrimaryButton(it.id == "logitech" || it.id == "handback" || it.id == "helper" ? "Set up" : "Install"))
                 in.Install(it.id);
@@ -6055,7 +6069,7 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
         cfg.auraCorrection.gamma = gamma;
         ctl.Changed();
     }
-    if (ImGui::Button("Reset calibration")) {
+    if (Btn("Reset calibration")) {
         double brightness = cfg.auraCorrection.brightness;
         cfg.auraCorrection = ColorCorrection{};
         cfg.auraCorrection.brightness = brightness;
@@ -6098,7 +6112,7 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
     CardTitle(f, "Setup guide", Icon::Plug);
     Muted("Asks which RGB hardware and lighting software you have, and sets up LumaBridge's connections to match.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
-    if (ImGui::Button("Run the setup guide again")) {
+    if (Btn("Run the setup guide again")) {
         ui.setupStep = 0;
         ui.setupDetected = false;
     }
@@ -6109,18 +6123,18 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
     ImGui::Text("LumaBridge %s", kVersionText);
     Muted("Game lighting for ASUS Aura, without Armoury Crate in the way.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
-    if (ImGui::Button("Releases on GitHub"))
+    if (Btn("Releases on GitHub"))
         ShellExecuteW(nullptr, L"open", L"https://github.com/EmilB04/LumaBridge/releases", nullptr, nullptr, SW_SHOWNORMAL);
     EndCard();
 
     BeginCard("trouble");
     CardTitle(f, "Troubleshooting", Icon::Info);
-    if (ImGui::Button("Open log folder")) {
+    if (Btn("Open log folder")) {
         std::wstring dir = ctl.logPath().substr(0, ctl.logPath().find_last_of(L"\\/"));
         ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Open settings file"))
+    if (Btn("Open settings file"))
         ShellExecuteW(nullptr, L"open", L"notepad.exe", ctl.configPath().c_str(), nullptr, SW_SHOWNORMAL);
     EndCard();
 }
@@ -6177,7 +6191,7 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width, bool col
         if (hovered) dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Hex(kCardHover), 8 * S());
         // Right (tap to expand) when collapsed, left (tap to collapse) when open.
         const ImVec2 c(p.x + h / 2, p.y + h / 2);
-        const float len = 4 * S(), dir = collapsed ? 1.f : -1.f, lw = std::max(1.5f, 2 * S());
+        const float len = 4 * S(), dir = collapsed ? -1.f : 1.f, lw = std::max(1.5f, 2 * S());
         const ImU32 col = hovered ? Hex(kText) : Hex(kMuted);
         dl->AddLine(ImVec2(c.x + dir * len, c.y - len), ImVec2(c.x - dir * len * 0.2f, c.y), col, lw);
         dl->AddLine(ImVec2(c.x - dir * len * 0.2f, c.y), ImVec2(c.x + dir * len, c.y + len), col, lw);
@@ -6458,7 +6472,7 @@ void SetupDevicesStep(Controller& ctl, UiState& ui, const Fonts& f) {
             ImGui::PushID(n);
             char b[4];
             snprintf(b, sizeof b, "%d", n);
-            if (n == l.Fans() ? PrimaryButton(b, ImVec2(34 * S(), 0)) : ImGui::Button(b, ImVec2(34 * S(), 0))) {
+            if (n == l.Fans() ? PrimaryButton(b, ImVec2(34 * S(), 0)) : Btn(b, ImVec2(34 * S(), 0))) {
                 l.fans = n;
                 ctl.Changed();
             }
@@ -6473,7 +6487,7 @@ void SetupDevicesStep(Controller& ctl, UiState& ui, const Fonts& f) {
             ImGui::PushID(100 + n);
             char b[4];
             snprintf(b, sizeof b, "%d", n);
-            if (n == l.LedsPerFan() ? PrimaryButton(b, ImVec2(34 * S(), 0)) : ImGui::Button(b, ImVec2(34 * S(), 0))) {
+            if (n == l.LedsPerFan() ? PrimaryButton(b, ImVec2(34 * S(), 0)) : Btn(b, ImVec2(34 * S(), 0))) {
                 l.ledsPerFan = n;
                 ctl.Changed();
             }
@@ -6704,7 +6718,7 @@ void SetupGuide(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
     const float gap = 12 * S(), tileW = (colW - gap) / 2;
     auto footer = [&](bool back, const char* next) {
         ImGui::Dummy(ImVec2(0, 12 * S()));
-        if (back && ImGui::Button("Back", ImVec2(110 * S(), 0))) --ui.setupStep;
+        if (back && Btn("Back", ImVec2(110 * S(), 0))) --ui.setupStep;
         const float nw = std::max(150 * S(), ImGui::CalcTextSize(next).x + 40 * S());
         ImGui::SameLine(ImGui::GetContentRegionMax().x - nw);
         return PrimaryButton(next, ImVec2(nw, 0));
@@ -6721,7 +6735,7 @@ void SetupGuide(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
                 "software runs on this PC. LumaBridge looks for them itself and ticks what it finds - you only "
                 "correct what's wrong. Then it sets up its connections, all on unless your answers rule one out.");
         ImGui::Dummy(ImVec2(0, 8 * S()));
-        if (ImGui::Button("Skip - I'll set it up myself")) SetupFinish(ctl, ui);
+        if (Btn("Skip - I'll set it up myself")) SetupFinish(ctl, ui);
         const float nw = 150 * S();
         ImGui::SameLine(ImGui::GetContentRegionMax().x - nw);
         if (PrimaryButton("Get started", ImVec2(nw, 0))) {
@@ -7068,8 +7082,16 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
         return;
     }
     // Icon-only below 760: the sidebar's full width plus the main content couldn't both fit.
-    const bool sidebarCollapsed = ui.sidebarCollapsed || ImGui::GetContentRegionAvail().x < 760 * S();
-    const float sidebarW = sidebarCollapsed ? 60 * S() : 210 * S();
+    // Its width eases towards that target instead of jumping; the content (labels or icons
+    // only) switches partway through, once there's room either way.
+    const bool sidebarTarget = ui.sidebarCollapsed || ImGui::GetContentRegionAvail().x < 760 * S();
+    ImGuiStorage* sidebarSt = ImGui::GetStateStorage();
+    const ImGuiID sidebarTid = ImGui::GetID("##sidebar-collapse-t");
+    float sidebarT = sidebarSt->GetFloat(sidebarTid, sidebarTarget ? 0.f : 1.f);
+    sidebarT += ((sidebarTarget ? 0.f : 1.f) - sidebarT) * std::min(1.f, ImGui::GetIO().DeltaTime * 12.f);
+    sidebarSt->SetFloat(sidebarTid, sidebarT);
+    const float sidebarW = 60 * S() + (210 * S() - 60 * S()) * sidebarT;
+    const bool sidebarCollapsed = sidebarT < 0.5f;
     Sidebar(ctl, ui, f, sidebarW, sidebarCollapsed);
     ImGui::SameLine(0, 0);
 
