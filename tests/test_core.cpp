@@ -688,6 +688,18 @@ static void TestRocketLeague() {
     CHECK(rl.OnMessage(J(R"({"Event":"MatchDestroyed","Data":{}})"), 11000));
     CHECK(!rl.Active(11000) && rl.myTeam() == -1);
 
+    // A muted custom team color (Rocket League lets players pick almost any primary color)
+    // comes out boosted, not washed out; an already-vivid one passes through untouched.
+    RocketLeagueLighting muted;
+    CHECK(muted.OnMessage(J(R"({"Event":"UpdateState","Data":{"Game":{"bHasTarget":false,)"
+                            R"("Teams":[{"TeamNum":0,"ColorPrimary":"808080"},{"TeamNum":1,"ColorPrimary":"FF6E00"}]}}})"),
+                          1000));
+    const luma::Rgb boosted = muted.Current(1000).color1;
+    CHECK(boosted.r != boosted.g || boosted.g != boosted.b);  // no longer flat gray
+    CHECK(std::max({boosted.r, boosted.g, boosted.b}) > 200);  // bright
+    CHECK(std::max({boosted.r, boosted.g, boosted.b}) - std::min({boosted.r, boosted.g, boosted.b}) > 80);  // saturated
+    CHECK((muted.Current(1000).color2 == luma::Rgb{255, 110, 0}));  // vivid input: untouched
+
     // Your team (the camera's target): orange -> orange, bright to dim, not blue.
     RocketLeagueLighting me;
     CHECK(me.OnMessage(J(R"({"Event":"UpdateState","Data":{"Game":{"bHasTarget":true,"Target":{"Name":"me","TeamNum":1},)"

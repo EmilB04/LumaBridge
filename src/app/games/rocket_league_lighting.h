@@ -10,7 +10,9 @@
 // Unknown events are ignored (and counted, for the log).
 #pragma once
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <string>
@@ -121,7 +123,9 @@ public:
                 for (size_t i = 0; i < teams.size() && i < 2; ++i) {
                     const int num = static_cast<int>(teams[i]["TeamNum"].Number(static_cast<double>(i)));
                     Rgb c;
-                    if (ParseHex(teams[i]["ColorPrimary"].String(), &c) && num >= 0 && num < 2) teamColor_[num] = c;
+                    // Rocket League lets players pick almost any primary color, including muted
+                    // or dark ones; boost it so the lighting still reads clearly.
+                    if (ParseHex(teams[i]["ColorPrimary"].String(), &c) && num >= 0 && num < 2) teamColor_[num] = Vivid(c);
                 }
             }
         } else if (event == "GoalScored") {
@@ -181,6 +185,33 @@ private:
     static Rgb Dim(Rgb c) {
         return Rgb{static_cast<uint8_t>(c.r * 35 / 100), static_cast<uint8_t>(c.g * 35 / 100),
                    static_cast<uint8_t>(c.b * 35 / 100)};
+    }
+    // Floors a color's saturation and brightness (HSV) so a muted or dark team color still
+    // reads as a clear, distinct hue on RGB hardware, instead of a washed-out gray.
+    static Rgb Vivid(Rgb c) {
+        const double r = c.r / 255.0, g = c.g / 255.0, b = c.b / 255.0;
+        const double maxc = std::max({r, g, b}), minc = std::min({r, g, b}), d = maxc - minc;
+        const double s0 = maxc == 0 ? 0.0 : d / maxc, v0 = maxc;
+        if (s0 >= 0.7 && v0 >= 0.9) return c;  // already vivid: leave the exact bytes alone
+        double h = 0;
+        if (d > 0) {
+            if (maxc == r) h = std::fmod((g - b) / d, 6.0);
+            else if (maxc == g) h = (b - r) / d + 2.0;
+            else h = (r - g) / d + 4.0;
+            h *= 60.0;
+            if (h < 0) h += 360.0;
+        }
+        const double s = std::max(s0, 0.7), v = std::max(v0, 0.9);
+        const double cc = v * s, x = cc * (1 - std::fabs(std::fmod(h / 60.0, 2.0) - 1)), m = v - cc;
+        double r2, g2, b2;
+        if (h < 60) { r2 = cc; g2 = x; b2 = 0; }
+        else if (h < 120) { r2 = x; g2 = cc; b2 = 0; }
+        else if (h < 180) { r2 = 0; g2 = cc; b2 = x; }
+        else if (h < 240) { r2 = 0; g2 = x; b2 = cc; }
+        else if (h < 300) { r2 = x; g2 = 0; b2 = cc; }
+        else { r2 = cc; g2 = 0; b2 = x; }
+        return Rgb{static_cast<uint8_t>((r2 + m) * 255 + 0.5), static_cast<uint8_t>((g2 + m) * 255 + 0.5),
+                   static_cast<uint8_t>((b2 + m) * 255 + 0.5)};
     }
     static bool ParseHex(const std::string& in, Rgb* out) {
         std::string s = in;
