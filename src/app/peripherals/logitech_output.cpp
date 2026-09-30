@@ -379,9 +379,12 @@ void LogitechOutput::Run() {
             last[0] = last[1] = last[2] = -1;
         };
         // The mouse's own effects run on its own clock: fine for your own lighting, but a game's
-        // lighting goes LED by LED, in step with the other devices.
+        // lighting goes LED by LED, in step with the other devices. Also not while fading out for
+        // sleep (level < 1): re-sending the effect with a falling intensity restarts its own
+        // animation from the start each time (up to 4 times a second), which flickers instead of
+        // dimming - the scaled per-key/fixed-color path below fades smoothly instead.
         std::optional<hidpp::Effect> want =
-            mouse.open() && !inStep_ ? hidpp::ForEffect(effect, mouse.layout()) : std::nullopt;
+            mouse.open() && !inStep_ && level >= 1.0 ? hidpp::ForEffect(effect, mouse.layout()) : std::nullopt;
         if (want) want->intensity = static_cast<uint8_t>(level * 100 + 0.5);
         if (want) {
             // Slider drags change the speed many times a second: at most 4 sends a second.

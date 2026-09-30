@@ -5238,8 +5238,11 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
     if (HasLogitechRgb(ctl))
         rows.push_back({device::kMouse, LogitechName(ctl), LogitechKinds(ctl) + ", through G HUB", Icon::Mouse,
                         LogitechStatus(ctl)});
-    if (HasAzoth(ctl)) rows.push_back({device::kKeyboard, "ASUS ROG Azoth", "Keyboard", Icon::Keyboard, AzothStatus(ctl)});
-    if (HasDualSense(ctl))
+    // Shown whenever switched on, found or not: otherwise a device that fails to be found has
+    // no row to click for why (the exact diagnostic a "not found" state exists to answer).
+    if (ctl.prefs().azothKeyboard || HasAzoth(ctl))
+        rows.push_back({device::kKeyboard, "ASUS ROG Azoth", "Keyboard", Icon::Keyboard, AzothStatus(ctl)});
+    if (ctl.prefs().dualsenseController || HasDualSense(ctl))
         rows.push_back({device::kController, "DualSense", "Controller", Icon::Game, DualSenseStatus(ctl)});
     if (ctl.prefs().lampArray)
         for (const auto& d : ctl.lampArray().devices())
