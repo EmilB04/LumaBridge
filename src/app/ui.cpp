@@ -19,6 +19,7 @@
 #include "scene_gpu.h"
 #include "desk_models.h"
 #include "pc_model.h"
+#include "monitor_model.h"
 #include "game_feeds.h"
 #include "game_profiles.h"
 #include "friendly_names.h"
@@ -3150,14 +3151,7 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
                 sc.xf = lean.Then(sc.xf);
             }
             const float hw = d.w / 2 + 0.8f, top = d.bottom + d.h + 0.8f;
-            if (!d.resting && d.bottom < 20) {  // on its own stand (a small screen has none)
-                sc.bias = 3;
-                sc.Box({-9, 0, -7}, {9, 1, 5}, H(0x23272F), id);
-                sc.bias = 0;
-                sc.Box({-2, 1, -4.4f}, {2, d.bottom + 2, -2.4f}, H(0x2B3039), id);
-            } else if (!d.resting) {  // on an arm from behind
-                sc.Box({-1.2f, d.bottom + d.h / 2 - 1.2f, -14}, {1.2f, d.bottom + d.h / 2 + 1.2f, -4.4f}, H(0x2B3039), id);
-            }
+            monitor3d::Support(sc, d, id);
             sc.Box({-hw, std::max(0.f, d.bottom - 0.8f), -4.4f}, {hw, top, -2.5f}, H(0x23272F), id);
             sc.Quad({-d.w / 2, d.bottom, -2.45f}, {d.w / 2, d.bottom, -2.45f}, {d.w / 2, d.bottom + d.h, -2.45f},
                     {-d.w / 2, d.bottom + d.h, -2.45f}, H(0x0D1422), id, s3d::kEmissive);
@@ -4643,6 +4637,7 @@ DeviceStatus DualSenseStatus(Controller& ctl) {
     if (!ctl.prefs().dualsenseController) return {"Off", kMuted};
     switch (ds.state()) {
     case D_::Active: return {ds.bluetooth() ? "Following LumaBridge (Bluetooth)" : "Following LumaBridge (USB)", kGreen};
+    case D_::Connecting: return {"Connecting (Bluetooth)", kAmber};
     case D_::NotFound: return {"Not connected", kAmber};
     default: return {"The game or Steam's lighting", kMuted};
     }
@@ -4760,9 +4755,7 @@ void AzothCard(Controller& ctl, const Fonts& f) {
 void DualSenseCard(Controller& ctl, const Fonts& f) {
     BeginCard("dualsense");
     CardTitle(f, "Settings", Icon::Gear);
-    ImGui::PushStyleColor(ImGuiCol_Text, V4(kAmber));
-    ImGui::TextWrapped("Experimental: not checked against a real DualSense - say so if something looks wrong.");
-    ImGui::PopStyleColor();
+    Muted("USB and Bluetooth lightbar control are confirmed working.");
     Muted("The lightbar follows LumaBridge's effect as one color, by USB cable or Bluetooth. LumaBridge talks to "
           "the controller directly (no Steam or extra software needed), and never saves anything to it, so it goes "
           "back to whatever the game or Steam set as soon as LumaBridge lets go.");
@@ -4774,8 +4767,10 @@ void DualSenseCard(Controller& ctl, const Fonts& f) {
         using D_ = DualSenseOutput::State;
         const D_ st = ctl.dualsense().state();
         if (st == D_::Active) Pill(ctl.dualsense().bluetooth() ? "Active (Bluetooth)" : "Active (USB)", kGreen);
+        else if (st == D_::Connecting) Pill("Connecting (Bluetooth)", kAmber);
         else if (st == D_::Released) Pill("Handed off", kMuted);
         else Pill("Not found", kAmber);
+        if (st == D_::Connecting) Muted("Waiting a few seconds for the controller's startup lights.");
         if (st == D_::NotFound) {
             const unsigned long err = ctl.dualsense().lastWriteError();
             if (err)

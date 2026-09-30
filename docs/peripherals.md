@@ -197,21 +197,31 @@ Not yet:
 
 `tools\device-probe.exe` lists the HID interfaces of ASUS and Logitech devices (read-only).
 
-## Sony DualSense (PS5 controller), lightbar only (experimental, unverified)
+## Sony DualSense (PS5 controller), lightbar only
 
-By USB cable (`0B05` is ASUS; the DualSense itself is Sony, `054C:0CE6`, or `054C:0DF2` for
-the DualSense Edge) or Bluetooth - no Steam or other software needed, LumaBridge talks to the
-controller directly. The lightbar is one LED, so it shows the effect's first color, the way a
-single-LED Logitech mouse does; the five player-indicator LEDs are left off.
+USB lighting (`054C:0CE6`, or `054C:0DF2` for DualSense Edge) is confirmed working on real
+hardware. Bluetooth lightbar changes are also confirmed on the owner's controller using
+Windows' 547-byte HID collection. No Steam or other software is required. The lightbar shows one color from
+LumaBridge's effect; the five player indicators stay off.
 
-The output report layout (`dualsense_protocol.h`) is reimplemented from OpenRGB's Sony
-DualSense driver (`Controllers/SonyGamepadController/SonyDualSenseController`,
-GPL-2.0-or-later), from its documented byte offsets, not copied - LumaBridge has no DualSense
-of its own to capture from. The Bluetooth report adds a CRC-32 (the common zlib/PKZIP
-variant); `tests/test_core.cpp` checks the CRC against the standard "123456789" test vector
-and the report layout against the documented offsets, but **none of this has been checked
-against a real controller.** Treat it as unverified until someone confirms it works (or
-files a bug with what went wrong).
+The USB packet keeps the previously verified OpenRGB-derived layout. Bluetooth follows the
+[Linux PlayStation driver's documented report fields](https://github.com/torvalds/linux/blob/master/drivers/hid/hid-playstation.c)
+and [SDL's Bluetooth header correction](https://github.com/libsdl-org/SDL/commit/129627068fe266ed68c0725f47a026eae889b992).
+Its 78-byte report starts with `0x31`, a four-bit sequence in the high nibble, and `0x10`.
+The common payload starts at byte 3; RGB is at bytes 47–49. Bytes 74–77 contain the
+little-endian CRC-32 covering `0xA2` plus report bytes 0–73.
+
+Windows may report a maximum output size of 547 bytes for the Bluetooth collection, even
+though the lightbar packet itself is 78 bytes. Detection uses the gamepad's input report
+size, and output is zero-padded to the HID collection's maximum size, following
+[HIDAPI's Windows write behavior](https://github.com/libusb/hidapi/blob/master/windows/hid.c).
+
+On Bluetooth connection, LumaBridge requests feature `0x09` for enhanced reports, then sends
+one lightbar setup/reset packet with SDL's LED-release flag before the first color, after a
+five-second startup wait so Sony's connection animation can finish. The reset is repeated after handing
+lighting back and reclaiming it. Color packets enable only lightbar and player indicator
+updates; they leave audio, microphone, rumble and trigger controls alone. Tests check header,
+sequence wrap, startup fields, output offsets and a checksum fixture computed independently.
 
 ## RAM: HyperX / Kingston FURY RGB DDR4 (experimental)
 

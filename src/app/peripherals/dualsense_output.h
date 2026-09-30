@@ -1,5 +1,5 @@
-// Sony DualSense lightbar, by USB or Bluetooth (dualsense_protocol.h). Opt-in (experimental,
-// untested on real hardware). Own thread; the lightbar is a single color, so there's nothing
+// Sony DualSense lightbar, by USB or Bluetooth (dualsense_protocol.h). Opt-in; both links
+// are confirmed on real hardware. Own thread; the lightbar is a single color, so there's nothing
 // to redraw per-LED the way the Azoth's keys need.
 #pragma once
 
@@ -16,7 +16,7 @@ namespace luma::app {
 
 class DualSenseOutput {
 public:
-    enum class State { Off, NotFound, Active, Released };
+    enum class State { Off, NotFound, Active, Released, Connecting };
     enum class Link { Usb, Bluetooth };
 
     ~DualSenseOutput() { Stop(); }

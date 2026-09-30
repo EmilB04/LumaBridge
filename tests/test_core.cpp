@@ -33,6 +33,7 @@
 #include "controller_model.h"
 #include "scene_mesh.h"
 #include "desk_models.h"
+#include "monitor_model.h"
 #include "pc_model.h"
 #include "pc_layout.h"
 #include "display_layout.h"
@@ -929,6 +930,20 @@ static void TestSceneDepth() {
 static void TestDeskModels() {
     using namespace luma::app;
     using namespace s3d;
+    Scene support;
+    displays::Placed monitor;
+    monitor3d::Support(support, monitor, 30);
+    CHECK(!support.faces.empty());
+    for (const Face& face : support.faces)
+        for (int i = 0; i < face.n; ++i)
+            if (face.p[static_cast<size_t>(i)].y > 1.01f) CHECK(face.p[static_cast<size_t>(i)].z <= -4.4f);
+    support = {};
+    monitor.portrait = true;
+    monitor3d::Support(support, monitor, 30);
+    CHECK(support.faces.empty());
+    monitor.portrait = false; monitor.resting = true;
+    monitor3d::Support(support, monitor, 30);
+    CHECK(support.faces.empty());
     Scene keyboard, mouse, pc;
     desk3d::Keyboard(keyboard, 21, std::vector<Rgb>(azoth::IsoKeys().size(), {20, 150, 255}), true, true);
     desk3d::Mouse(mouse, 22, std::vector<Rgb>(8, {20, 150, 255}), true);
@@ -1148,7 +1163,7 @@ static void TestDisplayLayout() {
     CHECK(p[2].resting && p[2].bottom < 1 && p[2].lean < 0.2f && p[2].z > p[0].z);
     CHECK(std::fabs(p[0].bottom - (0.3f + 13.6f + 0.3f)) < 0.01f);  // no gap between them
     CHECK(p[2].x > -59.7f / 2 && p[2].x + 21.7f / 2 < 59.7f / 2);    // under it, not beside it
-    CHECK(!p[1].resting && p[1].bottom > 0 && p[1].yaw < 0);  // the portrait one, on a stand, turned
+    CHECK(p[1].portrait && !p[1].resting && p[1].bottom > 0 && p[1].yaw < 0);  // vertical, mounted without a stand
 }
 
 static void TestDisplaySizes() {
@@ -1578,16 +1593,29 @@ static void TestDualSense() {
     CHECK((usb[45] == 0x11 && usb[46] == 0x22 && usb[47] == 0x33));
     for (size_t i = 3; i < 9; ++i) CHECK(usb[i] == 0);  // untouched: rumble, headphone volume, ...
 
-    const auto bt = BtReport(luma::Rgb{0x44, 0x55, 0x66});
+    CHECK(BluetoothCollection(78, 78) && BluetoothCollection(78, 547));
+    CHECK(!BluetoothCollection(64, 547) && !BluetoothCollection(78, 48));
+    CHECK(UsbCollection(64, 48) && !UsbCollection(78, 547));
+    const auto bt = BtReport(luma::Rgb{0x44, 0x55, 0x66}, 7);
     CHECK(bt.size() == kBtReportSize);
-    CHECK((bt[0] == 0x31 && bt[1] == 0x02 && bt[2] == 0x0F && bt[3] == 0x55));  // one byte in from the USB layout
-    CHECK(bt[10] == kDirectMode);
-    CHECK(bt[40] == 0xFF);
-    CHECK(bt[45] == 0x20);
-    CHECK((bt[46] == 0x44 && bt[47] == 0x55 && bt[48] == 0x66));
-    // The CRC is recomputed if a single byte changes.
-    const auto bt2 = BtReport(luma::Rgb{0x44, 0x55, 0x67});
-    CHECK(std::memcmp(bt.data() + kBtReportSize - 4, bt2.data() + kBtReportSize - 4, 4) != 0);
+    CHECK((bt[0] == 0x31 && bt[1] == 0x70 && bt[2] == 0x10));
+    CHECK(bt[3] == 0 && bt[4] == 0x14);  // only lightbar and player indicators enabled
+    CHECK(bt[41] == 0 && bt[44] == 0 && bt[46] == 0);
+    CHECK((bt[47] == 0x44 && bt[48] == 0x55 && bt[49] == 0x66));
+    for (size_t i = 5; i < 41; ++i) CHECK(bt[i] == 0);  // motors, audio, mic and triggers untouched
+    const auto padded = HidWriteBuffer(bt, 547);
+    CHECK(padded.size() == 547 && std::equal(bt.begin(), bt.end(), padded.begin()));
+    for (size_t i = 78; i < padded.size(); ++i) CHECK(padded[i] == 0);
+    CHECK(HidWriteBuffer(bt, 48).empty() && HidWriteBuffer(bt, 5000).empty());
+    const auto reset = BtResetReport(0);
+    CHECK(reset[3] == 0 && reset[4] == 8 && reset[41] == 2 && reset[44] == 2);
+    CHECK(reset[47] == 0 && reset[48] == 0 && reset[49] == 0);
+    CHECK(BtReport({}, 15)[1] == 0xF0 && BtReport({}, 16)[1] == 0);
+    // The independent zlib/PKZIP checksum covers direction plus the complete 74-byte frame.
+    CHECK((bt[74] == 0xF0 && bt[75] == 0xCF && bt[76] == 0x34 && bt[77] == 0xA4));
+    const auto bt2 = BtReport(luma::Rgb{0x44, 0x55, 0x66}, 8);
+    CHECK(std::memcmp(bt.data() + 74, bt2.data() + 74, 4) != 0);
+
 }
 
 static void TestLogitechHidpp() {

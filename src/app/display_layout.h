@@ -84,6 +84,7 @@ struct Placed {
     float w = 60, h = 34;
     float yaw = 0;
     bool resting = false;  // a small screen (under 16"): no stand, resting on the desk, leaning back
+    bool portrait = false;  // vertical monitors are mounted without a stand
     float lean = 0;        // how far it leans back (radians)
 };
 
@@ -121,7 +122,12 @@ inline std::vector<Placed> Arrange(const std::vector<Display>& list) {
     int prim = 0;
     for (int i = 0; i < n; ++i)
         if (list[static_cast<size_t>(i)].primary) prim = i;
-    for (int i = 0; i < n; ++i) ScreenSize(list[static_cast<size_t>(i)], &out[static_cast<size_t>(i)].w, &out[static_cast<size_t>(i)].h);
+    for (int i = 0; i < n; ++i) {
+        Placed& screen = out[static_cast<size_t>(i)];
+        const Display& display = list[static_cast<size_t>(i)];
+        ScreenSize(display, &screen.w, &screen.h);
+        screen.portrait = display.h > display.w;
+    }
     const Display& p = list[static_cast<size_t>(prim)];
     const float cmPerPx = out[static_cast<size_t>(prim)].w / static_cast<float>(std::max(1, p.w));
     // Centers (x across, y up), first straight from Windows' pixels...

@@ -23,6 +23,10 @@ and desk in 3D, live.
 - **DualSense model:** a detailed two-tone controller on the desk, with shaped grips,
   touchpad, sticks, face buttons and triggers. Its light strips follow the controller's
   actual lightbar color; drag and rotate it like the keyboard and mouse.
+- **DualSense Bluetooth:** wireless lighting handles Windows HID report sizes, initializes
+  the controller lightbar on connection, and resumes after lighting control is handed back.
+- **Monitor supports:** stands sit behind the screen instead of poking through it; vertical
+  monitors and small desk panels have no stand.
 - **Detailed 3D setup:** sculpted keyboard keys with legends, the Azoth's screen and knob,
   a curved mouse with separate buttons, wheel, thumb rest and light strips, and a PC chassis
   with vents, glass, connectors and component detail. A depth buffer keeps parts correctly

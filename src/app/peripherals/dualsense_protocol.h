@@ -2,12 +2,10 @@
 // below is the one OpenRGB's Sony DualSense driver uses (GPL-2.0-or-later,
 // Controllers/SonyGamepadController/SonyDualSenseController), reimplemented here from its
 // documented byte offsets rather than copied, since LumaBridge has no DualSense of its own to
-// capture from. Untested on real hardware; say so plainly until it's confirmed.
+// capture from. USB and Bluetooth lighting are confirmed on real hardware.
 //
-// Report ID 0x02 (USB) / 0x31 (Bluetooth) is a "set state" output report: two feature-enable
-// flag bytes gate which fields the controller actually applies, then (among things LumaBridge
-// doesn't touch: rumble, trigger effects, mic LED) a lightbar brightness/fade byte, a bitmask
-// for the five player-indicator LEDs (left unlit here) and the lightbar's own RGB. Bluetooth
+// Report ID 0x02 (USB) / 0x31 (Bluetooth) carries feature-enable flags and the lightbar RGB.
+// Bluetooth enables only lighting fields; the established USB packet is kept intact. Bluetooth
 // wraps the same payload with a 4-byte CRC-32 (the zlib/PKZIP variant, poly 0xEDB88320, the
 // common one, reflected, init/xorout 0xFFFFFFFF) over a leading 0xA2 "direction" byte the
 // wire doesn't otherwise carry.
@@ -16,6 +14,8 @@
 #include <array>
 #include <cstdint>
 #include <cstddef>
+#include <vector>
+#include <algorithm>
 
 #include "color.h"
 
@@ -27,6 +27,22 @@ constexpr uint16_t kProductEdge = 0x0DF2;      // DualSense Edge
 
 constexpr size_t kUsbReportSize = 48;
 constexpr size_t kBtReportSize = 78;
+
+// Windows exposes the largest report in the collection, not just lighting report 0x31.
+// Current Bluetooth descriptors can have 547-byte output/feature reports and 78-byte input.
+inline bool BluetoothCollection(size_t inputLength, size_t outputLength) {
+    return inputLength == 78 && outputLength >= kBtReportSize && outputLength <= 4096;
+}
+inline bool UsbCollection(size_t inputLength, size_t outputLength) {
+    return inputLength == 64 && outputLength >= kUsbReportSize && outputLength <= 4096;
+}
+template <size_t N>
+inline std::vector<uint8_t> HidWriteBuffer(const std::array<uint8_t, N>& report, size_t outputLength) {
+    if (outputLength < N || outputLength > 4096) return {};
+    std::vector<uint8_t> buffer(outputLength, 0);
+    std::copy(report.begin(), report.end(), buffer.begin());
+    return buffer;
+}
 
 constexpr uint8_t kDirectMode = 0x01;  // SetupZones' "Direct" mode value: take over the lightbar
 
@@ -57,32 +73,45 @@ inline uint32_t Crc32(const uint8_t* data, size_t n) {
     return ~crc;
 }
 
-// A full Bluetooth output report (78 bytes), CRC included. The CRC covers the leading 0xA2
-// "direction" byte (the report the controller actually reads starts at byte 1: Windows'
-// HID write doesn't send the 0xA2 itself, only what it signs).
-inline std::array<uint8_t, kBtReportSize> BtReport(Rgb color) {
-    std::array<uint8_t, kBtReportSize + 1> signedBuf{};  // [0] is the 0xA2, not sent
-    signedBuf[0] = 0xA2;
-    signedBuf[1] = 0x31;
-    signedBuf[2] = 0x02;
-    signedBuf[3] = 0x0F;
-    signedBuf[4] = 0x55;
-    signedBuf[11] = kDirectMode;
-    signedBuf[41] = 0xFF;
-    signedBuf[44] = 0x02;  // bypasses the default blue that shows before any report arrives
-    signedBuf[45] = 0x00;  // brightness: 0 = full
-    signedBuf[46] = 0x20;
-    signedBuf[47] = color.r;
-    signedBuf[48] = color.g;
-    signedBuf[49] = color.b;
-
+// Bluetooth has three header bytes: report ID, four-bit sequence in the high nibble,
+// then the fixed 0x10 tag. The 47-byte common payload starts at byte 3, two bytes later
+// than USB. See Linux hid-playstation.c and SDL's February 2026 Bluetooth format fix.
+inline std::array<uint8_t, kBtReportSize> BtFrame(uint8_t sequence) {
     std::array<uint8_t, kBtReportSize> out{};
-    for (size_t i = 0; i < kBtReportSize - 4; ++i) out[i] = signedBuf[i + 1];
-    const uint32_t crc = Crc32(signedBuf.data(), kBtReportSize - 4 + 1);  // +1: the leading 0xA2
-    out[kBtReportSize - 4] = static_cast<uint8_t>(crc);
-    out[kBtReportSize - 3] = static_cast<uint8_t>(crc >> 8);
-    out[kBtReportSize - 2] = static_cast<uint8_t>(crc >> 16);
-    out[kBtReportSize - 1] = static_cast<uint8_t>(crc >> 24);
+    out[0] = 0x31;
+    out[1] = static_cast<uint8_t>((sequence & 15) << 4);
+    out[2] = 0x10;
+    return out;
+}
+
+inline void SignBt(std::array<uint8_t, kBtReportSize>* out) {
+    std::array<uint8_t, kBtReportSize - 4 + 1> signedBuf{};
+    signedBuf[0] = 0xA2;  // HID output direction: signed, but not sent in the report
+    for (size_t i = 0; i < kBtReportSize - 4; ++i) signedBuf[i + 1] = (*out)[i];
+    const uint32_t crc = Crc32(signedBuf.data(), signedBuf.size());
+    for (size_t i = 0; i < 4; ++i) (*out)[kBtReportSize - 4 + i] = static_cast<uint8_t>(crc >> (i * 8));
+}
+
+// The controller's Bluetooth startup animation must release the lightbar before colors
+// can take effect. Send this once on connection or when reclaiming lighting control.
+inline std::array<uint8_t, kBtReportSize> BtResetReport(uint8_t sequence) {
+    auto out = BtFrame(sequence);
+    out[4] = 0x08;   // common valid_flag1: release the existing LED animation (SDL)
+    out[41] = 0x02;  // common valid_flag2: enable lightbar setup
+    out[44] = 0x02;  // common lightbar_setup: fade out the startup animation
+    SignBt(&out);
+    return out;
+}
+
+// Only the lightbar and player LEDs are enabled: rumble, audio and triggers keep their
+// game's settings. The player indicators stay off, as with the USB lighting mode.
+inline std::array<uint8_t, kBtReportSize> BtReport(Rgb color, uint8_t sequence = 0) {
+    auto out = BtFrame(sequence);
+    out[4] = 0x14;  // common valid_flag1: lightbar color and player indicators
+    out[47] = color.r;
+    out[48] = color.g;
+    out[49] = color.b;
+    SignBt(&out);
     return out;
 }
 
