@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(LumaBridge LANGUAGES CXX VERSION 0.27.1)
+project(LumaBridge LANGUAGES CXX VERSION 0.28.0)
 
 if(NOT WIN32)
     message(STATUS "Non-Windows host: only the portable core tests will be built.")
@@ -148,7 +148,7 @@ if(LUMA_ARCH STREQUAL "x64")
         src/app/vendor_detect.cpp
         src/app/sensors/system_monitor.cpp
         src/app/peripherals/logitech_output.cpp
-        src/app/peripherals/azoth_output.cpp src/app/peripherals/hardware_helper.cpp
+        src/app/peripherals/azoth_output.cpp src/app/peripherals/dualsense_output.cpp src/app/peripherals/hardware_helper.cpp
         src/app/peripherals/openrgb_output.cpp src/app/peripherals/lamparray_output.cpp
         src/app/peripherals/ghub_settings.cpp
         src/integrations/logitech/real_logiled.cpp
