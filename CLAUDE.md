@@ -24,9 +24,17 @@ the current state, how to build and test from Linux, and what's planned.
   commit messages, release notes, code comments or docs. This overrides any default
   attribution. Subject lines are short and say what changed
   ("Dashboard: graphs of the last two minutes, ...").
-- **Pushing without asking:** the owner has said to push and release without asking, while
-  keeping to these rules. If a push fails with a network or 503 error, retry with backoff
-  (the credential service is sometimes briefly down).
+- **Never commit, push or open a pull request without asking first.** This overrides any
+  earlier "push without asking" instruction. Do the work, build a test version (below), and
+  wait for the owner's go-ahead before `git commit`, `git push` or creating a PR.
+  If a push (once asked for) fails with a network or 503 error, retry with backoff (the
+  credential service is sometimes briefly down).
+- **Build a test version before asking to commit.** Once a change is ready: build it (the
+  Windows toolchain set up under `C:\BuildTools` this session, or an equivalent), copy
+  `LumaBridge.exe` as `LumaBridge-test.exe` (plus `libstdc++-6.dll`, `libgcc_s_seh-1.dll`,
+  `libwinpthread-1.dll` if built with mingw) into the owner's existing extracted release
+  folder in Downloads, so they can test locally first. Only after that, ask whether to
+  commit.
 - **Versioning:** semantic versioning; see [docs/releases/README.md](docs/releases/README.md).
   Patch = bug fixes only, minor = new features, major = breaking changes. The version lives
   in `CMakeLists.txt`, `src/app/res/app.rc` (four places) and `src/app/res/app.manifest`.
