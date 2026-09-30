@@ -10,14 +10,15 @@ namespace {
 std::string Utf8(const wchar_t* w) {
     const int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
     if (n <= 1) return {};
-    std::string out(static_cast<size_t>(n - 1), '\0');
+    std::string out(static_cast<size_t>(n), '\0');
     WideCharToMultiByte(CP_UTF8, 0, w, -1, out.data(), n, nullptr, nullptr);
+    out.pop_back();
     return out;
 }
 
 // The monitor's own name ("DELL S2721DGF") for a display (\\.\DISPLAY1), from Windows'
 // display configuration; "" if it doesn't say.
-std::string FriendlyName(const wchar_t* gdiName) {
+std::string FriendlyName(const wchar_t* gdiName, std::string* id) {
     UINT32 paths = 0, modes = 0;
     if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &paths, &modes) != ERROR_SUCCESS) return {};
     std::vector<DISPLAYCONFIG_PATH_INFO> p(paths);
@@ -35,7 +36,10 @@ std::string FriendlyName(const wchar_t* gdiName) {
         target.header.size = sizeof target;
         target.header.adapterId = p[i].targetInfo.adapterId;
         target.header.id = p[i].targetInfo.id;
-        if (DisplayConfigGetDeviceInfo(&target.header) == ERROR_SUCCESS) return Utf8(target.monitorFriendlyDeviceName);
+        if (DisplayConfigGetDeviceInfo(&target.header) == ERROR_SUCCESS) {
+            *id = Utf8(target.monitorDevicePath);
+            return Utf8(target.monitorFriendlyDeviceName);
+        }
     }
     return {};
 }
@@ -59,7 +63,7 @@ BOOL CALLBACK Add(HMONITOR monitor, HDC, LPRECT, LPARAM param) {
         d.heightCm = static_cast<float>(GetDeviceCaps(dc, VERTSIZE)) / 10.f;
         DeleteDC(dc);
     }
-    d.name = FriendlyName(info.szDevice);
+    d.name = FriendlyName(info.szDevice, &d.id);
     if (d.name.empty()) d.name = Utf8(info.szDevice);
     list->push_back(d);
     return TRUE;

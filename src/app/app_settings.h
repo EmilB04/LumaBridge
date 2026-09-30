@@ -117,6 +117,7 @@ struct Prefs {
     std::map<std::string, Spot> setupSpots;
     // The case's fans and how it's turned (pc::Encode); "" until you correct LumaBridge's guess.
     std::string caseLayout;
+    std::map<std::string, float> monitorSizes;  // monitor identity (displays::SizeKey) -> diagonal in inches
     static constexpr size_t kMaxRecent = 8;
 };
 

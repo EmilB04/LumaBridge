@@ -17,6 +17,16 @@ and desk in 3D, live.
   view; correct how many fans sit where, which way they blow, and the cooler (air or AIO,
   radiator on top or in front, RGB pump). Next to it, everything found, grouped: processor
   and motherboard, graphics, cooling, storage, monitors and the desk.
+- **Monitor sizes:** if a monitor reports the wrong size, enter its diagonal in inches under
+  **My setup → Monitors**. Each correction is saved for that monitor and updates its size and
+  placement in both 3D views. Use **Use reported size** to restore automatic sizing.
+- **DualSense model:** a detailed two-tone controller on the desk, with shaped grips,
+  touchpad, sticks, face buttons and triggers. Its light strips follow the controller's
+  actual lightbar color; drag and rotate it like the keyboard and mouse.
+- **Detailed 3D setup:** sculpted keyboard keys with legends, the Azoth's screen and knob,
+  a curved mouse with separate buttons, wheel, thumb rest and light strips, and a PC chassis
+  with vents, glass, connectors and component detail. A depth buffer keeps parts correctly
+  in front of or behind each other as you rotate and zoom the view.
 - **Dashboard:** lighting, the running game, CPU / GPU load, temperatures, clocks and power,
   memory, fan speeds, drives, devices and connections at a glance, with graphs of the last
   two minutes (can be turned off). Power and clocks shows what the whole PC draws out of your

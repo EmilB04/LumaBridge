@@ -8,6 +8,7 @@
 #include <iterator>
 
 #include "pc_layout.h"
+#include "display_layout.h"
 
 namespace luma::app {
 namespace {
@@ -242,6 +243,7 @@ Prefs LoadPrefs(const std::wstring& ini) {
         if (DecodeSpot(Narrow(Read(ini, L"Lighting", (L"Spot." + Widen(item)).c_str())), &s)) p.setupSpots[item] = s;
     }
     p.caseLayout = Narrow(Read(ini, L"Lighting", L"CaseLayout"));
+    p.monitorSizes = displays::DecodeSizes(Narrow(Read(ini, L"Displays", L"Sizes")));
     const std::wstring manual = Read(ini, L"App", L"ManualGames");
     for (size_t pos = 0; pos < manual.size();) {
         size_t bar = manual.find(L'|', pos);
@@ -340,6 +342,7 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     for (const char* item : pc::DeskItems())  // moved back to where LumaBridge puts it
         if (!p.setupSpots.count(item)) WriteConfigValue(ini, L"Lighting", (L"Spot." + Widen(item)).c_str(), L"");
     WriteConfigValue(ini, L"Lighting", L"CaseLayout", Widen(p.caseLayout));
+    WriteConfigValue(ini, L"Displays", L"Sizes", Widen(displays::EncodeSizes(p.monitorSizes)));
 
     WriteConfigValue(ini, L"Color", L"Brightness", Num(cfg.auraCorrection.brightness * 100.0));
     WriteConfigValue(ini, L"Color", L"GainR", Num(cfg.auraCorrection.gainR * 100.0));

@@ -89,6 +89,11 @@ WhenIdle=manual
 LightingStopped=0
 StartMinimized=1
 
+[Displays]
+; Corrections from My setup > Monitors. Each entry is a hex-encoded monitor device path
+; followed by =diagonal-in-inches; separate entries with |. Empty uses the reported sizes.
+Sizes=
+
 [Log]
 ; debug | info | warn | error | off
 Level=info

@@ -26,6 +26,7 @@
 #include "integrations.h"
 #include "ipc.h"
 #include "ui.h"
+#include "scene_gpu.h"
 #include "setup_plan.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
@@ -514,6 +515,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
         MessageBoxW(nullptr, L"Direct3D 11 is not available.", L"LumaBridge", MB_ICONERROR);
         return 1;
     }
+    scene_gpu::Init(g_device, g_context);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -589,6 +591,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     ImGui_ImplWin32_Shutdown();
     if (g_logo) g_logo->Release();
     ImGui::DestroyContext();
+    scene_gpu::Shutdown();
     CleanupDevice();
     DestroyWindow(g_main);
     DestroyWindow(g_ipc);

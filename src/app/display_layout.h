@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cstdio>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -18,7 +21,59 @@ struct Display {
     int hz = 0;                   // refresh rate (0: unknown)
     float widthCm = 0, heightCm = 0;  // its screen's physical size (0: unknown)
     bool primary = false;
+    std::string id;               // Windows monitor device path, independent of display numbering
+    float diagonalInches = 0;     // saved correction (0: use the reported size)
 };
+
+inline bool ValidDiagonal(float inches) { return std::isfinite(inches) && inches >= 3 && inches <= 150; }
+
+// Hex keeps Windows device paths (and non-ASCII names) safe inside an INI value.
+inline std::string SizeKey(const Display& d) {
+    static constexpr char hex[] = "0123456789ABCDEF";
+    std::string out;
+    for (unsigned char c : d.id.empty() ? d.name : d.id) {
+        out += hex[c >> 4];
+        out += hex[c & 15];
+    }
+    return out;
+}
+
+inline std::map<std::string, float> DecodeSizes(const std::string& text) {
+    std::map<std::string, float> out;
+    for (size_t pos = 0; pos < text.size();) {
+        const size_t bar = text.find('|', pos);
+        const std::string item = text.substr(pos, bar - pos);
+        const size_t eq = item.find('=');
+        if (eq != std::string::npos && eq > 0 && eq % 2 == 0 &&
+            item.substr(0, eq).find_first_not_of("0123456789ABCDEF") == std::string::npos) {
+            const std::string value = item.substr(eq + 1);
+            char* end = nullptr;
+            const float inches = std::strtof(value.c_str(), &end);
+            if (end != value.c_str() && *end == '\0' && ValidDiagonal(inches)) out[item.substr(0, eq)] = inches;
+        }
+        if (bar == std::string::npos) break;
+        pos = bar + 1;
+    }
+    return out;
+}
+
+inline std::string EncodeSizes(const std::map<std::string, float>& sizes) {
+    std::string out;
+    for (const auto& [key, inches] : sizes) {
+        if (key.empty() || !ValidDiagonal(inches)) continue;
+        char value[32];
+        std::snprintf(value, sizeof value, "%.4g", inches);
+        out += (out.empty() ? "" : "|") + key + "=" + value;
+    }
+    return out;
+}
+
+inline void ApplySizes(std::vector<Display>* list, const std::map<std::string, float>& sizes) {
+    for (Display& d : *list) {
+        const auto it = sizes.find(SizeKey(d));
+        d.diagonalInches = it != sizes.end() && ValidDiagonal(it->second) ? it->second : 0;
+    }
+}
 
 // Where a display stands, in the monitors' own frame on the desk (cm): its center across
 // (x, right is +), how far it's moved towards you (z), the height of its screen's bottom edge
@@ -38,8 +93,14 @@ inline bool Small(const Placed& p) { return std::sqrt(p.w * p.w + p.h * p.h) < 1
 // The screen's size: as reported, else a guess from its resolution (34" ultrawide, 27" for
 // 1440p and up, else 24"), matched to its orientation.
 inline void ScreenSize(const Display& d, float* w, float* h) {
+    if (ValidDiagonal(d.diagonalInches)) {
+        const float aspect = static_cast<float>(std::max(1, d.w)) / static_cast<float>(std::max(1, d.h));
+        *h = d.diagonalInches * 2.54f / std::sqrt(1 + aspect * aspect);
+        *w = *h * aspect;
+        return;
+    }
     float cw = d.widthCm, ch = d.heightCm;
-    if (cw < 15 || cw > 250 || ch < 8 || ch > 150) {
+    if (!std::isfinite(cw) || !std::isfinite(ch) || cw < 15 || cw > 250 || ch < 8 || ch > 150) {
         const float aspect = static_cast<float>(std::max(d.w, d.h)) / static_cast<float>(std::max(1, std::min(d.w, d.h)));
         const int longer = std::max(d.w, d.h);
         const float inches = aspect > 2.f ? 34.f : longer >= 2560 ? 27.f : 24.f;

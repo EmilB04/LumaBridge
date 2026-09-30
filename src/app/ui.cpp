@@ -15,6 +15,10 @@
 #include <vector>
 
 #include "controller.h"
+#include "controller_model.h"
+#include "scene_gpu.h"
+#include "desk_models.h"
+#include "pc_model.h"
 #include "game_feeds.h"
 #include "game_profiles.h"
 #include "friendly_names.h"
@@ -2505,7 +2509,7 @@ namespace view3d {
 enum Obj : int {
     kNone = -1,
     kCase = 1, kBoard, kCpu, kRam, kGpu, kPsu, kStorage,
-    kDesk = 20, kKeyboard, kMouse, kHeadset,
+    kDesk = 20, kKeyboard, kMouse, kHeadset, kController,
     kMonitor0 = 40,  // + display (up to 8)
     kFan0 = 100,    // + case slot
     kOther0 = 200,  // + index into Model::others
@@ -2542,6 +2546,8 @@ struct Model {
     Gear keyboard, mouse;
     bool headset = false;
     Gear headsetGear;
+    bool controller = false;
+    Gear controllerGear;
     std::vector<Gear> others;
     std::vector<displays::Display> screens;  // the monitors, as Windows has them arranged
     std::vector<std::string> notes;  // "Fan speeds: set up Hardware access", ...
@@ -2636,6 +2642,7 @@ Model Gather(Controller& ctl, const sensors::SystemSnapshot& snap) {
     m.cpuName = sensors::FriendlyCpu(snap.cpuName);
     m.drives = static_cast<int>(Drives().size());
     m.screens = Screens();
+    displays::ApplySizes(&m.screens, p.monitorSizes);
     m.aio = ctl.presence().Aio();
     if (const auto* x = sensors::PickSensor(snap.lhm, sensors::HardwareKind::Cpu, sensors::SensorType::Temperature,
                                             {"Tctl", "Package", "Core (Tdie)", "CPU"}))
@@ -2657,6 +2664,10 @@ Model Gather(Controller& ctl, const sensors::SystemSnapshot& snap) {
     m.keyboard = {kKeyboard, "Keyboard", nullptr, "desk:keyboard"};
     m.mouse = {kMouse, "Mouse", nullptr, "desk:mouse"};
     if (p.azothKeyboard && HasAzoth(ctl)) m.keyboard = {kKeyboard, "ASUS ROG Azoth", device::kKeyboard, "desk:keyboard"};
+    if (p.dualsenseController && HasDualSense(ctl)) {
+        m.controller = true;
+        m.controllerGear = {kController, "DualSense", device::kController, "desk:controller", 1};
+    }
     if (p.logitechDevices && !DeviceNative(p, device::kMouse))
         for (const auto& d : LogitechRgb(ctl)) {
             const std::string name = "Logitech " + d.name;
@@ -2772,13 +2783,9 @@ void LedBar(s3d::Scene& sc, float x0, float x1, float y0, float y1, float z, con
     }
 }
 
-// A tube from a to b (a square one: it's small on screen).
+// Closed round tubes keep their shape when viewed from either side.
 void Tube(s3d::Scene& sc, s3d::V3 a, s3d::V3 b, float r, uint32_t color, int id) {
-    const s3d::Transform keep = sc.xf;
-    const float len = s3d::Length(b - a);
-    sc.xf = s3d::Transform::Facing(b - a, s3d::Lerp(a, b, 0.5f)).Then(keep);
-    sc.Box({-r, -r, -len / 2}, {r, r, len / 2}, color, id);
-    sc.xf = keep;
+    model3d::Tube(sc, a, b, r, color, id);
 }
 
 // Live colors of `n` LEDs of a device (grey while LumaBridge isn't lighting it).
@@ -2830,6 +2837,7 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
     sc.xf = cx;
     const float W = pc::kCaseW / 2, D = pc::kCaseD / 2, Hh = pc::kCaseH;
     sc.Room({-W, 0, -D}, {W, Hh, D}, H(0x262C37), kCase);
+    pc3d::Chassis(sc, kCase);
     for (float footX : {-W + 2, W - 2})  // feet
         for (float footZ : {-D + 3, D - 3})
             sc.Box({footX - 1.5f, -1.2f, footZ - 1.5f}, {footX + 1.5f, 0, footZ + 1.5f}, H(0x0E1015), kCase);
@@ -2866,6 +2874,8 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
     }
     anchors->push_back({kBoard, cx.Apply({bx, 45.5f, -9}), m.boardName.empty() ? std::string("Motherboard") : m.boardName});
 
+    pc3d::BoardDetails(sc, kBoard);
+
     // Storage: M.2 drives on the board, more as SSDs on the shroud.
     for (int i = 0; i < std::min(m.drives, 2); ++i) {
         const float y = i == 0 ? 29.4f : 18.2f;
@@ -2877,7 +2887,16 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
     // CPU cooler (no RGB LumaBridge controls): a tower heatsink with its fan in front, or an AIO:
     // the pump on the CPU, two tubes, and the radiator behind the top or front fans.
     if (m.layout.cooler == pc::Cooler::Air) {
-        sc.Box({bx + 0.4f, 31, -12.8f}, {3, 43.6f, -7.2f}, H(0x9AA2AE), kCpu);
+        // Individual fins and heat pipes stay separated when the camera turns.
+        for (int i = 0; i < 15; ++i) {
+            const float y = 31.2f + static_cast<float>(i) * 0.82f;
+            sc.Box({bx + 0.4f, y, -12.8f}, {3, y + 0.3f, -7.2f}, H(0x9AA2AE), kCpu);
+        }
+        for (float x : {-7.f, -3.f, 1.f}) {
+            sc.xf = s3d::Transform::Facing({0, 1, 0}, {x, 31, -10}).Then(cx);
+            model3d::Cylinder(sc, 0.3f, 0, 13.5f, H(0xC0B0A0), kCpu, 10);
+        }
+        sc.xf = cx;
         sc.Box({bx + 0.4f, 43.6f, -12.8f}, {3, 44.4f, -7.2f}, H(0x2A2F38), kCpu);
         sc.xf = s3d::Transform::Facing({0, 0, 1}, {-3.2f, 37.3f, -6.2f}).Then(cx);
         Fan(sc, 5.6f, {}, turn(9, m.cpuFanRpm), m.cpuFanRpm, kCpu);
@@ -2999,10 +3018,11 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
         sc.bias = 0;
         sc.Box({bx + 0.4f, 26, -21}, {3.6f, 26.4f, 10}, H(0x565E6E), kGpu);
         sc.Box({bx + 0.4f, 17, -21.8f}, {3.6f, 26.4f, -21}, H(0x6A7282), kGpu);  // bracket
+        pc3d::GpuDetails(sc, kGpu);
         const std::vector<Rgb> strip = m.gpuRgb ? Leds(ctl, device::kOther, t, 10) : std::vector<Rgb>(10, Rgb{58, 63, 74});
         for (int i = 0; i < 10; ++i) {
             const float z0 = -15 + 2.f * static_cast<float>(i), z1 = z0 + 2.f;
-            sc.Quad({3.65f, 22.6f, z1}, {3.65f, 22.6f, z0}, {3.65f, 23.8f, z0}, {3.65f, 23.8f, z1}, C(strip[static_cast<size_t>(i)]), kGpu,
+            sc.Quad({4.12f, 22.6f, z1}, {4.12f, 22.6f, z0}, {4.12f, 23.8f, z0}, {4.12f, 23.8f, z1}, C(strip[static_cast<size_t>(i)]), kGpu,
                     m.gpuRgb ? s3d::kEmissive : 0u);
         }
         const double gpuRpm = m.gpuFanPct < 0 ? -1 : m.gpuFanPct * 30;
@@ -3147,57 +3167,23 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
             anchors->push_back({id, sc.xf.Apply({0, top + 2, -3}), m.screens.empty() ? std::string("Monitor") : screens[i].name});
         }
     }
-    // Keyboard: every key, lit key by key when LumaBridge lights it.
+    // Sculpted keyboard and mouse, with the same per-LED colors as the actual devices.
     {
         const Gear& g = m.keyboard;
         sc.xf = DeskXf(p, g.spot);
-        const auto& keys = azoth::IsoKeys();
-        const float u = 2.55f, w = 16 * u, d = 6.2f * u;
-        sc.bias = 25;  // the base under the keys
-        sc.Box({-w / 2 - 1, 0, -d / 2 - 1}, {w / 2 + 1, 2.2f, d / 2 + 1}, H(0x2A2F38), kKeyboard);
-        sc.bias = 0;
-        std::vector<Rgb> colors;
         const fx::Params* kp = g.device ? LiveParams(ctl, g.device) : nullptr;
         const double level = g.device ? LiveLevel(ctl, g.device) : 0;
-        if (kp && Is(g.device, device::kKeyboard)) colors = azoth::RenderKeys(*kp, t, level);
-        for (size_t i = 0; i < keys.size(); ++i) {
-            const auto& k = keys[i];
-            const float x0 = -w / 2 + k.x * u + 0.15f, x1 = x0 + k.w * u - 0.3f;
-            const float z0 = -d / 2 + k.y * u * 1.05f + 0.15f, z1 = z0 + k.h * u - 0.3f;
-            Rgb c = kDark;
-            if (!colors.empty()) c = colors[i];
-            else if (kp) c = Scale(fx::Render(*kp, t, azoth::EffectColumn(k), azoth::kColumns), level);
-            const bool lit = kp != nullptr;
-            sc.Box({x0, 2.2f, z0}, {x1, 3.1f, z1}, lit ? C(Scale(c, 0.35)) : H(0x3C424E), kKeyboard);
-            sc.bias = -0.3f;  // the legend on top of its key
-            sc.Quad({x0 + 0.2f, 3.12f, z1 - 0.2f}, {x1 - 0.2f, 3.12f, z1 - 0.2f}, {x1 - 0.2f, 3.12f, z0 + 0.2f}, {x0 + 0.2f, 3.12f, z0 + 0.2f},
-                    lit ? C(c) : H(0x4A5160), kKeyboard, lit ? s3d::kEmissive : 0u);
-            sc.bias = 0;
-            if (lit && i % 5 == 0) sc.AddGlow({(x0 + x1) / 2, 3.2f, (z0 + z1) / 2}, 1.8f, C(c, 45));
-        }
-        anchors->push_back({kKeyboard, sc.xf.Apply({0, 5, -d / 2 - 2}), g.name});
+        std::vector<Rgb> colors;
+        if (kp) colors = azoth::RenderKeys(*kp, t, level);
+        desk3d::Keyboard(sc, kKeyboard, colors, kp != nullptr, Is(g.device, device::kKeyboard));
+        anchors->push_back({kKeyboard, sc.xf.Apply({0, 5, -8}), g.name});
     }
-    // Mouse.
     {
         const Gear& g = m.mouse;
         sc.xf = DeskXf(p, g.spot);
-        sc.bias = 4;
-        sc.Box({-3.3f, 0, -6}, {3.3f, 2.6f, 6}, H(0x2E333D), kMouse);
-        sc.bias = 0;
-        sc.Box({-2.8f, 2.6f, -4.5f}, {2.8f, 3.8f, 3}, H(0x3A404C), kMouse);
-        sc.Box({-0.3f, 3.8f, -4.2f}, {0.3f, 4.2f, -2.4f}, H(0x3A404C), kMouse);  // wheel
         const bool perLed = Is(g.device, device::kMouse) && ctl.logitech().mouseEffect();
         const std::vector<Rgb> leds = Leds(ctl, g.device, t, 8, !perLed);
-        const bool lit = g.device && LiveParams(ctl, g.device);
-        sc.bias = -0.3f;
-        for (int i = 0; i < 8; ++i) {
-            const float z0 = -1 + 0.6f * static_cast<float>(i), z1 = z0 + 0.6f;
-            sc.Quad({-2.9f, 2.62f, z1}, {-2.2f, 3.3f, z1}, {-2.2f, 3.3f, z0}, {-2.9f, 2.62f, z0}, C(leds[static_cast<size_t>(i)]), kMouse,
-                    lit ? s3d::kEmissive : 0u);
-        }
-        sc.Quad({-1, 3.82f, 2.6f}, {1, 3.82f, 2.6f}, {1, 3.82f, 0.8f}, {-1, 3.82f, 0.8f}, C(leds[4]), kMouse, lit ? s3d::kEmissive : 0u);
-        sc.bias = 0;
-        if (lit) sc.AddGlow({0, 4, 1.7f}, 2.2f, C(leds[4], 90));
+        desk3d::Mouse(sc, kMouse, leds, g.device && LiveParams(ctl, g.device));
         anchors->push_back({kMouse, sc.xf.Apply({0, 7, 0}), g.name});
     }
     // Headset on its stand.
@@ -3223,6 +3209,15 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
         }
         anchors->push_back({kHeadset, sc.xf.Apply({0, 29, 0}), g.name});
     }
+    // DualSense, with the live lightbar beside its touchpad.
+    if (m.controller) {
+        const Gear& g = m.controllerGear;
+        sc.xf = DeskXf(p, g.spot);
+        sc.bias = 0;
+        const std::vector<Rgb> leds = Leds(ctl, g.device, t, 1);
+        controller3d::Build(sc, kController, C(leds[0]), g.device && LiveParams(ctl, g.device));
+        anchors->push_back({kController, sc.xf.Apply({0, 6, -2}), g.name});
+    }
     // Other lit devices: light bars.
     for (const Gear& g : m.others) {
         sc.xf = DeskXf(p, g.spot);
@@ -3247,6 +3242,7 @@ const char* DeviceOf(const Model& m, int obj) {
     case kKeyboard: return m.keyboard.device;
     case kMouse: return m.mouse.device;
     case kHeadset: return m.headsetGear.device;
+    case kController: return m.controllerGear.device;
     default:
         if (obj >= kOther0 && obj < kOther0 + static_cast<int>(m.others.size())) return m.others[static_cast<size_t>(obj - kOther0)].device;
         return nullptr;
@@ -3261,6 +3257,7 @@ std::string DeskItemOf(const Model& m, int obj) {
     if (obj == kKeyboard) return m.keyboard.spot;
     if (obj == kMouse) return m.mouse.spot;
     if (obj == kHeadset) return m.headsetGear.spot;
+    if (obj == kController) return m.controllerGear.spot;
     if (obj >= kOther0 && obj < kOther0 + static_cast<int>(m.others.size())) return m.others[static_cast<size_t>(obj - kOther0)].spot;
     return "";
 }
@@ -3304,9 +3301,10 @@ void Describe(Controller& ctl, const Model& m, const sensors::SystemSnapshot& sn
         snprintf(b, sizeof b, "%d x %d", d.w, d.h);
         std::string line = b;
         if (d.hz > 1) snprintf(b, sizeof b, " at %d Hz", d.hz), line += b;
-        snprintf(b, sizeof b, ", %.0f\"", std::sqrt(w * w + h * h) / 2.54f), line += b;
+        snprintf(b, sizeof b, ", %.1f\"", std::sqrt(w * w + h * h) / 2.54f), line += b;
         Muted("%s", line.c_str());
         Muted("Placed as Windows arranges your displays. No RGB lighting LumaBridge can control.");
+        Muted("Correct its size under Monitors on My setup if the reported size is wrong.");
         return;
     }
     switch (obj) {
@@ -3383,7 +3381,8 @@ void Describe(Controller& ctl, const Model& m, const sensors::SystemSnapshot& sn
         Muted("Drag to move it on the desk.");
         break;
     default: {
-        const Gear* g = obj == kKeyboard ? &m.keyboard : obj == kMouse ? &m.mouse : obj == kHeadset ? &m.headsetGear : nullptr;
+        const Gear* g = obj == kKeyboard ? &m.keyboard : obj == kMouse ? &m.mouse : obj == kHeadset ? &m.headsetGear
+                       : obj == kController ? &m.controllerGear : nullptr;
         if (obj >= kOther0 && obj < kOther0 + static_cast<int>(m.others.size())) g = &m.others[static_cast<size_t>(obj - kOther0)];
         if (!g) return;
         ImGui::TextUnformatted(g->name.c_str());
@@ -3438,7 +3437,7 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     }
     Prefs& prefs = ctl.prefs();
     const sensors::SystemSnapshot snap = ctl.monitor().Snapshot();
-    const Model m = Gather(ctl, snap);
+    Model m = Gather(ctl, snap);
     Options o;
     o.editSlots = mode == Mode::MySetup && ui.setupEdit;
     o.airflow = mode == Mode::MySetup && ui.setupAirflow;
@@ -3460,17 +3459,20 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     const bool hovered = ImGui::IsItemHovered();
     ImGuiIO& io = ImGui::GetIO();
     if (hovered) ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+    bool geometryChanged = false;
     if (hovered && io.MouseWheel != 0) {
         if (v.dragObj >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             TurnItem(ctl, DeskItemOf(m, v.dragObj), io.MouseWheel * 15.f);  // turn what you're holding
+            geometryChanged = true;
         } else {
             v.cam.distance *= std::pow(0.9f, io.MouseWheel);
             v.cam.Clamp();
         }
     }
 
+    const s3d::Camera projectedCamera = v.cam;
     auto items = s3d::Render(sc, v.cam, vp);
-    const int under = hovered ? s3d::Pick(items, io.MousePos.x, io.MousePos.y) : -1;
+    int under = hovered ? s3d::Pick(items, io.MousePos.x, io.MousePos.y) : -1;
     const bool canDrag = mode == Mode::MySetup && !ui.setupEdit;
 
     // Sliding the view across the desk (panning), by `dx`, `dy` pixels: the desk follows the mouse.
@@ -3531,6 +3533,7 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
                 if (auto it = prefs.setupSpots.find(item); it != prefs.setupSpots.end()) s = it->second;  // keeps its angle
                 pc::ToSaved(hit + v.dragOffset, &s.x, &s.y);
                 prefs.setupSpots[item] = s;
+                geometryChanged = true;
                 v.selected = v.dragObj;
             }
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
@@ -3553,6 +3556,7 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
                 pc::Layout l = m.layout;
                 pc::CycleSlot(&l, under - kFan0);
                 prefs.caseLayout = pc::Encode(l);
+                geometryChanged = true;
                 ctl.Changed();
             } else if (mode == Mode::Lighting) {
                 if (const char* d = DeviceOf(m, under)) ui.lightTarget = ui.lightTarget == d ? "" : d;
@@ -3577,6 +3581,20 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
             v.cam.distance = std::min(v.cam.distance, 110.f);
         }
     }
+    // Project the final camera and positions in this frame, so geometry, labels and picking
+    // agree during orbiting and dragging instead of lagging behind the input.
+    if (geometryChanged) {
+        m = Gather(ctl, snap);
+        sc = {};
+        anchors.clear();
+        texts.clear();
+        Build(sc, ctl, m, o, t, spins[static_cast<int>(mode)], &anchors, &texts);
+    }
+    if (geometryChanged || v.cam.yaw != projectedCamera.yaw || v.cam.pitch != projectedCamera.pitch ||
+        v.cam.distance != projectedCamera.distance || s3d::Length(v.cam.target - projectedCamera.target) > 0) {
+        items = s3d::Render(sc, v.cam, vp);
+        under = hovered ? s3d::Pick(items, io.MousePos.x, io.MousePos.y) : -1;
+    }
     if (hovered && under >= 0 && v.dragObj < 0 && !v.orbiting) {
         const bool pickable = mode == Mode::Lighting ? DeviceOf(m, under) != nullptr
                               : mode == Mode::MySetup ? (ui.setupEdit ? under >= kFan0 && under < kFan0 + pc::kSlots : !DeskItemOf(m, under).empty())
@@ -3584,9 +3602,11 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
         if (pickable) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     }
 
-    // Draw, far to near.
+    // Draw the depth-tested scene, with a painter fallback if D3D11 setup failed.
     dl->PushClipRect(a, ImVec2(a.x + W, a.y + Hh), true);
-    for (const auto& it : items) {
+    const uintptr_t sceneImage = scene_gpu::Image(static_cast<int>(mode), items, vp, S());
+    if (sceneImage) dl->AddImage(static_cast<ImTextureID>(sceneImage), a, ImVec2(a.x + W, a.y + Hh));
+    else for (const auto& it : items) {
         if (it.kind == s3d::DrawItem::Polygon) {
             // Dear ImGui's anti-aliased fill wants the corners clockwise on screen.
             ImVec2 pts[s3d::kMaxCorners];
@@ -3615,6 +3635,14 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
         if (s3d::Dot(st.normal, eye - st.at) <= 0) continue;
         const s3d::Projected c = s3d::Project(v.cam, vp, st.at), top = s3d::Project(v.cam, vp, st.at + st.up * st.height);
         if (!c.visible || !top.visible) continue;
+        // The pump label follows the same visibility rule as the model underneath it.
+        float visibleDepth = 1e30f;
+        for (const auto& item : items) {
+            if (item.kind != s3d::DrawItem::Polygon || (item.color >> 24) < 250) continue;
+            const float depth = s3d::DepthAt(item, c.sx, c.sy);
+            if (depth > 0) visibleDepth = std::min(visibleDepth, depth);
+        }
+        if (visibleDepth + 0.15f < c.z) continue;
         const float px = std::hypot(top.sx - c.sx, top.sy - c.sy);
         if (px < 5) continue;
         ImFont* font = ImGui::GetFont();
@@ -3646,7 +3674,7 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
         if (hull.size() >= 3) dl->AddPolyline(hull.data(), static_cast<int>(hull.size()), col, ImDrawFlags_Closed, w * S());
     };
     auto outline = [&](int id, ImU32 col, float w) { outlineOf({id}, col, w); };
-    std::vector<int> ids{kCase, kBoard, kCpu, kRam, kGpu, kPsu, kStorage, kKeyboard, kMouse, kHeadset};
+    std::vector<int> ids{kCase, kBoard, kCpu, kRam, kGpu, kPsu, kStorage, kKeyboard, kMouse, kHeadset, kController};
     for (int i = 0; i < static_cast<int>(std::max<size_t>(1, m.screens.size())); ++i) ids.push_back(kMonitor0 + i);
     for (int i = 0; i < pc::kSlots; ++i) ids.push_back(kFan0 + i);
     for (int i = 0; i < static_cast<int>(m.others.size()); ++i) ids.push_back(kOther0 + i);
@@ -4395,20 +4423,37 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
     }
     if (!m.screens.empty()) {
         group("Monitors");
+        Muted("If a size is wrong, enter the inches from the monitor's label.");
         for (const auto& d : m.screens) {
             float w = 0, h = 0;
             displays::ScreenSize(d, &w, &h);
             char b[96];
-            snprintf(b, sizeof b, "%.0f\", %dx%d%s", std::sqrt(w * w + h * h) / 2.54f, d.w, d.h, d.primary ? ", main" : "");
+            snprintf(b, sizeof b, "%.1f\", %dx%d%s", std::sqrt(w * w + h * h) / 2.54f, d.w, d.h, d.primary ? ", main" : "");
             std::string detail = b;
             if (d.hz > 0) detail += ", " + std::to_string(d.hz) + " Hz";
             row(Icon::Grid, d.name, detail, false);
+            const std::string key = displays::SizeKey(d);
+            ImGui::PushID(key.c_str());
+            float inches = std::sqrt(w * w + h * h) / 2.54f;
+            ImGui::SetNextItemWidth(130 * S());
+            if (ImGui::InputFloat("Size (inches)", &inches, 0.1f, 1.f, "%.1f") && displays::ValidDiagonal(inches)) {
+                ctl.prefs().monitorSizes[key] = inches;
+                ctl.Changed();
+            }
+            ImGui::BeginDisabled(!ctl.prefs().monitorSizes.count(key));
+            if (SmallBtn("Use reported size")) {
+                ctl.prefs().monitorSizes.erase(key);
+                ctl.Changed();
+            }
+            ImGui::EndDisabled();
+            ImGui::PopID();
         }
     }
     group("On the desk");
     row(Icon::Keyboard, m.keyboard.name, "", m.keyboard.device != nullptr);
     row(Icon::Mouse, m.mouse.name, "", m.mouse.device != nullptr);
     if (m.headset) row(Icon::Leds, m.headsetGear.name, "", m.headsetGear.device != nullptr);
+    if (m.controller) row(Icon::Game, m.controllerGear.name, "", m.controllerGear.device != nullptr);
     for (const auto& g : m.others) row(Icon::Leds, g.name, "", true);
     EndCard();
     ImGui::EndTable();

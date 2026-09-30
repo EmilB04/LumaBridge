@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <initializer_list>
+#include <limits>
 
 #include "color.h"
 #include "effects.h"
@@ -29,6 +30,10 @@
 #include "flight_sim_lighting.h"
 #include "dcs_lighting.h"
 #include "scene3d.h"
+#include "controller_model.h"
+#include "scene_mesh.h"
+#include "desk_models.h"
+#include "pc_model.h"
 #include "pc_layout.h"
 #include "display_layout.h"
 #include "nzxt_kraken.h"
@@ -852,6 +857,120 @@ static void TestScene3d() {
     CHECK(InsidePolygon(square, 4, 5, 5) && !InsidePolygon(square, 4, 15, 5));
 }
 
+static void TestSceneDepth() {
+    using namespace luma::app::s3d;
+    DrawItem slope;
+    slope.n = 4; slope.id = 1; slope.pickable = true; slope.color = Rgba(200, 0, 0);
+    const float square[] = {0, 0, 100, 0, 100, 100, 0, 100};
+    std::copy(std::begin(square), std::end(square), slope.xy);
+    slope.vertexDepth[0] = slope.vertexDepth[3] = 2;
+    slope.vertexDepth[1] = slope.vertexDepth[2] = 10;
+    slope.depth = 1000;  // fallback sorting bias must not affect picking or GPU depth
+    DrawItem flat = slope;
+    flat.id = 2; flat.depth = -100;
+    for (int i = 0; i < 4; ++i) flat.vertexDepth[i] = 5;
+    CHECK(Pick({slope, flat}, 10, 50) == 1 && Pick({flat, slope}, 90, 50) == 2);
+    CHECK(std::fabs(DepthAt(slope, 50, 50) - 1 / (0.5f / 2 + 0.5f / 10)) < 0.0001f);
+    CHECK(DepthAt(slope, -10, 50) < 0);
+    slope.pickable = false;
+    CHECK(Pick({flat, slope}, 10, 50) == -1);  // a solid, unselectable surface still hides what is behind it
+    slope.color = WithAlpha(slope.color, 18);
+    CHECK(Pick({flat, slope}, 10, 50) == 2);  // glass does not block the click
+    slope.pickable = true;
+    slope.color = WithAlpha(slope.color, 0);
+    CHECK(Pick({flat, slope}, 10, 50) == 2);
+
+    const Viewport vp{0, 0, 100, 100};
+    slope.color = Rgba(200, 0, 0);
+    auto mesh = MakeMesh({slope, flat}, vp);
+    CHECK(mesh.opaque.size() == 18 && mesh.transparent.empty());
+    for (size_t i = 6; i < mesh.opaque.size(); ++i) {
+        const auto& v = mesh.opaque[i];
+        CHECK(v.w >= 2 && v.w <= 10 && std::fabs(v.z / v.w - (1 - kNear / v.w)) < 0.00001f);
+    }
+    slope.color = WithAlpha(slope.color, 18);
+    mesh = MakeMesh({slope, flat}, vp);
+    CHECK(mesh.opaque.size() == 12 && mesh.transparent.size() == 6);
+    CHECK(MakeMesh({flat}, {0, 0, 0, 10}).opaque.empty());
+
+    // A polygon crossing the near plane keeps its visible part.
+    Camera cam;
+    cam.target = {0, 0, 0}; cam.distance = 10; cam.pitch = 0; cam.yaw = 0;
+    Scene clipped;
+    clipped.Quad({-2, -2, 8}, {2, -2, 8}, {2, 2, 9.5f}, {-2, 2, 9.5f}, Rgba(80, 80, 80), 3, kDoubleSided);
+    clipped.AddLine({0, -2, 8}, {0, 2, 9.5f}, Rgba(255, 255, 255));
+    const auto items = Render(clipped, cam, vp);
+    CHECK(items.size() == 2);
+    for (const auto& item : items) {
+        for (int i = 0; i < item.n; ++i) CHECK(item.vertexDepth[i] >= kNear && std::isfinite(item.xy[i * 2]));
+    }
+    clipped.faces[0].p[0].z = clipped.faces[0].p[1].z = 9.8f;
+    clipped.lines.clear();
+    CHECK(Render(clipped, cam, vp).empty());
+
+    // Rotation must not allow a distant key to jump ahead of a nearby one because its
+    // keyboard base spans more depth. Check each key's center against a ray/box reference.
+    Scene keys;
+    keys.bias = 25;
+    keys.Box({-16, 0, -6}, {16, 1, 6}, Rgba(50, 50, 50), 10);
+    keys.bias = 0;
+    for (int i = 0; i < 5; ++i) keys.Box({-12.f + 6 * i, 1, -1}, {-10.f + 6 * i, 2, 1}, Rgba(150, 150, 150), 20 + i);
+    for (int angle = 0; angle < 24; ++angle) {
+        cam.target = {0, 1, 0}; cam.distance = 50; cam.pitch = 0.65f; cam.yaw = angle * 6.2831853f / 24;
+        const Viewport view{0, 0, 800, 600};
+        const auto rendered = Render(keys, cam, view);
+        for (int i = 0; i < 5; ++i) {
+            const auto p = Project(cam, view, {-11.f + 6 * i, 2.001f, 0});
+            CHECK(Pick(rendered, p.sx, p.sy) == 20 + i);
+        }
+    }
+}
+
+static void TestDeskModels() {
+    using namespace luma::app;
+    using namespace s3d;
+    Scene keyboard, mouse, pc;
+    desk3d::Keyboard(keyboard, 21, std::vector<Rgb>(azoth::IsoKeys().size(), {20, 150, 255}), true, true);
+    desk3d::Mouse(mouse, 22, std::vector<Rgb>(8, {20, 150, 255}), true);
+    pc3d::Chassis(pc, 1); pc3d::BoardDetails(pc, 2); pc3d::GpuDetails(pc, 5);
+    CHECK(keyboard.faces.size() > 1000 && mouse.faces.size() > 80 && pc.faces.size() > 100);
+    for (const Scene* scene : {&keyboard, &mouse, &pc}) {
+        for (const Face& face : scene->faces) {
+            CHECK(face.id >= 0 && face.n >= 3 && face.n < kMaxCorners);
+            CHECK(Length(Cross(face.p[1] - face.p[0], face.p[2] - face.p[0])) > 0.000001f);
+            for (int i = 0; i < face.n; ++i) {
+                const V3 p = face.p[static_cast<size_t>(i)];
+                CHECK(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z));
+            }
+        }
+    }
+    CHECK(Cross(mouse.faces[0].p[1] - mouse.faces[0].p[0], mouse.faces[0].p[2] - mouse.faces[0].p[0]).y < 0);
+    CHECK(desk3d::MouseSurface(0, 0).y > desk3d::MouseSurface(0, 1).y);
+    CHECK(mouse.faces[13].n == 11 && mouse.faces[14].n == 11);  // end caps follow the full arch
+    CHECK(mouse.faces[13].p[5].y > mouse.faces[13].p[1].y);
+    Scene patch;
+    desk3d::MousePatch(patch, 0, 3, -1, 1, 0.04f, Rgba(255, 0, 0), 99);
+    CHECK(patch.faces.size() == 16);  // two triangles for each strip, including exact mesh boundaries
+    for (const Face& face : patch.faces)
+        CHECK(Cross(face.p[1] - face.p[0], face.p[2] - face.p[0]).y > 0);
+    for (float pitch : {0.15f, 0.6f, 1.35f})
+        for (int angle = 0; angle < 12; ++angle) {
+            Camera cam;
+            cam.pitch = pitch; cam.yaw = angle * 6.2831853f / 12; cam.distance = 60;
+            const Viewport vp{0, 0, 640, 480};
+            for (const Scene* scene : {&keyboard, &mouse}) {
+                const auto rendered = Render(*scene, cam, vp);
+                const auto mesh = MakeMesh(rendered, vp);
+                CHECK(!rendered.empty() && mesh.opaque.size() > 6);
+                for (size_t i = 0; i < mesh.opaque.size(); ++i) {
+                    const auto& v = mesh.opaque[i];
+                    CHECK(std::isfinite(v.x) && std::isfinite(v.y) && v.z >= 0);
+                    CHECK(i < 6 ? v.z == v.w : v.z < v.w);
+                }
+            }
+        }
+}
+
 static void TestPcLayout() {
     using namespace luma::app::pc;
     // 6 fans, 3 of them RGB: 3 in front (the RGB ones), 1 at the back, 2 on top.
@@ -1030,6 +1149,90 @@ static void TestDisplayLayout() {
     CHECK(std::fabs(p[0].bottom - (0.3f + 13.6f + 0.3f)) < 0.01f);  // no gap between them
     CHECK(p[2].x > -59.7f / 2 && p[2].x + 21.7f / 2 < 59.7f / 2);    // under it, not beside it
     CHECK(!p[1].resting && p[1].bottom > 0 && p[1].yaw < 0);  // the portrait one, on a stand, turned
+}
+
+static void TestDisplaySizes() {
+    using namespace luma::app::displays;
+    Display main, small, sameName;
+    main.name = sameName.name = "Samsung";
+    main.id = "monitor/main";
+    sameName.id = "monitor/other";
+    main.w = 3440; main.h = 1440; main.primary = true;
+    main.widthCm = 82; main.heightCm = 35;
+    small.id = "monitor/small";
+    small.w = 1920; small.h = 1200; small.y = 1440;
+    small.widthCm = 34; small.heightCm = 21;  // bogus EDID, roughly 16 inches
+    const std::map<std::string, float> sizes{{SizeKey(main), 34}, {SizeKey(small), 10.1f}};
+    CHECK(DecodeSizes(EncodeSizes(sizes)) == sizes);
+    std::vector<Display> list{main, small, sameName};
+    ApplySizes(&list, sizes);
+    float w, h;
+    ScreenSize(list[0], &w, &h);
+    CHECK(std::fabs(std::hypot(w, h) / 2.54f - 34) < 0.001f);
+    CHECK(std::fabs(w / h - 3440.f / 1440) < 0.001f);
+    ScreenSize(list[1], &w, &h);
+    CHECK(std::fabs(std::hypot(w, h) / 2.54f - 10.1f) < 0.001f);
+    CHECK(list[2].diagonalInches == 0);  // identical names do not share corrections
+    const auto placed = Arrange(list);
+    CHECK(placed[1].resting && placed[1].bottom < 1 && !placed[0].resting);
+    CHECK(placed[0].bottom < 18);  // small panel no longer holds the main screen too high
+    list[0].w = 1440; list[0].h = 3440;
+    ApplySizes(&list, sizes);
+    ScreenSize(list[0], &w, &h);
+    CHECK(h > w && std::fabs(std::hypot(w, h) / 2.54f - 34) < 0.001f);
+    std::swap(list[0], list[1]);
+    ApplySizes(&list, sizes);
+    CHECK(list[0].diagonalInches == 10.1f && list[1].diagonalInches == 34);  // enumeration changed
+    ApplySizes(&list, {});
+    CHECK(list[0].diagonalInches == 0 && list[1].diagonalInches == 0);
+    ScreenSize(list[0], &w, &h);
+    CHECK(w == 34 && h == 21);  // reset restores the reported dimensions
+    CHECK(!ValidDiagonal(0) && !ValidDiagonal(-10) && !ValidDiagonal(151));
+    CHECK(!ValidDiagonal(std::numeric_limits<float>::quiet_NaN()) && !ValidDiagonal(std::numeric_limits<float>::infinity()));
+    CHECK(DecodeSizes("AA=nan|BB=inf|CC=-1|DD=200|EE=10.1junk|FF=|G0=34|A=34|=34").empty());
+    CHECK(DecodeSizes("bad|AA=34|BB=10.1").size() == 2);
+    Display unknown;
+    unknown.name = "Display | = \xC3\xB8";
+    const std::map<std::string, float> fallback{{SizeKey(unknown), 10.1f}};
+    CHECK(DecodeSizes(EncodeSizes(fallback)) == fallback);
+    unknown.widthCm = std::numeric_limits<float>::quiet_NaN();
+    ScreenSize(unknown, &w, &h);
+    CHECK(std::isfinite(w) && std::isfinite(h));
+}
+
+static void TestControllerModel() {
+    using namespace luma::app::s3d;
+    Scene sc;
+    const Transform at = Transform::YawAt(0.4f, {20, 0, 10});
+    sc.xf = at;
+    sc.bias = 7;
+    luma::app::controller3d::Build(sc, 24, Rgba(0, 150, 255), true);
+    CHECK(sc.glows.size() == 2 && sc.bias == 7 && sc.xf.origin.x == 20);
+    int emissive = 0;
+    for (const Face& f : sc.faces) {
+        CHECK(f.id == 24 && f.n >= 3);
+        const V3 normal = Normalize(Cross(f.p[1] - f.p[0], f.p[2] - f.p[0]));
+        CHECK(Length(normal) > 0.99f);
+        if (f.flags & kEmissive) {
+            ++emissive;
+            CHECK(normal.y > 0.99f && f.color == Rgba(0, 150, 255));
+        }
+        for (int i = 0; i < f.n; ++i) {
+            const V3 p = f.p[static_cast<size_t>(i)];
+            CHECK(std::isfinite(p.x) && p.y >= 0 && p.y <= 4.3f);
+        }
+    }
+    CHECK(emissive == 2);
+    Camera cam;
+    cam.target = at.Apply({0, 2, 0}); cam.distance = 35; cam.pitch = 0.7f;
+    const Viewport vp{0, 0, 500, 400};
+    const auto items = Render(sc, cam, vp);
+    const auto pad = Project(cam, vp, at.Apply({0, 3.75f, -2.6f}));
+    CHECK(Pick(items, pad.sx, pad.sy) == 24);  // clicking the touchpad selects the controller
+    Scene off;
+    luma::app::controller3d::Build(off, 24, Rgba(40, 40, 40), false);
+    CHECK(off.glows.empty());
+    for (const Face& f : off.faces) CHECK(!(f.flags & kEmissive));
 }
 
 static void TestFlightSim() {
@@ -1933,6 +2136,10 @@ static void TestIpc() {
 }
 
 int main() {
+    TestSceneDepth();
+    TestDeskModels();
+    TestDisplaySizes();
+    TestControllerModel();
     TestPercent();
     TestAuraPacking();
     TestCorrection();

@@ -191,10 +191,10 @@ constexpr float kDeskW = 170, kDeskD = 84;
 constexpr int kMaxOthers = 4;  // other lit devices drawn as light bars
 
 // What can be moved on the desk, as saved (Prefs::setupSpots keys).
-inline const std::array<const char*, 9>& DeskItems() {
-    static const std::array<const char*, 9> kItems = {"desk:case",   "desk:monitor", "desk:keyboard",
-                                                      "desk:mouse",  "desk:headset", "desk:other0",
-                                                      "desk:other1", "desk:other2",  "desk:other3"};
+inline const std::array<const char*, 10>& DeskItems() {
+    static const std::array<const char*, 10> kItems = {"desk:case",     "desk:monitor", "desk:keyboard",
+                                                       "desk:mouse",    "desk:headset", "desk:controller",
+                                                       "desk:other0",   "desk:other1",  "desk:other2", "desk:other3"};
     return kItems;
 }
 
@@ -206,6 +206,7 @@ inline s3d::V3 DefaultDeskSpot(const std::string& item) {
     if (item == "desk:keyboard") return {-14, 0, 12};
     if (item == "desk:mouse") return {22, 0, 14};
     if (item == "desk:headset") return {-62, 0, -6};
+    if (item == "desk:controller") return {-38, 0, 30};
     if (item.rfind("desk:other", 0) == 0) return {-58.f + 22.f * static_cast<float>(item.back() - '0'), 0, -36};
     return {};
 }

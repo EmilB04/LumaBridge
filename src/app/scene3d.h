@@ -1,6 +1,5 @@
-// A small software 3D renderer for the setup views: an orbit camera, flat-shaded convex faces
-// sorted back to front (painter's algorithm), glowing points for LEDs, and lines. It only
-// computes 2D polygons; the UI draws them with Dear ImGui's draw list. Pure C++, tested.
+// Geometry and projection for the setup views. Vertex depths are retained for the D3D11
+// depth buffer and for picking the visible surface. Pure C++, tested.
 //
 // Units are centimetres; y is up. Faces are one-sided (their front is where the corners run
 // counter-clockwise, seen from outside) unless marked double-sided, so a case built from
@@ -127,7 +126,7 @@ enum FaceFlags : uint32_t {
     kNoPick = 8,        // never picked (airflow, glass)
 };
 
-constexpr int kMaxCorners = 8;
+constexpr int kMaxCorners = 24;  // includes the extra corner created by near-plane clipping
 
 struct Face {
     std::array<V3, kMaxCorners> p{};
@@ -135,8 +134,8 @@ struct Face {
     uint32_t color = 0;
     uint32_t flags = 0;
     int id = -1;  // what it belongs to (for picking); -1 nothing
-    // Added to its distance when sorting: a plate things sit on (a keyboard's base under its
-    // keys, a card under its fans) sorts behind them from any angle.
+    // Used only by the painter fallback to keep details ahead of their supporting plate.
+    // The depth buffer and picking always use physical vertex depths.
     float bias = 0;
 };
 
@@ -203,7 +202,7 @@ public:
 
     void Poly(const V3* pts, int n, uint32_t color, int id, uint32_t flags = 0) {
         Face f;
-        f.n = std::min(n, kMaxCorners);
+        f.n = std::clamp(n, 0, kMaxCorners - 1);
         // A mirrored placement turns faces inside out: keep their fronts outside.
         const bool mirrored = Dot(Cross(xf.x, xf.y), xf.z) < 0;
         for (int i = 0; i < f.n; ++i) f.p[static_cast<size_t>(i)] = xf.Apply(pts[mirrored ? f.n - 1 - i : i]);
@@ -242,7 +241,7 @@ public:
     // A flat disc of radius r in the local xy plane at z, facing +z.
     void Disc(float r, float z, int sides, uint32_t color, int id, uint32_t flags = 0) {
         V3 pts[kMaxCorners];
-        sides = std::clamp(sides, 3, kMaxCorners);
+        sides = std::clamp(sides, 3, 16);
         for (int i = 0; i < sides; ++i) {
             const float a = 6.2831853f * static_cast<float>(i) / static_cast<float>(sides);
             pts[i] = {std::cos(a) * r, std::sin(a) * r, z};
@@ -265,6 +264,7 @@ public:
 struct DrawItem {
     enum Kind : uint8_t { Polygon, GlowDot, Segment } kind = Polygon;
     float xy[kMaxCorners * 2] = {};
+    float vertexDepth[kMaxCorners] = {};  // distance along the view axis at each corner
     int n = 0;
     uint32_t color = 0;
     float depth = 0;  // distance from the eye; larger is further
@@ -275,6 +275,20 @@ struct DrawItem {
     bool pickable = false;
 };
 
+// Keep the visible portion of a face when zooming through it, rather than dropping the
+// whole face as soon as one corner passes behind the camera.
+inline int ClipNear(const Face& face, V3 eye, V3 forward, std::array<V3, kMaxCorners>* out) {
+    int n = 0;
+    for (int i = 0; i < face.n; ++i) {
+        const V3 a = face.p[static_cast<size_t>(i)], b = face.p[static_cast<size_t>((i + 1) % face.n)];
+        const float za = Dot(a - eye, forward), zb = Dot(b - eye, forward);
+        if (za >= kNear && n < kMaxCorners) (*out)[static_cast<size_t>(n++)] = a;
+        if ((za >= kNear) != (zb >= kNear) && n < kMaxCorners)
+            (*out)[static_cast<size_t>(n++)] = Lerp(a, b, (kNear - za) / (zb - za));
+    }
+    return n;
+}
+
 // Everything the scene shows, far to near, ready to draw. Shading: faces turned towards
 // `light` are brighter (ambient 0.5).
 inline std::vector<DrawItem> Render(const Scene& scene, const Camera& cam, const Viewport& vp,
@@ -282,26 +296,50 @@ inline std::vector<DrawItem> Render(const Scene& scene, const Camera& cam, const
     std::vector<DrawItem> out;
     out.reserve(scene.faces.size() + scene.glows.size() + scene.lines.size());
     const V3 eye = cam.Eye();
+    V3 right, up, forward;
+    cam.Basis(&right, &up, &forward);
+    const float focal = vp.Focal(cam);
+    // The detailed models share one camera basis per frame, rather than recomputing its
+    // trigonometry for every key, bevel and legend corner.
+    auto project = [&](V3 point) {
+        const V3 d = point - eye;
+        Projected p;
+        p.z = Dot(d, forward);
+        if (p.z < kNear) return p;
+        const float k = focal / p.z;
+        p.sx = vp.x + vp.w * 0.5f + Dot(d, right) * k;
+        p.sy = vp.y + vp.h * 0.5f - Dot(d, up) * k;
+        p.visible = true;
+        return p;
+    };
     for (const Face& f : scene.faces) {
         if (f.n < 3) continue;
         V3 normal = Normalize(Cross(f.p[1] - f.p[0], f.p[2] - f.p[0]));
+        if (Length(normal) < 0.5f) continue;
         const bool facing = Dot(normal, eye - f.p[0]) > 0;
         if (!facing && !(f.flags & kDoubleSided)) continue;
         if (!facing) normal = normal * -1.f;
         DrawItem d;
         d.kind = DrawItem::Polygon;
-        d.n = f.n;
+        std::array<V3, kMaxCorners> clipped;
+        d.n = ClipNear(f, eye, forward, &clipped);
+        if (d.n < 3) continue;
         bool ok = true;
         float z = 0;
-        for (int i = 0; i < f.n && ok; ++i) {
-            const Projected p = Project(cam, vp, f.p[static_cast<size_t>(i)]);
+        for (int i = 0; i < d.n && ok; ++i) {
+            // ClipNear can land a few ulps below the near plane.
+            V3 point = clipped[static_cast<size_t>(i)];
+            const float depth = Dot(point - eye, forward);
+            if (depth < kNear) point = point + forward * (kNear - depth + 0.0001f);
+            const Projected p = project(point);
             ok = p.visible;
             d.xy[i * 2] = p.sx;
             d.xy[i * 2 + 1] = p.sy;
+            d.vertexDepth[i] = p.z;
             z += p.z;
         }
         if (!ok) continue;
-        d.depth = z / static_cast<float>(f.n) + f.bias;
+        d.depth = z / static_cast<float>(d.n) + f.bias;
         if (f.flags & kEmissive) {
             d.color = f.color;
         } else {
@@ -313,9 +351,8 @@ inline std::vector<DrawItem> Render(const Scene& scene, const Camera& cam, const
         d.pickable = f.id >= 0 && !(f.flags & kNoPick);
         out.push_back(d);
     }
-    const float focal = vp.Focal(cam);
     for (const Glow& g : scene.glows) {
-        const Projected p = Project(cam, vp, g.at);
+        const Projected p = project(g.at);
         if (!p.visible) continue;
         DrawItem d;
         d.kind = DrawItem::GlowDot;
@@ -323,11 +360,17 @@ inline std::vector<DrawItem> Render(const Scene& scene, const Camera& cam, const
         d.xy[1] = p.sy;
         d.radius = g.radius * focal / p.z;
         d.depth = p.z - 0.5f;  // just in front of what it sits on
+        d.vertexDepth[0] = p.z;
         d.color = g.color;
         out.push_back(d);
     }
     for (const Line& l : scene.lines) {
-        const Projected a = Project(cam, vp, l.a), b = Project(cam, vp, l.b);
+        V3 pa = l.a, pb = l.b;
+        const float za = Dot(pa - eye, forward), zb = Dot(pb - eye, forward);
+        if (za < kNear && zb < kNear) continue;
+        if (za < kNear) pa = Lerp(l.a, l.b, (kNear + 0.0001f - za) / (zb - za));
+        if (zb < kNear) pb = Lerp(l.b, l.a, (kNear + 0.0001f - zb) / (za - zb));
+        const Projected a = project(pa), b = project(pb);
         if (!a.visible || !b.visible) continue;
         DrawItem d;
         d.kind = DrawItem::Segment;
@@ -336,6 +379,8 @@ inline std::vector<DrawItem> Render(const Scene& scene, const Camera& cam, const
         d.xy[2] = b.sx;
         d.xy[3] = b.sy;
         d.n = 2;
+        d.vertexDepth[0] = a.z;
+        d.vertexDepth[1] = b.z;
         d.depth = std::min(a.z, b.z) - 1.f;  // outlines sit on top of the faces they border
         d.color = l.color;
         d.width = l.width;
@@ -362,11 +407,38 @@ inline bool InsidePolygon(const float* xy, int n, float px, float py) {
     return true;
 }
 
-// The id of the nearest pickable face under the point, or -1.
-inline int Pick(const std::vector<DrawItem>& items, float px, float py) {
-    for (auto it = items.rbegin(); it != items.rend(); ++it)
-        if (it->kind == DrawItem::Polygon && it->pickable && InsidePolygon(it->xy, it->n, px, py)) return it->id;
+// Perspective-correct depth at a point on a projected face. Average face depth cannot
+// distinguish two sloping surfaces that cross on screen.
+inline float DepthAt(const DrawItem& item, float px, float py) {
+    if (item.kind != DrawItem::Polygon || item.n < 3) return -1;
+    for (int i = 1; i + 1 < item.n; ++i) {
+        const float ax = item.xy[0], ay = item.xy[1];
+        const float bx = item.xy[i * 2], by = item.xy[i * 2 + 1];
+        const float cx = item.xy[(i + 1) * 2], cy = item.xy[(i + 1) * 2 + 1];
+        const float det = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+        if (std::fabs(det) < 1e-7f) continue;
+        const float a = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / det;
+        const float b = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / det;
+        const float c = 1 - a - b;
+        if (a < -1e-5f || b < -1e-5f || c < -1e-5f) continue;
+        if (item.vertexDepth[0] <= 0 || item.vertexDepth[i] <= 0 || item.vertexDepth[i + 1] <= 0) return item.depth;
+        const float inv = a / item.vertexDepth[0] + b / item.vertexDepth[i] + c / item.vertexDepth[i + 1];
+        if (inv > 0) return 1.f / inv;
+    }
     return -1;
+}
+
+// The visible pickable surface, regardless of the painter fallback's sorting biases.
+inline int Pick(const std::vector<DrawItem>& items, float px, float py) {
+    int id = -1;
+    float nearest = 1e30f;
+    for (const DrawItem& item : items) {
+        if (item.kind != DrawItem::Polygon || (item.color >> 24) == 0) continue;
+        if (!item.pickable && (item.color >> 24) < 250) continue;  // glass can be clicked through
+        const float depth = DepthAt(item, px, py);
+        if (depth > 0 && depth <= nearest + 0.0001f) nearest = depth, id = item.pickable ? item.id : -1;
+    }
+    return id;
 }
 
 }  // namespace luma::app::s3d
