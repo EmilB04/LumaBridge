@@ -186,32 +186,18 @@ private:
         return Rgb{static_cast<uint8_t>(c.r * 35 / 100), static_cast<uint8_t>(c.g * 35 / 100),
                    static_cast<uint8_t>(c.b * 35 / 100)};
     }
-    // Floors a color's saturation and brightness (HSV) so a muted or dark team color still
-    // reads as a clear, distinct hue on RGB hardware, instead of a washed-out gray.
+    // Floors a color's brightness so a dark team color still reads clearly on RGB hardware.
+    // Scales all three channels by the same factor, which leaves the hue and saturation
+    // exactly as sent: forcing saturation up on a real (non-pure) color was tried and
+    // reverted - it amplified small, numerically unstable channel differences on a merely
+    // dim color into a visibly wrong hue (an orange team color came out pink).
     static Rgb Vivid(Rgb c) {
         const double r = c.r / 255.0, g = c.g / 255.0, b = c.b / 255.0;
-        const double maxc = std::max({r, g, b}), minc = std::min({r, g, b}), d = maxc - minc;
-        const double s0 = maxc == 0 ? 0.0 : d / maxc, v0 = maxc;
-        if (s0 >= 0.7 && v0 >= 0.9) return c;  // already vivid: leave the exact bytes alone
-        double h = 0;
-        if (d > 0) {
-            if (maxc == r) h = std::fmod((g - b) / d, 6.0);
-            else if (maxc == g) h = (b - r) / d + 2.0;
-            else h = (r - g) / d + 4.0;
-            h *= 60.0;
-            if (h < 0) h += 360.0;
-        }
-        const double s = std::max(s0, 0.7), v = std::max(v0, 0.9);
-        const double cc = v * s, x = cc * (1 - std::fabs(std::fmod(h / 60.0, 2.0) - 1)), m = v - cc;
-        double r2, g2, b2;
-        if (h < 60) { r2 = cc; g2 = x; b2 = 0; }
-        else if (h < 120) { r2 = x; g2 = cc; b2 = 0; }
-        else if (h < 180) { r2 = 0; g2 = cc; b2 = x; }
-        else if (h < 240) { r2 = 0; g2 = x; b2 = cc; }
-        else if (h < 300) { r2 = x; g2 = 0; b2 = cc; }
-        else { r2 = cc; g2 = 0; b2 = x; }
-        return Rgb{static_cast<uint8_t>((r2 + m) * 255 + 0.5), static_cast<uint8_t>((g2 + m) * 255 + 0.5),
-                   static_cast<uint8_t>((b2 + m) * 255 + 0.5)};
+        const double v0 = std::max({r, g, b});
+        if (v0 >= 0.9 || v0 <= 0.0) return c;  // already bright, or black (no hue to keep)
+        const double boost = 0.9 / v0;
+        auto Scale = [boost](double ch) { return static_cast<uint8_t>(std::min(1.0, ch * boost) * 255 + 0.5); };
+        return Rgb{Scale(r), Scale(g), Scale(b)};
     }
     static bool ParseHex(const std::string& in, Rgb* out) {
         std::string s = in;

@@ -85,7 +85,9 @@ struct Prefs {
     bool logitechSleepIgnoreDynamic = false;  // refuse to sleep while a dynamic effect is showing
     bool azothSleep = true;
     int azothSleepSec = 300;
-    bool azothSleepIgnoreDynamic = false;  // refuse to sleep while a dynamic effect is showing
+    // Default on: a game played with a controller never touches the keyboard, so the default
+    // sleep timeout would fade it out mid-match despite active game lighting.
+    bool azothSleepIgnoreDynamic = true;
     // Light the ROG Azoth (by cable or its Omni receiver).
     bool azothKeyboard = true;
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper.
