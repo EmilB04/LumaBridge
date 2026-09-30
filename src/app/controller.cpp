@@ -77,14 +77,17 @@ void Controller::OnDeviceInput(uint16_t vid, uint16_t pid) {
         azothInputAt_ = now;
 }
 
-uint64_t Controller::LogitechSleepMs() const {
+uint64_t Controller::LogitechSleepMs(bool dynamicActive) const {
     // G HUB's own setting decides whether the mouse's lighting turns off; LumaBridge's decides when.
     if (!prefs_.logitechSleep || !presence_.ghubSleep.value_or(true)) return 0;
+    if (dynamicActive && prefs_.logitechSleepIgnoreDynamic) return 0;
     return static_cast<uint64_t>(std::max(10, prefs_.logitechSleepSec)) * 1000;
 }
 
-uint64_t Controller::AzothSleepMs() const {
-    return prefs_.azothSleep ? static_cast<uint64_t>(std::max(10, prefs_.azothSleepSec)) * 1000 : 0;
+uint64_t Controller::AzothSleepMs(bool dynamicActive) const {
+    if (!prefs_.azothSleep) return 0;
+    if (dynamicActive && prefs_.azothSleepIgnoreDynamic) return 0;
+    return static_cast<uint64_t>(std::max(10, prefs_.azothSleepSec)) * 1000;
 }
 
 void Controller::SetLampArrayEnabled(bool on) {
@@ -158,10 +161,13 @@ void Controller::SetLogitechEnabled(bool on) {
 }
 
 void Controller::UpdateLogitech() {
-    // Not used for a while: its lighting fades out, then nothing goes to it (device_sleep.h).
+    // Not used for a while: its lighting fades out, then nothing goes to it (device_sleep.h),
+    // unless it's showing a dynamic effect the owner asked never to interrupt.
     const uint64_t now = GetTickCount64();
-    const double awake = sleep::Level(now, logitechInputAt_, LogitechSleepMs());
-    const bool asleep = sleep::Asleep(now, logitechInputAt_, LogitechSleepMs());
+    const fx::Params effect = DeviceEffect(device::kMouse);
+    const bool dynamic = effect.kind != fx::Kind::Static;
+    const double awake = sleep::Level(now, logitechInputAt_, LogitechSleepMs(dynamic));
+    const bool asleep = sleep::Asleep(now, logitechInputAt_, LogitechSleepMs(dynamic));
     if (asleep != logitechAsleep_) LUMA_INFO("Logitech devices: %s", asleep ? "asleep (not used for a while)" : "awake");
     logitechAsleep_ = asleep;
     logitech_.SetAsleep(asleep);
@@ -176,8 +182,7 @@ void Controller::UpdateLogitech() {
         logitechNote_ = "Handed back to G HUB";
     }
     if (own && prefs_.logitechForce) {
-        logitech_.Set(DeviceEffect(device::kMouse),
-                      cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, true,
+        logitech_.Set(effect, cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, true,
                       output_.game);
         return;  // kept with LumaBridge even while a game lights Logitech gear
     }
@@ -194,8 +199,8 @@ void Controller::UpdateLogitech() {
                 logitechNote_ = g.game.name + " lights them through G HUB";
                 break;
             }
-    logitech_.Set(DeviceEffect(device::kMouse),
-                  cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, own, output_.game);
+    logitech_.Set(effect, cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, own,
+                  output_.game);
 }
 
 std::wstring Controller::GameDir(const char* profileKey) const {
@@ -740,13 +745,15 @@ void Controller::Tick() {
     }
     {
         const uint64_t now = GetTickCount64();
-        const bool asleep = sleep::Asleep(now, azothInputAt_, AzothSleepMs());
+        const fx::Params keyboardEffect = DeviceEffect(device::kKeyboard);
+        const bool dynamic = keyboardEffect.kind != fx::Kind::Static;
+        const bool asleep = sleep::Asleep(now, azothInputAt_, AzothSleepMs(dynamic));
         if (asleep != azothAsleep_) LUMA_INFO("ROG Azoth: %s", asleep ? "asleep (not used for a while)" : "awake");
         azothAsleep_ = asleep;
         azoth_.SetAsleep(asleep);
-        azoth_.Set(DeviceEffect(device::kKeyboard),
+        azoth_.Set(keyboardEffect,
                    cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kKeyboard) *
-                       sleep::Level(now, azothInputAt_, AzothSleepMs()),
+                       sleep::Level(now, azothInputAt_, AzothSleepMs(dynamic)),
                    prefs_.azothKeyboard && !output_.stopped && !DeviceNative(prefs_, device::kKeyboard));
     }
     hardware_.SetRam(DeviceEffect(device::kRam), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kRam), prefs_.ramLighting,

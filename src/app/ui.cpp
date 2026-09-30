@@ -4570,7 +4570,7 @@ DeviceStatus AzothStatus(Controller& ctl) {
 }
 
 // "Fade out when not used": the switch and the delay (seconds, shown in minutes from 1 minute).
-bool SleepControls(const char* id, bool* on, int* seconds) {
+bool SleepControls(const char* id, bool* on, int* seconds, bool* ignoreDynamic) {
     ImGui::PushID(id);
     bool changed = Toggle("Fade out when you're not using it", on);
     if (*on) {
@@ -4588,6 +4588,10 @@ bool SleepControls(const char* id, bool* on, int* seconds) {
             *seconds = kSteps[sel];
             changed = true;
         }
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        if (Toggle("Refuse to sleep while a dynamic effect is showing", ignoreDynamic)) changed = true;
+        Muted("Games and animated presets (Rainbow, Comet, ...) keep it awake instead of fading out mid-effect; "
+              "a still color still fades and sleeps as usual.");
     }
     ImGui::PopID();
     return changed;
@@ -4619,7 +4623,9 @@ void LogitechCard(Controller& ctl, const Fonts& f) {
           "LumaBridge hands it to the game, so the mouse shows the game's own effects. On: your Logitech gear follows "
           "LumaBridge like the rest, games included.");
     ImGui::Dummy(ImVec2(0, 6 * S()));
-    if (SleepControls("logisleep", &ctl.prefs().logitechSleep, &ctl.prefs().logitechSleepSec)) ctl.Changed();
+    if (SleepControls("logisleep", &ctl.prefs().logitechSleep, &ctl.prefs().logitechSleepSec,
+                      &ctl.prefs().logitechSleepIgnoreDynamic))
+        ctl.Changed();
     const auto gh = ctl.ghubSleep();
     Muted("Like G HUB: when you haven't used it for a while, its lighting fades out and LumaBridge stops sending, so a "
           "wireless mouse can sleep; it lights up again when you use it. Whether it fades follows G HUB's \"turn off "
@@ -4639,7 +4645,9 @@ void AzothCard(Controller& ctl, const Fonts& f) {
     bool enabled = ctl.prefs().azothKeyboard;
     if (Toggle("Light the ROG Azoth", &enabled)) ctl.SetAzothEnabled(enabled);
     ImGui::Dummy(ImVec2(0, 4 * S()));
-    if (SleepControls("azothsleep", &ctl.prefs().azothSleep, &ctl.prefs().azothSleepSec)) ctl.Changed();
+    if (SleepControls("azothsleep", &ctl.prefs().azothSleep, &ctl.prefs().azothSleepSec,
+                      &ctl.prefs().azothSleepIgnoreDynamic))
+        ctl.Changed();
     Muted("When you haven't typed for a while, the keys fade out and LumaBridge stops sending, so the keyboard can "
           "sleep (and save its battery wirelessly). The next key press lights it up again.");
     ImGui::SameLine();

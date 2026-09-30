@@ -82,8 +82,10 @@ struct Prefs {
     // also follows G HUB's "turn off lighting on inactivity" when G HUB answers.
     bool logitechSleep = true;
     int logitechSleepSec = 60;
+    bool logitechSleepIgnoreDynamic = false;  // refuse to sleep while a dynamic effect is showing
     bool azothSleep = true;
     int azothSleepSec = 300;
+    bool azothSleepIgnoreDynamic = false;  // refuse to sleep while a dynamic effect is showing
     // Light the ROG Azoth (by cable or its Omni receiver).
     bool azothKeyboard = true;
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper.

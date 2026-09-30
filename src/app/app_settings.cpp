@@ -172,10 +172,14 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (!v.empty()) p.logitechSleep = v != L"0";
     v = Read(ini, L"Sleep", L"LogitechSeconds");
     if (!v.empty() && _wtoi(v.c_str()) > 0) p.logitechSleepSec = _wtoi(v.c_str());
+    v = Read(ini, L"Sleep", L"LogitechIgnoreDynamic");
+    if (!v.empty()) p.logitechSleepIgnoreDynamic = v != L"0";
     v = Read(ini, L"Sleep", L"Azoth");
     if (!v.empty()) p.azothSleep = v != L"0";
     v = Read(ini, L"Sleep", L"AzothSeconds");
     if (!v.empty() && _wtoi(v.c_str()) > 0) p.azothSleepSec = _wtoi(v.c_str());
+    v = Read(ini, L"Sleep", L"AzothIgnoreDynamic");
+    if (!v.empty()) p.azothSleepIgnoreDynamic = v != L"0";
     v = Read(ini, L"App", L"AzothKeyboard");
     if (!v.empty()) p.azothKeyboard = v != L"0";
     v = Read(ini, L"App", L"RamLighting");
@@ -318,8 +322,10 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"AzothKeyboard", p.azothKeyboard ? L"1" : L"0");
     WriteConfigValue(ini, L"Sleep", L"Logitech", p.logitechSleep ? L"1" : L"0");
     WriteConfigValue(ini, L"Sleep", L"LogitechSeconds", Num(p.logitechSleepSec));
+    WriteConfigValue(ini, L"Sleep", L"LogitechIgnoreDynamic", p.logitechSleepIgnoreDynamic ? L"1" : L"0");
     WriteConfigValue(ini, L"Sleep", L"Azoth", p.azothSleep ? L"1" : L"0");
     WriteConfigValue(ini, L"Sleep", L"AzothSeconds", Num(p.azothSleepSec));
+    WriteConfigValue(ini, L"Sleep", L"AzothIgnoreDynamic", p.azothSleepIgnoreDynamic ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"RamLighting", p.ramLighting ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"RamSlots", p.ramSlots < 0 ? L"auto" : Num(p.ramSlots));
     WriteConfigValue(ini, L"App", L"RamRelease", p.ramRelease == 1 ? L"off" : p.ramRelease == 2 ? L"keep" : L"rainbow");

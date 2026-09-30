@@ -275,8 +275,9 @@ private:
     bool memoryLogged_ = false;  // the memory slots' names are in the log
     bool logitechAsleep_ = false, azothAsleep_ = false;
     // The mouse's and the keyboard's sleep timeouts right now (0: they don't sleep).
-    uint64_t LogitechSleepMs() const;
-    uint64_t AzothSleepMs() const;
+    // `dynamicActive`: an effect other than a plain static color is currently showing on it.
+    uint64_t LogitechSleepMs(bool dynamicActive) const;
+    uint64_t AzothSleepMs(bool dynamicActive) const;
     std::future<Presence> presenceJob_;
     uint64_t presenceAt_ = 0;  // when the last presence scan started
     bool libraryRescanPending_ = false;  // the list changed while a scan was running

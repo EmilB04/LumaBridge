@@ -101,6 +101,10 @@ more is sent until it's used again, so the mouse can sleep; the first movement l
 again. Whether it fades follows G HUB's "turn off lighting on inactivity"
 (`/lighting/turn_off_for_inactivity` over G HUB's local WebSocket), read in the background;
 without an answer from G HUB it fades. The ROG Azoth does the same (5 minutes by default).
+"Refuse to sleep while a dynamic effect is showing" (off by default, on the device's page)
+skips the timeout entirely while its current effect isn't a plain static color (a game, or an
+animated preset like Rainbow or Comet), so it doesn't fade out mid-effect; a still color still
+sleeps as usual.
 
 ## ASUS ROG Azoth (wired or wireless, experimental)
 
