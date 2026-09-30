@@ -182,6 +182,8 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (!v.empty()) p.azothSleepIgnoreDynamic = v != L"0";
     v = Read(ini, L"App", L"AzothKeyboard");
     if (!v.empty()) p.azothKeyboard = v != L"0";
+    v = Read(ini, L"App", L"DualsenseController");
+    if (!v.empty()) p.dualsenseController = v != L"0";
     v = Read(ini, L"App", L"RamLighting");
     if (!v.empty()) p.ramLighting = v != L"0";
     p.setupDone = Read(ini, L"App", L"SetupDone") == L"1";
@@ -320,6 +322,7 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"LogitechDevices", p.logitechDevices ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"LogitechKeepInGames", p.logitechForce ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"AzothKeyboard", p.azothKeyboard ? L"1" : L"0");
+    WriteConfigValue(ini, L"App", L"DualsenseController", p.dualsenseController ? L"1" : L"0");
     WriteConfigValue(ini, L"Sleep", L"Logitech", p.logitechSleep ? L"1" : L"0");
     WriteConfigValue(ini, L"Sleep", L"LogitechSeconds", Num(p.logitechSleepSec));
     WriteConfigValue(ini, L"Sleep", L"LogitechIgnoreDynamic", p.logitechSleepIgnoreDynamic ? L"1" : L"0");

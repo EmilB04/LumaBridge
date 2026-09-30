@@ -197,6 +197,22 @@ Not yet:
 
 `tools\device-probe.exe` lists the HID interfaces of ASUS and Logitech devices (read-only).
 
+## Sony DualSense (PS5 controller), lightbar only (experimental, unverified)
+
+By USB cable (`0B05` is ASUS; the DualSense itself is Sony, `054C:0CE6`, or `054C:0DF2` for
+the DualSense Edge) or Bluetooth - no Steam or other software needed, LumaBridge talks to the
+controller directly. The lightbar is one LED, so it shows the effect's first color, the way a
+single-LED Logitech mouse does; the five player-indicator LEDs are left off.
+
+The output report layout (`dualsense_protocol.h`) is reimplemented from OpenRGB's Sony
+DualSense driver (`Controllers/SonyGamepadController/SonyDualSenseController`,
+GPL-2.0-or-later), from its documented byte offsets, not copied - LumaBridge has no DualSense
+of its own to capture from. The Bluetooth report adds a CRC-32 (the common zlib/PKZIP
+variant); `tests/test_core.cpp` checks the CRC against the standard "123456789" test vector
+and the report layout against the documented offsets, but **none of this has been checked
+against a real controller.** Treat it as unverified until someone confirms it works (or
+files a bug with what went wrong).
+
 ## RAM: HyperX / Kingston FURY RGB DDR4 (experimental)
 
 The sticks' lighting controller answers at SMBus address `0x27` (one controller for all

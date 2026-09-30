@@ -1,9 +1,10 @@
 # LumaBridge
 
 Dynamic game lighting on ASUS Aura Sync devices (motherboard, RAM, fans, Aura keyboards
-like the ROG Azoth), Logitech gear through G HUB, and any brand's devices with Windows'
-lighting standard built in, including in games that only support other brands. No
-middleware needed. It also shows your whole PC and desk in 3D, live.
+like the ROG Azoth), Logitech gear through G HUB, a DualSense controller's lightbar
+(experimental), and any brand's devices with Windows' lighting standard built in, including
+in games that only support other brands. No middleware needed. It also shows your whole PC
+and desk in 3D, live.
 
 ![LumaBridge, My setup: the PC and desk in 3D with live lighting](docs/images/app-mysetup.png)
 

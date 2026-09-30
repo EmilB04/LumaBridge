@@ -10,6 +10,7 @@
 #include "log.h"
 #include "usb_aura.h"
 #include "azoth_protocol.h"
+#include "dualsense_protocol.h"
 #include "vendor_detect.h"
 #include "setup_hardware.h"
 #include "device_catalog.h"
@@ -57,6 +58,7 @@ bool Controller::Init() {
     monitor_.Start(prefs_.lhmPort);
     if (prefs_.logitechDevices) logitech_.Start(AppDirectory() + L"\\integrations\\LumaBridge_x64.dll");
     if (prefs_.azothKeyboard) azoth_.Start();
+    if (prefs_.dualsenseController) dualsense_.Start();
     if (prefs_.openRgb) openRgb_.Start(static_cast<uint16_t>(prefs_.openRgbPort));
     if (prefs_.lampArray) lampArray_.Start();
     logitechInputAt_ = azothInputAt_ = GetTickCount64();  // awake at start
@@ -150,6 +152,13 @@ void Controller::SetAzothEnabled(bool on) {
     prefs_.azothKeyboard = on;
     if (on) azoth_.Start();
     else azoth_.Stop();
+    Changed();
+}
+
+void Controller::SetDualSenseEnabled(bool on) {
+    prefs_.dualsenseController = on;
+    if (on) dualsense_.Start();
+    else dualsense_.Stop();
     Changed();
 }
 
@@ -258,6 +267,7 @@ void Controller::RescanPresence() {
     presenceJob_ = std::async(std::launch::async, [] {
         Presence p;
         p.azoth = UsbDevicePresent(azoth::kVendor, {azoth::Product(azoth::Link::Wired), azoth::Product(azoth::Link::Wireless)});
+        p.dualsense = UsbDevicePresent(dualsense::kVendor, {dualsense::kProductStandard, dualsense::kProductEdge});
         p.logitech = ScanLogitechDevices();
         p.ghubSleep = GHubTurnsOffOnInactivity();
         p.usb = UsbDevices();
@@ -310,6 +320,7 @@ void Controller::Shutdown(bool handBack) {
     monitor_.Stop();
     logitech_.Stop();
     azoth_.Stop();
+    dualsense_.Stop();
     openRgb_.Stop();
     kraken_.Stop();
     lampArray_.Stop();
@@ -756,6 +767,9 @@ void Controller::Tick() {
                        sleep::Level(now, azothInputAt_, AzothSleepMs(dynamic)),
                    prefs_.azothKeyboard && !output_.stopped && !DeviceNative(prefs_, device::kKeyboard));
     }
+    dualsense_.Set(DeviceEffect(device::kController),
+                   cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kController),
+                   prefs_.dualsenseController && !output_.stopped && !DeviceNative(prefs_, device::kController));
     hardware_.SetRam(DeviceEffect(device::kRam), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kRam), prefs_.ramLighting,
                      !output_.stopped && !DeviceNative(prefs_, device::kRam), prefs_.ramRelease);
     if (now - sensorsPushedAt_ >= 500) {

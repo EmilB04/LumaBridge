@@ -11,11 +11,14 @@
 namespace luma::app::setup {
 
 // Hardware the guide asks about.
-enum class Brand { Asus, Logitech, Razer, SteelSeries, Corsair, Azoth, FuryRam, Alienware, Count };
+enum class Brand { Asus, Logitech, Razer, SteelSeries, Corsair, Azoth, FuryRam, Alienware, DualSense, Count };
 // Lighting software the guide asks about.
 enum class App { ArmouryCrate, GHub, Synapse, SteelSeriesGG, Icue, AlienwareCC, Count };
 // LumaBridge's connections, in the order the guide lists them.
-enum class Conn { Lightsync, Chroma, GameSense, AlienFx, LogitechDevices, Azoth, Helper, RamLighting, LampArray, OpenRgb, Handback, Count };
+enum class Conn {
+    Lightsync, Chroma, GameSense, AlienFx, LogitechDevices, Azoth, Helper, RamLighting, LampArray, OpenRgb, Handback,
+    DualSense, Count
+};
 
 constexpr int kBrands = static_cast<int>(Brand::Count);
 constexpr int kApps = static_cast<int>(App::Count);
@@ -44,6 +47,7 @@ inline const BrandInfo& Info(Brand b) {
         {"ROG Azoth", "The keyboard, key by key"},
         {"Kingston FURY / HyperX RGB", "The memory sticks"},
         {"Alienware", "AlienFX devices"},
+        {"Sony DualSense", "The controller's lightbar"},
     };
     return k[static_cast<int>(b)];
 }
@@ -83,6 +87,7 @@ inline const ConnInfo& Info(Conn c) {
          ""},
         {"Armoury Crate hand-back", "Gives the lights back to Armoury Crate silently when LumaBridge lets go.", true,
          true, "handback"},
+        {"DualSense controller", "The lightbar, by USB or Bluetooth (experimental).", false, false, ""},
     };
     return k[static_cast<int>(c)];
 }
@@ -99,6 +104,7 @@ inline bool DefaultOn(Conn c, const Answers& a) {
     case Conn::Azoth: return a.has(Brand::Azoth);
     case Conn::RamLighting: return a.has(Brand::FuryRam);
     case Conn::OpenRgb: return false;  // only if OpenRGB is on the PC (the guide checks)
+    case Conn::DualSense: return a.has(Brand::DualSense);
     default: return true;
     }
 }
@@ -143,6 +149,7 @@ inline void AddUsbDevice(Answers* a, uint16_t vid, uint16_t pid) {
     case 0x1038: a->set(Brand::SteelSeries); break;
     case 0x1B1C: a->set(Brand::Corsair); break;
     case 0x187C: a->set(Brand::Alienware); break;
+    case 0x054C: a->set(Brand::DualSense); break;  // PS5 DualSense / DualSense Edge, USB or BT
     case 0x0B05:
         if (pid == 0x1A83 || pid == 0x1ACE) a->set(Brand::Azoth);  // cable, Omni receiver
         else a->set(Brand::Asus);  // the Aura controller and other ASUS gear

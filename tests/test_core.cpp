@@ -39,6 +39,7 @@
 #include "lhm.h"
 #include "friendly_names.h"
 #include "azoth_protocol.h"
+#include "dualsense_protocol.h"
 #include "azoth_layout.h"
 #include "logitech_hidpp.h"
 #include "device_lighting.h"
@@ -1357,6 +1358,35 @@ static void TestAzoth() {
     CHECK(Packets(ColorCycle(0x1F, 0x64), Link::Wireless)[0][0] == 0x02);
 }
 
+static void TestDualSense() {
+    using namespace luma::app::dualsense;
+    // The CRC-32 check value for the ASCII string "123456789" is the standard test vector for
+    // this variant (reflected, poly 0xEDB88320, init/xorout 0xFFFFFFFF - zlib's crc32, the one
+    // PKZIP and Ethernet use). If this doesn't match, the Bluetooth report's CRC is wrong.
+    const uint8_t check[] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    CHECK(Crc32(check, sizeof check) == 0xCBF43926u);
+
+    const auto usb = UsbReport(luma::Rgb{0x11, 0x22, 0x33});
+    CHECK(usb.size() == kUsbReportSize);
+    CHECK((usb[0] == 0x02 && usb[1] == 0x0F && usb[2] == 0x55));  // report ID, feature-enable flags
+    CHECK(usb[9] == kDirectMode);
+    CHECK(usb[39] == 0xFF);  // brightness byte enabled
+    CHECK(usb[44] == 0x20);  // lightbar color bit set, no player LEDs
+    CHECK((usb[45] == 0x11 && usb[46] == 0x22 && usb[47] == 0x33));
+    for (size_t i = 3; i < 9; ++i) CHECK(usb[i] == 0);  // untouched: rumble, headphone volume, ...
+
+    const auto bt = BtReport(luma::Rgb{0x44, 0x55, 0x66});
+    CHECK(bt.size() == kBtReportSize);
+    CHECK((bt[0] == 0x31 && bt[1] == 0x02 && bt[2] == 0x0F && bt[3] == 0x55));  // one byte in from the USB layout
+    CHECK(bt[10] == kDirectMode);
+    CHECK(bt[40] == 0xFF);
+    CHECK(bt[45] == 0x20);
+    CHECK((bt[46] == 0x44 && bt[47] == 0x55 && bt[48] == 0x66));
+    // The CRC is recomputed if a single byte changes.
+    const auto bt2 = BtReport(luma::Rgb{0x44, 0x55, 0x67});
+    CHECK(std::memcmp(bt.data() + kBtReportSize - 4, bt2.data() + kBtReportSize - 4, 4) != 0);
+}
+
 static void TestLogitechHidpp() {
     CHECK(std::strcmp(luma::app::hidpp::DeviceTypeName(3), "Mouse") == 0);
     CHECK(std::strcmp(luma::app::hidpp::DeviceTypeName(0), "Keyboard") == 0);
@@ -1930,6 +1960,7 @@ int main() {
     TestLhm();
     TestFriendlyNames();
     TestAzoth();
+    TestDualSense();
     TestAzothKeys();
     TestLogitechHidpp();
     TestDeviceLighting();

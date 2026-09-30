@@ -942,6 +942,12 @@ bool HasAzoth(Controller& ctl) {
     return p.scanned ? p.azoth || ctl.azoth().state() == AzothOutput::State::Active : ctl.prefs().azothKeyboard;
 }
 
+bool HasDualSense(Controller& ctl) {
+    const auto& p = ctl.presence();
+    return p.scanned ? p.dualsense || ctl.dualsense().state() == DualSenseOutput::State::Active
+                      : ctl.prefs().dualsenseController;
+}
+
 // RGB memory LumaBridge can light: sticks the helper found, or the SMBIOS scan says Kingston
 // FURY / HyperX (confirmed once the helper looks).
 bool HasRgbRam(Controller& ctl, const sensors::SystemSnapshot& snap) {
@@ -1811,6 +1817,7 @@ std::vector<const char*> LitDeviceIds(Controller& ctl) {
         if ((id == std::string(device::kRam) && !(p.ramLighting && HasRgbRam(ctl, snap))) ||
             (id == std::string(device::kMouse) && !(p.logitechDevices && HasLogitechRgb(ctl))) ||
             (id == std::string(device::kKeyboard) && !(p.azothKeyboard && HasAzoth(ctl))) ||
+            (id == std::string(device::kController) && !(p.dualsenseController && HasDualSense(ctl))) ||
             (id == std::string(device::kOther) && OpenRgbLit(ctl).empty() && LampArrayLit(ctl).empty()))
             continue;
         out.push_back(id);
@@ -4479,6 +4486,8 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
         else if (ui.lightTarget == device::kMouse)
             Muted("%s", ctl.logitech().mouseEffect() ? "It shows the effect LED by LED."
                                                       : "Through G HUB it shows one color: the effect's first LED.");
+        else if (ui.lightTarget == device::kController)
+            Muted("The lightbar shows the effect's first color, by USB or Bluetooth.");
         else if (!d.own)
             Muted("It shows the same lighting as the rest. Pick \"Its own lighting\" to set it apart.");
         EndCard();
@@ -4580,6 +4589,17 @@ DeviceStatus AzothStatus(Controller& ctl) {
     case A_::Active: return {az.wireless() ? "Following LumaBridge, every key (wireless)" : "Following LumaBridge, every key", kGreen};
     case A_::NotFound: return {"Not connected", kAmber};
     default: return {"Armoury Crate's lighting", kMuted};
+    }
+}
+
+DeviceStatus DualSenseStatus(Controller& ctl) {
+    const auto& ds = ctl.dualsense();
+    using D_ = DualSenseOutput::State;
+    if (!ctl.prefs().dualsenseController) return {"Off", kMuted};
+    switch (ds.state()) {
+    case D_::Active: return {ds.bluetooth() ? "Following LumaBridge (Bluetooth)" : "Following LumaBridge (USB)", kGreen};
+    case D_::NotFound: return {"Not connected", kAmber};
+    default: return {"The game or Steam's lighting", kMuted};
     }
 }
 
@@ -4688,6 +4708,38 @@ void AzothCard(Controller& ctl, const Fonts& f) {
     if (SmallBtn("Run the device probe")) {
         const std::wstring exe = AppDirectory() + L"\\tools\\device-probe.exe";
         ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    EndCard();
+}
+
+void DualSenseCard(Controller& ctl, const Fonts& f) {
+    BeginCard("dualsense");
+    CardTitle(f, "Settings", Icon::Gear);
+    ImGui::PushStyleColor(ImGuiCol_Text, V4(kAmber));
+    ImGui::TextWrapped("Experimental: not checked against a real DualSense - say so if something looks wrong.");
+    ImGui::PopStyleColor();
+    Muted("The lightbar follows LumaBridge's effect as one color, by USB cable or Bluetooth. LumaBridge talks to "
+          "the controller directly (no Steam or extra software needed), and never saves anything to it, so it goes "
+          "back to whatever the game or Steam set as soon as LumaBridge lets go.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    bool enabled = ctl.prefs().dualsenseController;
+    if (Toggle("Light the DualSense lightbar", &enabled)) ctl.SetDualSenseEnabled(enabled);
+    if (enabled) {
+        ImGui::SameLine();
+        using D_ = DualSenseOutput::State;
+        const D_ st = ctl.dualsense().state();
+        if (st == D_::Active) Pill(ctl.dualsense().bluetooth() ? "Active (Bluetooth)" : "Active (USB)", kGreen);
+        else if (st == D_::Released) Pill("Handed off", kMuted);
+        else Pill("Not found", kAmber);
+        if (st == D_::NotFound) {
+            const unsigned long err = ctl.dualsense().lastWriteError();
+            if (err)
+                Muted("It was connected, then a write failed (error %lu) - unplugged, or out of Bluetooth range. "
+                      "LumaBridge keeps trying. Details are in the log (Settings).",
+                      err);
+            else
+                Muted("Not found yet, by USB or Bluetooth; LumaBridge keeps trying every few seconds.");
+        }
     }
     EndCard();
 }
@@ -5047,6 +5099,13 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         DeviceLightingCard(ctl, ui, f, device::kKeyboard);
         return;
     }
+    if (id == device::kController) {
+        if (!DeviceHeader(ui, f, Icon::Game, "DualSense", DualSenseStatus(ctl), true, "By USB cable, or Bluetooth"))
+            return;
+        DualSenseCard(ctl, f);
+        DeviceLightingCard(ctl, ui, f, device::kController);
+        return;
+    }
     if (id.rfind("lamparray:", 0) == 0) {
         const std::string name = id.substr(10);
         for (const auto& d : ctl.lampArray().devices()) {
@@ -5180,6 +5239,8 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
         rows.push_back({device::kMouse, LogitechName(ctl), LogitechKinds(ctl) + ", through G HUB", Icon::Mouse,
                         LogitechStatus(ctl)});
     if (HasAzoth(ctl)) rows.push_back({device::kKeyboard, "ASUS ROG Azoth", "Keyboard", Icon::Keyboard, AzothStatus(ctl)});
+    if (HasDualSense(ctl))
+        rows.push_back({device::kController, "DualSense", "Controller", Icon::Game, DualSenseStatus(ctl)});
     if (ctl.prefs().lampArray)
         for (const auto& d : ctl.lampArray().devices())
             rows.push_back({"lamparray:" + d.name, d.name, std::string(lamparray::KindName(d.kind)) + ", Windows lighting standard",
@@ -6650,6 +6711,7 @@ void SetupRun(Controller& ctl, Integrations& in, UiState& ui) {
                 if (ctl.prefs().logitechDevices != on) ctl.SetLogitechEnabled(on);
                 break;
             case Conn::Azoth: ctl.SetAzothEnabled(on); break;
+            case Conn::DualSense: ctl.SetDualSenseEnabled(on); break;
             case Conn::RamLighting: ctl.SetRamEnabled(on); break;
             case Conn::OpenRgb:
                 if (ctl.prefs().openRgb != on) ctl.SetOpenRgbEnabled(on);

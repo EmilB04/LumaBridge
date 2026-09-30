@@ -55,9 +55,10 @@ constexpr const char* kBoard = "board";        // the motherboard's own LEDs (Au
 constexpr const char* kRam = "ram";            // HyperX / Kingston FURY memory
 constexpr const char* kMouse = "mouse";        // Logitech (G HUB / HID++)
 constexpr const char* kKeyboard = "keyboard";  // ASUS ROG Azoth
+constexpr const char* kController = "controller";  // DualSense lightbar
 constexpr const char* kOther = "other";        // devices lit through OpenRGB
 inline const std::vector<const char*>& All() {
-    static const std::vector<const char*> kAll{kFans, kBoard, kRam, kMouse, kKeyboard, kOther};
+    static const std::vector<const char*> kAll{kFans, kBoard, kRam, kMouse, kKeyboard, kController, kOther};
     return kAll;
 }
 inline const char* Name(const std::string& id) {
@@ -66,6 +67,7 @@ inline const char* Name(const std::string& id) {
     if (id == kRam) return "Memory";
     if (id == kMouse) return "Mouse";
     if (id == kKeyboard) return "Keyboard";
+    if (id == kController) return "Controller";
     if (id == kOther) return "Other devices";
     return "";
 }
@@ -88,6 +90,7 @@ struct DeviceLighting {
 // The app that lights a device when LumaBridge hands it back.
 inline const char* NativeApp(const std::string& id) {
     if (id == device::kMouse) return "G HUB";
+    if (id == device::kController) return "the game or Steam";
     if (id == device::kOther) return "its own app";
     return "Armoury Crate";
 }

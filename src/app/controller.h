@@ -29,6 +29,7 @@
 #include "system_monitor.h"
 #include "logitech_output.h"
 #include "azoth_output.h"
+#include "dualsense_output.h"
 #include "openrgb_output.h"
 #include "lamparray_output.h"
 #include "hardware_helper.h"
@@ -161,6 +162,7 @@ public:
     struct Presence {
         bool scanned = false;  // the first scan has finished
         bool azoth = false;    // ROG Azoth, by cable or its Omni receiver
+        bool dualsense = false;  // a DualSense controller, by USB or Bluetooth
         // Every USB device, as (vendor, product): for naming RGB brands (device_catalog.h).
         std::vector<std::pair<uint16_t, uint16_t>> usb;
         // Krakens found by their USB name (any product ID), and the AIO cooler found.
@@ -187,6 +189,10 @@ public:
     // ASUS ROG Azoth over USB (wired).
     const AzothOutput& azoth() const { return azoth_; }
     void SetAzothEnabled(bool on);
+
+    // Sony DualSense lightbar, by USB or Bluetooth (experimental).
+    const DualSenseOutput& dualsense() const { return dualsense_; }
+    void SetDualSenseEnabled(bool on);
 
     // Devices with Windows' lighting standard built in (HID LampArray), lit directly.
     const LampArrayOutput& lampArray() const { return lampArray_; }
@@ -260,6 +266,7 @@ private:
     sensors::SystemMonitor monitor_;
     LogitechOutput logitech_;
     AzothOutput azoth_;
+    DualSenseOutput dualsense_;
     OpenRgbOutput openRgb_;
     LampArrayOutput lampArray_;
     HardwareHelper hardware_;

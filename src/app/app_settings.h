@@ -90,6 +90,8 @@ struct Prefs {
     bool azothSleepIgnoreDynamic = true;
     // Light the ROG Azoth (by cable or its Omni receiver).
     bool azothKeyboard = true;
+    // Light a Sony DualSense's lightbar, by USB or Bluetooth (experimental).
+    bool dualsenseController = true;
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper.
     bool ramLighting = true;
     // Light devices with Windows' lighting standard built in (HID LampArray), directly.
