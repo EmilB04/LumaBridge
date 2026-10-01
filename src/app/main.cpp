@@ -389,6 +389,9 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_INPUT:
         OnRawInput(lp);
         break;  // DefWindowProc cleans up
+    case WM_DEVICECHANGE:
+        g_ctl.RescanAzoth();
+        break;
     case WM_SIZE:
         if (wp != SIZE_MINIMIZED) {
             g_resizeW = LOWORD(lp);

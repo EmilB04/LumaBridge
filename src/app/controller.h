@@ -195,6 +195,9 @@ public:
     // ASUS ROG Azoth over USB (wired).
     const AzothOutput& azoth() const { return azoth_; }
     void SetAzothEnabled(bool on);
+    void SetAzothOled(azoth::OledSettings settings);
+    void ReapplyAzothOled() { azoth_.ReapplyOled(); }
+    void RescanAzoth() { azoth_.Rescan(); }
 
     // Sony DualSense lightbar, by USB or Bluetooth (experimental).
     const DualSenseOutput& dualsense() const { return dualsense_; }

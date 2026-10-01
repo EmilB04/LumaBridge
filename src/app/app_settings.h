@@ -13,6 +13,7 @@
 #include "device_lighting.h"
 #include "effects.h"
 #include "pad_mapping.h"
+#include "azoth_oled.h"
 
 namespace luma::app {
 
@@ -95,6 +96,10 @@ struct Prefs {
     bool azothSleepIgnoreDynamic = true;
     // Light the ROG Azoth (by cable or its Omni receiver).
     bool azothKeyboard = true;
+    azoth::OledSettings azothOled;
+    std::wstring azothOledBanner = L"LumaBridge";
+    int azothOledBannerSize = 24;
+    bool azothOledBannerInvert = false;
     // Light a Sony DualSense's lightbar, by USB or Bluetooth (experimental).
     bool padInput = true;  // read a connected PlayStation controller (live view, battery, report timing)
     pad::Mapping padMapping;  // its button mapping (keyboard / mouse), off until switched on

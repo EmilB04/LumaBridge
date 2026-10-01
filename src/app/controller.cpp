@@ -62,7 +62,8 @@ bool Controller::Init() {
     feeds_.Start();
     monitor_.Start(prefs_.lhmPort);
     if (prefs_.logitechDevices) logitech_.Start(AppDirectory() + L"\\integrations\\LumaBridge_x64.dll");
-    if (prefs_.azothKeyboard) azoth_.Start();
+    azoth_.SetOled(prefs_.azothOled);
+    azoth_.Start();  // Keep USB status current even while lighting and OLED control are off.
     if (prefs_.dualsenseController) dualsense_.Start();
     pad_.SetMapping(prefs_.padMapping);
     if (prefs_.padInput) pad_.Start();
@@ -164,8 +165,14 @@ void Controller::SetOpenRgbPort(int port) {
 
 void Controller::SetAzothEnabled(bool on) {
     prefs_.azothKeyboard = on;
-    if (on) azoth_.Start();
-    else azoth_.Stop();
+    azoth_.Start();
+    Changed();
+}
+
+void Controller::SetAzothOled(azoth::OledSettings settings) {
+    prefs_.azothOled = azoth::NormalizeOled(settings);
+    azoth_.SetOled(prefs_.azothOled);
+    azoth_.Start();
     Changed();
 }
 
@@ -309,6 +316,7 @@ void Controller::RescanPresence() {
 }
 
 void Controller::RescanDevices() {
+    azoth_.Rescan();
     RescanPresence();
     if (mirror_.IsRunning()) {
         mirror_.Rescan();

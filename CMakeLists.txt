@@ -151,6 +151,7 @@ if(LUMA_ARCH STREQUAL "x64")
         src/app/sensors/system_monitor.cpp
         src/app/peripherals/logitech_output.cpp
         src/app/peripherals/azoth_output.cpp src/app/peripherals/dualsense_output.cpp src/app/peripherals/pad_input.cpp src/app/peripherals/hardware_helper.cpp
+        src/app/peripherals/azoth_oled_assets.cpp
         src/app/peripherals/openrgb_output.cpp src/app/peripherals/lamparray_output.cpp
         src/app/peripherals/ghub_settings.cpp
         src/integrations/logitech/real_logiled.cpp
@@ -159,7 +160,7 @@ if(LUMA_ARCH STREQUAL "x64")
         src/integrations/logitech)
     target_compile_definitions(lumabridge_app PRIVATE LUMA_VERSION="${PROJECT_VERSION}")
     target_link_libraries(lumabridge_app PRIVATE imgui aura_bridge gamesense luma_common shell32 ole32 advapi32 dbghelp psapi version
-                          winhttp ws2_32 d3d11 d3dcompiler dxgi hid setupapi cfgmgr32 pdh)
+                          winhttp ws2_32 d3d11 d3dcompiler dxgi hid setupapi cfgmgr32 pdh gdi32)
     set_target_properties(lumabridge_app PROPERTIES OUTPUT_NAME "LumaBridge")
     if(MSVC)
         target_link_options(lumabridge_app PRIVATE /MANIFEST:NO)  # app.rc embeds our manifest

@@ -17,9 +17,9 @@ namespace {
 constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 constexpr wchar_t kRunValue[] = L"LumaBridge";
 
-std::wstring Read(const std::wstring& ini, const wchar_t* section, const wchar_t* key) {
+std::wstring Read(const std::wstring& ini, const wchar_t* section, const wchar_t* key, const wchar_t* fallback = L"") {
     wchar_t buf[16384];  // ManualGames can hold several full paths
-    GetPrivateProfileStringW(section, key, L"", buf, static_cast<DWORD>(std::size(buf)), ini.c_str());
+    GetPrivateProfileStringW(section, key, fallback, buf, static_cast<DWORD>(std::size(buf)), ini.c_str());
     return buf;
 }
 
@@ -184,6 +184,24 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (!v.empty()) p.azothSleepIgnoreDynamic = v != L"0";
     v = Read(ini, L"App", L"AzothKeyboard");
     if (!v.empty()) p.azothKeyboard = v != L"0";
+    v = Read(ini, L"AzothOLED", L"Direct");
+    if (!v.empty()) p.azothOled.direct = v == L"1";
+    v = Read(ini, L"AzothOLED", L"Enabled");
+    if (!v.empty()) p.azothOled.enabled = v != L"0";
+    v = Read(ini, L"AzothOLED", L"Brightness");
+    if (!v.empty()) p.azothOled.brightness = _wtoi(v.c_str());
+    v = Read(ini, L"AzothOLED", L"Content");
+    if (!v.empty()) p.azothOled.content = static_cast<azoth::OledContent>(_wtoi(v.c_str()));
+    v = Read(ini, L"AzothOLED", L"Animation");
+    if (!v.empty()) p.azothOled.animation = _wtoi(v.c_str());
+    v = Read(ini, L"AzothOLED", L"Clock12Hour");
+    if (!v.empty()) p.azothOled.clock12Hour = v == L"1";
+    p.azothOled = azoth::NormalizeOled(p.azothOled);
+    p.azothOledBanner = Read(ini, L"AzothOLED", L"Banner", p.azothOledBanner.c_str());
+    v = Read(ini, L"AzothOLED", L"BannerSize");
+    if (!v.empty()) p.azothOledBannerSize = std::clamp(_wtoi(v.c_str()), 8, 48);
+    v = Read(ini, L"AzothOLED", L"BannerInvert");
+    if (!v.empty()) p.azothOledBannerInvert = v == L"1";
     v = Read(ini, L"App", L"DualsenseController");
     if (!v.empty()) p.dualsenseController = v != L"0";
     v = Read(ini, L"Controller", L"Input");
@@ -357,6 +375,15 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"LogitechDevices", p.logitechDevices ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"LogitechKeepInGames", p.logitechForce ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"AzothKeyboard", p.azothKeyboard ? L"1" : L"0");
+    WriteConfigValue(ini, L"AzothOLED", L"Direct", p.azothOled.direct ? L"1" : L"0");
+    WriteConfigValue(ini, L"AzothOLED", L"Enabled", p.azothOled.enabled ? L"1" : L"0");
+    WriteConfigValue(ini, L"AzothOLED", L"Brightness", Num(p.azothOled.brightness));
+    WriteConfigValue(ini, L"AzothOLED", L"Content", Num(static_cast<int>(p.azothOled.content)));
+    WriteConfigValue(ini, L"AzothOLED", L"Animation", Num(p.azothOled.animation));
+    WriteConfigValue(ini, L"AzothOLED", L"Clock12Hour", p.azothOled.clock12Hour ? L"1" : L"0");
+    WriteConfigValue(ini, L"AzothOLED", L"Banner", p.azothOledBanner);
+    WriteConfigValue(ini, L"AzothOLED", L"BannerSize", Num(p.azothOledBannerSize));
+    WriteConfigValue(ini, L"AzothOLED", L"BannerInvert", p.azothOledBannerInvert ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"DualsenseController", p.dualsenseController ? L"1" : L"0");
     WriteConfigValue(ini, L"Controller", L"Input", p.padInput ? L"1" : L"0");
     WriteConfigValue(ini, L"Controller", L"ShowValues", p.padShowValues ? L"1" : L"0");

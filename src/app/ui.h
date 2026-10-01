@@ -62,6 +62,7 @@ struct UiState {
     bool devicesLanding = true;  // select Lighting and readings when opening Devices
     int devicesTab = 0;          // 0 Lighting and readings, 1 All hardware
     char deviceFilter[128] = "";
+    std::string azothOledMessage;
     // Notification center: dismissed notices (by id), and a pending "Open" from one of them.
     std::vector<std::string> noticesDismissed;
     bool openPending = false;

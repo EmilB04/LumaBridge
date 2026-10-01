@@ -53,6 +53,8 @@
 #include "lhm.h"
 #include "friendly_names.h"
 #include "azoth_protocol.h"
+#include "azoth_oled.h"
+#include "azoth_connection.h"
 #include "dualsense_protocol.h"
 #include "azoth_layout.h"
 #include "logitech_hidpp.h"
@@ -2439,6 +2441,28 @@ static void TestSetupHardware() {
     CHECK(DetectSetup(luma::app::sensors::SmbiosInfo{}).sticks == 0);
     const auto g = GuessSlots(2);
     CHECK(!g[0] && g[1] && !g[2] && g[3]);
+    // The device list shows the sticks as one memory entry with identical sticks grouped.
+    {
+        luma::app::sensors::SmbiosInfo info;
+        CHECK(MemoryGroups(info).empty());
+        luma::app::sensors::MemoryModule a;
+        a.manufacturer = "Kingston";
+        a.part = "KF3600C17D4/8GX";
+        a.sizeMb = 8192;
+        a.speedMts = 3600;
+        info.memory = {a, a};
+        luma::app::sensors::MemoryModule b = a;
+        b.sizeMb = 16384;
+        info.memory.push_back(b);
+        const auto g = MemoryGroups(info);
+        CHECK(g.size() == 2 && g[0] == "2 x 8 GB Kingston FURY @ 3600 MT/s" && g[1] == "1 x 16 GB Kingston FURY @ 3600 MT/s");
+        CHECK(MemorySummary(info) == "3 sticks, 32 GB @ 3600 MT/s");
+        info.memory[2].speedMts = 3200;  // mixed speeds: no speed
+        CHECK(MemorySummary(info) == "3 sticks, 32 GB");
+        info.memory.resize(1);
+        CHECK(MemorySummary(info) == "1 stick, 8 GB @ 3600 MT/s");
+        CHECK(MemorySummary(luma::app::sensors::SmbiosInfo{}).empty());
+    }
 }
 
 static void TestAzothKeys() {
@@ -2629,6 +2653,111 @@ static void TestNoticeSummary() {
     CHECK(vn.size() == 1 && vn[0].id == "integration-chroma");
 }
 
+static void TestAzothOled() {
+    using namespace luma::app::azoth;
+    const OledTime evening{2026, 10, 2, 23, 59};
+    OledSettings s;
+    CHECK(OledCommands(s, Link::Wired, evening).empty()); // Default sends nothing to the display.
+    s.direct = true;
+    auto reports = OledCommands(s, Link::Wired, evening);
+    CHECK(reports.size() == 2 && reports[0][1] == 0x69 && reports[0][5] == 1);
+    CHECK(reports[1][1] == 0x68 && reports[1][5] == 50); // Keep content never selects an animation.
+    s.enabled = false;
+    reports = OledCommands(s, Link::Wireless, evening);
+    CHECK(reports.size() == 1 && reports[0][0] == 2 && reports[0][5] == 0);
+    s.enabled = true;
+    s.content = OledContent::Animation;
+    s.animation = 5;
+    s.brightness = 101;
+    reports = OledCommands(s, Link::Wireless, evening);
+    CHECK(reports.size() == 3 && reports[1][5] == 100 && reports[2][1] == 0x61 && reports[2][5] == 5);
+    for (const auto& r : reports) {
+        CHECK(r[0] == 2 && !IsSave(r));
+        for (size_t i = 6; i < r.size(); ++i) CHECK(r[i] == 0);
+    }
+    s.animation = -10;
+    s.brightness = -1;
+    CHECK(NormalizeOled(s).animation == 0 && NormalizeOled(s).brightness == 0);
+    s.content = static_cast<OledContent>(999);
+    CHECK(NormalizeOled(s).content == OledContent::Keep);
+    CHECK(s != NormalizeOled(s));
+    s.content = OledContent::Clock;
+    reports = OledCommands(s, Link::Wired, evening);
+    CHECK(reports.back() == OledClock(Link::Wired, evening, false));
+    auto clock = reports.back();
+    CHECK(clock[1] == 0x63 && clock[5] == 0);
+    CHECK(clock[6] == 0xEA && clock[7] == 7 && clock[8] == 10 && clock[9] == 2);
+    CHECK(clock[10] == 23 && clock[11] == 59);
+    clock = OledClock(Link::Wireless, evening, true);
+    CHECK(clock[0] == 2 && clock[5] == 2 && clock[10] == 11);
+    CHECK(OledClock(Link::Wired, {2026, 10, 2, 0, 0}, true)[10] == 0);
+    CHECK(OledClock(Link::Wired, {2026, 10, 2, 12, 0}, true)[10] == 12);
+    CHECK(OledClock(Link::Wired, {2026, 10, 2, 12, 0}, true)[5] == 2);
+    CHECK(OledClock(Link::Wired, {2026, 10, 2, 11, 0}, true)[5] == 1);
+    CHECK(OledClock(Link::Wired, evening, false) != OledClock(Link::Wired, {2026, 10, 3, 23, 59}, false));
+    auto query = ReadOledAnimation(Link::Wired);
+    CHECK(query[1] == 0x21 && query[2] == 0);
+    auto reply = query;
+    reply[5] = 4;
+    CHECK(ClassifyOledReply(query, reply, 65) == OledReply::Accepted);
+    CHECK(ClassifyOledReply(query, reply, 5) == OledReply::Unrelated);
+    reply[1] = 0xC0; reply[2] = 0x81; // An RGB reply cannot confirm an OLED update.
+    CHECK(ClassifyOledReply(query, reply, 65) == OledReply::Unrelated);
+    reply[1] = 0xFF; reply[2] = 0xAA;
+    CHECK(ClassifyOledReply(query, reply, 65) == OledReply::Rejected);
+    reply[0] = 2;
+    CHECK(ClassifyOledReply(query, reply, 65) == OledReply::Unrelated);
+    CHECK(ClassifyOledReply(query, reply, 2) == OledReply::Unrelated);
+    CHECK(OledBitmap({}).empty());
+    std::vector<uint8_t> gray(kOledWidth * kOledHeight, 0);
+    gray[0] = 255;
+    gray[kOledWidth * (kOledHeight - 1)] = 77;
+    const auto bmp = OledBitmap(gray);
+    CHECK(bmp.size() == 49206 && bmp[0] == 'B' && bmp[1] == 'M');
+    CHECK(bmp[10] == 54 && bmp[18] == 0 && bmp[19] == 1 && bmp[22] == 64 && bmp[28] == 24);
+    CHECK(bmp[54] == 77 && bmp[55] == 77 && bmp[56] == 77); // Bottom row first, BGR.
+    CHECK(bmp[54 + kOledWidth * (kOledHeight - 1) * 3] == 255);
+}
+
+static void TestAzothConnection() {
+    using namespace luma::app::azoth;
+    CHECK(SelectConnection(false, false, false, false) == Connection::Disconnected);
+    CHECK(SelectConnection(false, true, false, false) == Connection::ReceiverOnly);
+    CHECK(SelectConnection(false, true, true, false) == Connection::Wireless);
+    CHECK(SelectConnection(true, true, true, false) == Connection::Wired); // Cable preempts a working receiver.
+    CHECK(SelectConnection(true, true, false, false) == Connection::Wired);
+    CHECK(SelectConnection(false, false, true, false) == Connection::Disconnected); // No stale wireless state.
+    CHECK(SelectConnection(false, true, true, true) == Connection::ReceiverOnly); // No traffic while asleep.
+    CHECK(SelectConnection(true, false, false, true) == Connection::Wired);
+    CHECK(!KeyboardConnected(Connection::ReceiverOnly) && !KeyboardConnected(Connection::Disconnected));
+    CHECK(KeyboardConnected(Connection::Wired) && KeyboardConnected(Connection::Wireless));
+    CHECK(ControlPath(Link::Wired, L"hid#vid_0b05&pid_1a83&mi_01#abc"));
+    CHECK(ControlPath(Link::Wireless, L"HID#VID_0B05&PID_1ACE&MI_02&COL02#ABC"));
+    CHECK(!ControlPath(Link::Wireless, L"hid#vid_0b05&pid_1ace&mi_02&col01#abc"));
+    CHECK(!ControlPath(Link::Wired, L"hid#vid_0b05&pid_1a83&mi_02&col03#abc"));
+    auto version = StatusQuery(Link::Wireless, 0);
+    version[5] = 8; version[7] = 7; // Captured Omni 0708: receiver version is not keyboard readiness.
+    CHECK(VersionReply(Link::Wireless, version, 64));
+    CHECK(!PowerReply(Link::Wireless, version, 64));
+    version[5] = 0xFA;
+    CHECK(!VersionReply(Link::Wireless, version, 64));
+    CHECK(!VersionReply(Link::Wireless, version, 5));
+    auto power = StatusQuery(Link::Wired, 1);
+    power[6] = 0x47; power[7] = 2; power[8] = 1; power[9] = 1; // Actual USB reply: 71%, charging.
+    CHECK(PowerReply(Link::Wired, power, 65));
+    CHECK(!PowerReply(Link::Wireless, power, 65));
+    CHECK(!PowerReply(Link::Wired, power, 9));
+    power[6] = 101;
+    CHECK(!PowerReply(Link::Wired, power, 65));
+    power[6] = 0;
+    CHECK(PowerReply(Link::Wired, power, 65)); // Empty battery is still a connected keyboard.
+    power[5] = 0xFA;
+    CHECK(!PowerReply(Link::Wired, power, 65));
+    power = {}; power[0] = 2; power[1] = 0xFF; power[2] = 0xAA; // Actual receiver reply while using USB.
+    CHECK(!PowerReply(Link::Wireless, power, 64));
+    CHECK(SelectConnection(false, true, PowerReply(Link::Wireless, power, 64), false) == Connection::ReceiverOnly);
+}
+
 int main() {
     TestSceneDepth();
     TestDeskModels();
@@ -2661,6 +2790,8 @@ int main() {
     TestLhm();
     TestFriendlyNames();
     TestAzoth();
+    TestAzothOled();
+    TestAzothConnection();
     TestDualSense();
     TestAzothKeys();
     TestLogitechHidpp();

@@ -5,7 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "friendly_names.h"
 #include "smbios.h"
@@ -148,6 +151,37 @@ inline SetupHardware DetectSetup(const sensors::SmbiosInfo& info) {
         else if (h.ramName.rfind("HyperX FURY", 0) == 0) h.ram = RamStyle::HyperXFury;
     }
     return h;
+}
+
+// The sticks, identical ones grouped: "2 x 8 GB HyperX FURY @ 3600 MT/s".
+inline std::vector<std::string> MemoryGroups(const sensors::SmbiosInfo& info) {
+    std::vector<std::pair<std::string, int>> groups;
+    for (const auto& m : info.memory) {
+        const std::string text = std::to_string(m.sizeMb / 1024) + " GB " + sensors::FriendlyMemory(m.manufacturer, m.part) +
+                                 " @ " + std::to_string(m.speedMts) + " MT/s";
+        auto it = std::find_if(groups.begin(), groups.end(), [&](const auto& g) { return g.first == text; });
+        if (it != groups.end()) ++it->second;
+        else groups.push_back({text, 1});
+    }
+    std::vector<std::string> out;
+    for (const auto& g : groups) out.push_back(std::to_string(g.second) + " x " + g.first);
+    return out;
+}
+
+// The sticks in one short line, for a list: "3 sticks, 32 GB @ 3600 MT/s" (the speed only when
+// every stick runs at it). "" with no sticks.
+inline std::string MemorySummary(const sensors::SmbiosInfo& info) {
+    if (info.memory.empty()) return "";
+    uint64_t mb = 0;
+    bool sameSpeed = true;
+    for (const auto& m : info.memory) {
+        mb += m.sizeMb;
+        sameSpeed = sameSpeed && m.speedMts == info.memory.front().speedMts;
+    }
+    const size_t n = info.memory.size();
+    std::string out = std::to_string(n) + (n == 1 ? " stick, " : " sticks, ") + std::to_string(mb / 1024) + " GB";
+    if (sameSpeed && info.memory.front().speedMts) out += " @ " + std::to_string(info.memory.front().speedMts) + " MT/s";
+    return out;
 }
 
 // Which slots to draw filled for `sticks` sticks when the locators aren't known: A2 / B2

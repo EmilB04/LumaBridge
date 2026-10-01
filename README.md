@@ -84,6 +84,16 @@ and desk in 3D, live.
   **Lighting and readings**, grouped controls let you switch lights on or off, set up fans
   (count, LEDs per fan, test pattern), choose memory slots and view cooler / GPU readings.
 - **Logitech devices** (mice, ...) follow along through G HUB's own LED SDK.
+- **ROG Azoth OLED (test):** **Devices > ROG Azoth > OLED display** offers direct screen
+  on/off, brightness, six built-in animations and a local clock over USB or the Omni
+  receiver. Display control is opt-in and independent of RGB; it pauses while the keyboard
+  sleeps. Connection status updates when you plug/unplug USB; the cable takes priority,
+  and the Omni receiver counts as wireless only after the keyboard answers a power query.
+  The default keeps the current screen. With Armoury Crate, open its OLED page for
+  custom images/GIFs, banners and live modes; LumaBridge can export a 256 x 64 banner BMP
+  ready for its importer. Direct custom image uploads are not implemented. Real keyboard
+  animation/clock and hotplug validation is pending; USB status, screen power and brightness
+  replies are confirmed ([protocol and Armoury Crate methods](docs/azoth-oled-research.md)).
 - **RAM** (HyperX / Kingston FURY RGB DDR4, experimental) follows along, and the dashboard
   shows fan speeds and CPU / board temperatures by itself: one click on the Devices page
   (Hardware access) sets it up, with the signed PawnIO driver included
@@ -97,9 +107,10 @@ and desk in 3D, live.
   LumaBridge lamp by lamp, with no software from their maker.
 - **Broad RGB discovery:** Windows lighting devices and a local OpenRGB SDK server are
   discovered automatically, even when their lighting control is off. **Devices** groups
-  fan/RGB controllers, individual memory modules, peripherals, coolers and graphics cards.
-  Installed RAM modules are read from firmware by slot, maker and part number, independently
-  of whether a lighting driver can control them.
+  fan/RGB controllers, memory, peripherals, coolers and graphics cards. All the RAM sticks
+  are one **Memory (RAM)** entry; its page lists each stick by slot, maker and part number
+  (read from firmware, whether or not a lighting driver can control them) and, for RGB
+  memory LumaBridge can light, has the lighting settings.
 - **OpenRGB:** for the many RAM, GPU, cooler, peripheral and controller families outside
   LumaBridge's native drivers, run OpenRGB and choose **SDK Server > Start Server**, then
   enable **Integrations > OpenRGB > Lighting control**. Every RGB device its server exposes

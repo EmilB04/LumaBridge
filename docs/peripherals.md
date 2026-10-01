@@ -122,6 +122,18 @@ sleeps as usual.
 
 ## ASUS ROG Azoth (wired or wireless, experimental)
 
+The test build adds **Devices > ROG Azoth > OLED display**: opt-in screen on/off,
+brightness, six built-in animations and a 12/24-hour clock, independent of RGB control.
+The default leaves the screen unchanged. With Armoury Crate, it can open the OLED setup
+workflow and export a 256 x 64 banner BMP for manual upload. Direct custom uploads and
+live telemetry need further protocol work. USB power and brightness acknowledgments
+were confirmed on the owner's keyboard; animation/clock visuals and hotplug remain to test.
+See [the OLED investigation](azoth-oled-research.md).
+
+The status checks present USB interfaces every second and prefers the cable over Omni.
+An attached receiver alone does not mean the keyboard is connected: wireless control
+requires a valid keyboard power reply. These queries pause during keyboard sleep.
+
 LumaBridge talks to the keyboard directly over raw HID; **Armoury Crate isn't needed** to
 run it, installed or otherwise. Detection (`setup_plan.h`, `azoth_output.cpp`) matches only
 the two product IDs below, found on one wired unit - a different region, SKU or firmware

@@ -33,6 +33,8 @@
 #include "setup_hardware.h"
 #include "vendor_detect.h"
 #include "azoth_layout.h"
+#include "azoth_oled_assets.h"
+#include "armoury_crate.h"
 #include "logitech_hidpp.h"
 #include "openrgb_protocol.h"
 #include "lamparray.h"
@@ -112,10 +114,67 @@ void Pill(const char* text, unsigned color) {
     ImVec2 ts = ImGui::CalcTextSize(text);
     ImVec2 pad(10 * S(), 3 * S());
     ImVec2 p = ImGui::GetCursorScreenPos();
+    // On a line pushed down to match a frame (a button, or a table row's text), the pill's text
+    // sits on that line too instead of above it.
+    const float dy = std::max(0.f, ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset - pad.y);
+    p.y += dy;
     ImVec2 size(ts.x + pad.x * 2, ts.y + pad.y * 2);
     dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), Hex(color, 40), size.y / 2);
     dl->AddText(ImVec2(p.x + pad.x, p.y + pad.y), Hex(color), text);
-    ImGui::Dummy(size);
+    ImGui::Dummy(ImVec2(size.x, size.y + dy));
+}
+
+// `text` cut to `width` with "..." when it doesn't fit (whole UTF-8 characters).
+std::string Ellipsize(const std::string& text, float width) {
+    if (ImGui::CalcTextSize(text.c_str()).x <= width) return text;
+    const float dots = ImGui::CalcTextSize("...").x;
+    size_t n = text.size();
+    while (n > 0) {
+        do --n;
+        while (n > 0 && (static_cast<unsigned char>(text[n]) & 0xC0) == 0x80);
+        if (ImGui::CalcTextSize(text.c_str(), text.c_str() + n).x + dots <= width) break;
+    }
+    while (n > 0 && (text[n - 1] == ' ' || text[n - 1] == ',')) --n;
+    return text.substr(0, n) + "...";
+}
+
+// A table row that opens a page: the whole row lights up under the mouse and takes the click,
+// however tall it is. ImGui only knows a row's height once it's drawn, so the hover is the
+// previous frame's (one frame behind, which nobody sees). Call in the row's first cell.
+bool ClickableRow(bool* hovered = nullptr) {
+    const bool over = ImGui::TableGetHoveredRow() == ImGui::TableGetRowIndex();
+    if (hovered) *hovered = over;
+    if (!over) return false;
+    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, Hex(kAccent, 36));
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    return ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered();
+}
+
+// The next cell of a row `rowHeight` tall, its line centered in the row.
+void RowCell(float rowHeight) {
+    ImGui::TableNextColumn();
+    const float pad = (rowHeight - ImGui::GetFrameHeight()) / 2 - ImGui::GetStyle().CellPadding.y;
+    if (pad > 0) ImGui::SetCursorPosY(ImGui::GetCursorPosY() + pad);
+    ImGui::AlignTextToFramePadding();
+}
+
+// One line of muted text in a table cell, cut to the cell with "..." (the full text on hover).
+void CellText(const std::string& text) {
+    const std::string shown = Ellipsize(text, ImGui::GetContentRegionAvail().x);
+    ImGui::PushStyleColor(ImGuiCol_Text, V4(kMuted));
+    ImGui::TextUnformatted(shown.c_str());
+    ImGui::PopStyleColor();
+    if (shown != text && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", text.c_str());
+}
+
+// A status pill in a table cell, cut to the cell with "..." (the full text and `tip` on hover).
+void CellPill(const std::string& text, unsigned color, const std::string& tip) {
+    const float padX = 2 * 10 * S();  // Pill's own padding
+    const std::string shown = Ellipsize(text, ImGui::GetContentRegionAvail().x - padX);
+    Pill(shown.c_str(), color);
+    if (!ImGui::IsItemHovered()) return;
+    if (shown != text) ImGui::SetTooltip("%s%s%s", text.c_str(), tip.empty() ? "" : "\n", tip.c_str());
+    else if (!tip.empty()) ImGui::SetTooltip("%s", tip.c_str());
 }
 
 bool BeginCard(const char* id, float height = 0, ImGuiWindowFlags windowFlags = 0) {
@@ -837,18 +896,7 @@ void WMemory(DashCtx& c) {
         if (c.ctl.prefs().dashGraphs) Graph("mem-graph", History().mem, 0, 100, kAccent, "%.0f %% used");
         Muted("%s of %s", Gb(s.memUsed).c_str(), Gb(s.memTotal).c_str());
     }
-    // Group identical sticks: "2 x 8 GB HyperX FURY @ 3600 MT/s".
-    std::vector<std::pair<std::string, int>> groups;
-    for (const auto& m : s.smbios.memory) {
-        char b[160];
-        snprintf(b, sizeof b, "%u GB %s @ %u MT/s", m.sizeMb / 1024, sensors::FriendlyMemory(m.manufacturer, m.part).c_str(),
-                 m.speedMts);
-        bool found = false;
-        for (auto& gr : groups)
-            if (gr.first == b) found = ++gr.second > 0;
-        if (!found) groups.push_back({b, 1});
-    }
-    for (const auto& gr : groups) Muted("%d x %s", gr.second, gr.first.c_str());
+    for (const auto& line : MemoryGroups(s.smbios)) Muted("%s", line.c_str());
 }
 
 void WFans(DashCtx& c) {
@@ -946,7 +994,9 @@ bool HasLogitechRgb(Controller& ctl) {
 
 bool HasAzoth(Controller& ctl) {
     const auto& p = ctl.presence();
-    return p.scanned ? p.azoth || ctl.azoth().state() == AzothOutput::State::Active : ctl.prefs().azothKeyboard;
+    return p.scanned ? p.azoth || ctl.azoth().state() == AzothOutput::State::Active ||
+                                    ctl.azoth().oledState() == AzothOutput::OledState::Active
+                     : ctl.prefs().azothKeyboard || ctl.prefs().azothOled.direct;
 }
 
 bool HasDualSense(Controller& ctl) {
@@ -1070,9 +1120,11 @@ void WDevices(DashCtx& c) {
         ImGui::TextUnformatted("ASUS ROG Azoth");
         ++listed;
         ImGui::SameLine();
-        Muted("%s", st == AzothOutput::State::Active     ? (c.ctl.azoth().wireless() ? "wireless" : "wired")
-                    : st == AzothOutput::State::NotFound ? "not connected"
-                                                         : "Armoury Crate's lighting");
+        const auto connection = c.ctl.azoth().connection();
+        Muted("%s", connection == azoth::Connection::Wired ? "wired USB"
+                    : connection == azoth::Connection::Wireless ? "wireless (confirmed)"
+                    : connection == azoth::Connection::ReceiverOnly ? "receiver present; keyboard unverified"
+                    : connection == azoth::Connection::Disconnected ? "not connected" : "checking connection");
     }
     for (const auto& d : LampArrayLit(c.ctl)) {
         IconItem(Icon::Leds, 18 * S(), c.ctl.output().stopped ? Hex(kMuted) : Hex(kAccent));
@@ -5189,13 +5241,28 @@ DeviceStatus LogitechStatus(Controller& ctl) {
 DeviceStatus AzothStatus(Controller& ctl) {
     const auto& az = ctl.azoth();
     using A_ = AzothOutput::State;
-    if (!ctl.prefs().azothKeyboard) return {"Off", kMuted};
-    if (ctl.azothAsleep() && az.state() == AzothOutput::State::Active)
+    const auto connection = az.connection();
+    if (connection == azoth::Connection::Unknown) return {"Checking connection", kMuted};
+    if (connection == azoth::Connection::Disconnected) return {"Not connected", kAmber};
+    if (connection == azoth::Connection::ReceiverOnly)
+        return {ctl.azothAsleep() ? "Keyboard asleep / connection unverified" : "Receiver only", kMuted,
+                "The Omni USB receiver is present. The keyboard hasn't answered; it may be off, asleep or out of range."};
+    const bool wireless = connection == azoth::Connection::Wireless;
+    if (!ctl.prefs().azothKeyboard) {
+        if (ctl.prefs().azothOled.direct) {
+            const auto display = az.oledState();
+            if (display == AzothOutput::OledState::Active) return {"Display only", kGreen};
+            if (display == AzothOutput::OledState::Asleep) return {"Display asleep", kMuted};
+            return {"Display waiting for keyboard", kAmber};
+        }
+        return {wireless ? "Wireless; RGB off" : "Wired USB; RGB off", kMuted};
+    }
+    if (ctl.azothAsleep())
         return {"Asleep - not used for a while", kMuted, "It lights up again with the next key press."};
     switch (az.state()) {
     case A_::Active: return {az.wireless() ? "Following LumaBridge, every key (wireless)" : "Following LumaBridge, every key", kGreen};
-    case A_::NotFound: return {"Not connected", kAmber};
-    default: return {"Armoury Crate's lighting", kMuted};
+    case A_::NotFound: return {wireless ? "Wireless control unavailable" : "USB detected; control unavailable", kAmber};
+    default: return {wireless ? "Wireless; own lighting" : "Wired USB; own lighting", kMuted};
     }
 }
 
@@ -5291,14 +5358,16 @@ void AzothCard(Controller& ctl, const Fonts& f) {
         ImGui::SameLine();
         using A_ = AzothOutput::State;
         const A_ st = ctl.azoth().state();
-        if (st == A_::Active) Pill(ctl.azoth().wireless() ? "Active (wireless)" : "Active (wired)", kGreen);
-        else if (st == A_::Released) Pill("Handed off", kMuted);
-        else Pill("Not found", kAmber);
+        const auto status = AzothStatus(ctl);
+        Pill(status.text.c_str(), status.color);
+        if (ctl.azoth().connection() == azoth::Connection::ReceiverOnly)
+            Muted("The receiver is plugged in, but the keyboard hasn't answered. Use its 2.4 GHz mode, or connect "
+                  "the keyboard by USB. Sleeping keyboards are left alone until you use them.");
         if (st == A_::NotFound) {
             const unsigned long err = ctl.azoth().lastWriteError();
             if (err)
-                Muted("It was connected, then a write failed (error %lu) - unplugged, asleep, or a cable/receiver "
-                      "issue. LumaBridge keeps trying. Details are in the log (Settings).",
+                Muted("Keyboard access failed (Windows error %lu). LumaBridge checks the connection again automatically. "
+                      "Details are in the log (Settings).",
                       err);
             else
                 Muted("Not found yet, by cable or its Omni receiver; LumaBridge keeps trying every few seconds. "
@@ -5312,11 +5381,433 @@ void AzothCard(Controller& ctl, const Fonts& f) {
         ctl.Changed();
     Muted("When you haven't typed for a while, the keys fade out and LumaBridge stops sending, so the keyboard can "
           "sleep (and save its battery wirelessly). The next key press lights it up again.");
-    ImGui::SameLine();
     if (SmallBtn("Run the device probe")) {
         const std::wstring exe = AppDirectory() + L"\\tools\\device-probe.exe";
         ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
+    EndCard();
+}
+
+// ---- Azoth OLED: a mockup of the 256 x 64 screen --------------------------------------------
+
+namespace oledview {
+
+constexpr int kW = 256, kH = 64;
+
+// 5 x 7 pixel glyphs for the clock preview: rows top to bottom, 5 bits each (left = 0x10).
+const uint8_t* Glyph(char c) {
+    static const uint8_t kDigits[10][7] = {
+        {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}, {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E},
+        {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F}, {0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E},
+        {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02}, {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E},
+        {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E}, {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08},
+        {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E}, {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C}};
+    static const uint8_t kA[7] = {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11};
+    static const uint8_t kP[7] = {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10};
+    static const uint8_t kM[7] = {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11};
+    static const uint8_t kDash[7] = {0, 0, 0, 0x1F, 0, 0, 0};
+    static const uint8_t kColon[7] = {0, 0x04, 0x04, 0, 0x04, 0x04, 0};
+    if (c >= '0' && c <= '9') return kDigits[c - '0'];
+    switch (c) {
+    case 'A': return kA;
+    case 'P': return kP;
+    case 'M': return kM;
+    case '-': return kDash;
+    case ':': return kColon;
+    default: return nullptr;
+    }
+}
+
+// The screen as 256 x 64 pixels drawn `px` UI pixels each, lit white at `level`.
+struct Screen {
+    ImDrawList* dl;
+    ImVec2 at;
+    float px, level;
+    ImU32 Lit(float a = 1.f) const {
+        const float v = std::clamp(level * a, 0.f, 1.f);
+        return IM_COL32(static_cast<int>(232 * v), static_cast<int>(240 * v), static_cast<int>(255 * v), 255);
+    }
+    void Rect(float x, float y, float w, float h, float a = 1.f) const {
+        if (a <= 0.02f) return;
+        dl->AddRectFilled(ImVec2(at.x + x * px, at.y + y * px), ImVec2(at.x + (x + w) * px, at.y + (y + h) * px), Lit(a));
+    }
+    // Pixel text (digits, A, P, M, '-', ':'): glyphs 5 pixels wide (the colon 1), `scale` screen
+    // pixels per glyph pixel, one glyph pixel apart.
+    static float Advance(char c, float scale) { return (c == ':' ? 2 : 6) * scale; }
+    static float Width(const char* s, float scale) {
+        float w = 0;
+        for (const char* c = s; *c; ++c) w += Advance(*c, scale);
+        return w > 0 ? w - scale : 0;
+    }
+    void Text(const char* s, float x, float y, float scale, float a = 1.f) const {
+        for (const char* c = s; *c; ++c) {
+            if (const uint8_t* g = Glyph(*c))
+                for (int row = 0; row < 7; ++row)
+                    for (int col = 0; col < 5; ++col) {
+                        if (!(g[row] & (0x10 >> col))) continue;
+                        if (*c == ':') Rect(x, y + row * scale, scale, scale, a);
+                        else Rect(x + col * scale, y + row * scale, scale, scale, a);
+                    }
+            x += Advance(*c, scale);
+        }
+    }
+};
+
+// Stand-ins for the keyboard's six built-in animations (the real ones are drawn by its firmware).
+void Animation(const Screen& s, int index, double t) {
+    switch (index) {
+    case 0:  // a wave
+        for (int x = 0; x < kW; x += 2) {
+            const float y = kH / 2 + std::sin(static_cast<float>(x * 0.045 + t * 3.0)) * 18.f;
+            s.Rect(static_cast<float>(x), y - 1, 2, 3);
+        }
+        break;
+    case 1:  // level bars
+        for (int i = 0; i < 24; ++i) {
+            const float v = 0.5f + 0.5f * std::sin(static_cast<float>(t * (2.1 + (i % 5) * 0.37) + i * 1.3));
+            const float h = 6 + v * 50;
+            s.Rect(6.f + i * 10.4f, kH - 4 - h, 7, h);
+        }
+        break;
+    case 2:  // stars flying past
+        for (int i = 0; i < 46; ++i) {
+            const float speed = 18.f + (i * 37 % 60);
+            const float x = std::fmod(static_cast<float>(i * 97 % kW) - static_cast<float>(t) * speed + kW * 4, static_cast<float>(kW));
+            const float y = static_cast<float>(i * 53 % (kH - 2));
+            const float len = speed / 18.f;
+            s.Rect(x, y, len, 1, 0.35f + 0.65f * (speed - 18.f) / 60.f);
+        }
+        break;
+    case 3: {  // a scanner sweeping back and forth with a trail
+        const float u = static_cast<float>(std::fmod(t * 0.6, 2.0));
+        const float x = (u < 1 ? u : 2 - u) * (kW - 24);
+        for (int k = 0; k < 10; ++k) s.Rect(x - k * 6 * (u < 1 ? 1.f : -1.f), 22, 24, 20, 1.f - k * 0.1f);
+        break;
+    }
+    case 4:  // rings opening from the middle
+        for (int k = 0; k < 4; ++k) {
+            const float r = static_cast<float>(std::fmod(t * 22.0 + k * 22.0, 88.0));
+            const float a = 1.f - r / 88.f;
+            const float w = r * 2.9f, h = std::min(r * 0.72f, 30.f);
+            const float x0 = kW / 2 - w / 2, y0 = kH / 2 - h;
+            s.Rect(x0, y0, w, 2, a);
+            s.Rect(x0, kH / 2 + h - 2, w, 2, a);
+            s.Rect(x0, y0, 2, h * 2, a);
+            s.Rect(x0 + w - 2, y0, 2, h * 2, a);
+        }
+        break;
+    default:  // rain
+        for (int col = 0; col < 32; ++col) {
+            const float speed = 26.f + (col * 29 % 40);
+            const float head = static_cast<float>(std::fmod(t * speed + col * 41, kH + 30.0));
+            for (int k = 0; k < 7; ++k) s.Rect(col * 8.f + 2, head - k * 4.f, 3, 3, 1.f - k * 0.14f);
+        }
+        break;
+    }
+}
+
+}  // namespace oledview
+
+// A mockup of the Azoth's OLED screen showing what LumaBridge asks for: the clock, a built-in
+// animation (a stand-in: the keyboard draws its own), or a note when the screen keeps what it has.
+void OledMockup(const azoth::OledSettings& s, const Fonts& f, float width) {
+    using namespace oledview;
+    const float bezel = 12 * S();
+    const float px = std::max(1.f, std::floor((width - bezel * 2) / kW * 4) / 4);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float sw = kW * px, sh = kH * px;
+    const ImVec2 outerMin(p.x, p.y), outerMax(p.x + sw + bezel * 2, p.y + sh + bezel * 2);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(outerMin, outerMax, Hex(0x07080B), 14 * S());
+    dl->AddRect(outerMin, outerMax, Hex(0x2A3040), 14 * S(), 0, std::max(1.f, S()));
+    // A soft sheen along the top of the glass.
+    dl->AddRectFilledMultiColor(ImVec2(outerMin.x + 14 * S(), outerMin.y + 1), ImVec2(outerMax.x - 14 * S(), outerMin.y + bezel),
+                                Hex(0xFFFFFF, 10), Hex(0xFFFFFF, 10), Hex(0xFFFFFF, 0), Hex(0xFFFFFF, 0));
+    const ImVec2 at(p.x + bezel, p.y + bezel);
+    dl->AddRectFilled(at, ImVec2(at.x + sw, at.y + sh), Hex(0x000000), 3 * S());
+    dl->PushClipRect(at, ImVec2(at.x + sw, at.y + sh), true);
+    // The firmware rounds brightness up to 25 % steps, so the preview does too.
+    const int step = s.brightness <= 0 ? 0 : (s.brightness + 24) / 25 * 25;
+    const Screen screen{dl, at, px, 0.45f + 0.55f * step / 100.f};
+    const double t = ImGui::GetTime();
+    auto note = [&](const char* text) {
+        ImGui::PushFont(f.caption);
+        const ImVec2 ts = ImGui::CalcTextSize(text);
+        dl->AddText(ImVec2(at.x + (sw - ts.x) / 2, at.y + (sh - ts.y) / 2), Hex(0xE8F0FF, 90), text);
+        ImGui::PopFont();
+    };
+    if (!s.direct) {
+        note("Armoury Crate's screen");
+    } else if (!s.enabled) {
+        // Off: an OLED that's off is simply black.
+    } else if (s.content == azoth::OledContent::Clock) {
+        SYSTEMTIME now;
+        GetLocalTime(&now);
+        int hour = now.wHour;
+        const char* half = nullptr;
+        if (s.clock12Hour) {
+            half = hour < 12 ? "AM" : "PM";
+            hour = hour % 12 == 0 ? 12 : hour % 12;
+        }
+        char hh[8], mm[8], date[16];
+        snprintf(hh, sizeof hh, s.clock12Hour ? "%d" : "%02d", hour);
+        snprintf(mm, sizeof mm, "%02d", now.wMinute);
+        snprintf(date, sizeof date, "%04d-%02d-%02d", now.wYear, now.wMonth, now.wDay);
+        const float big = 5, tiny = 2;
+        const bool colon = std::fmod(t, 1.0) < 0.6;
+        const float w = Screen::Width(hh, big) + Screen::Width(":", big) + Screen::Width(mm, big) + 2 * big +
+                        (half ? Screen::Width(half, tiny) + 3 * big : 0);
+        float x = (kW - w) / 2;
+        const float y = 7;
+        screen.Text(hh, x, y, big);
+        x += Screen::Width(hh, big) + big;
+        if (colon) screen.Text(":", x, y, big);
+        x += Screen::Width(":", big) + big;
+        screen.Text(mm, x, y, big);
+        x += Screen::Width(mm, big);
+        if (half) screen.Text(half, x + 3 * big, y + 7 * big - 7 * tiny, tiny);
+        screen.Text(date, (kW - Screen::Width(date, tiny)) / 2, 47, tiny, 0.7f);
+    } else if (s.content == azoth::OledContent::Animation) {
+        Animation(screen, std::clamp(s.animation, 0, 5), t);
+    } else {
+        note("Current screen kept");
+    }
+    // The pixel grid, visible when each pixel is big enough to see.
+    if (px >= 2.4f)
+        for (int i = 1; i < std::max(kW, kH); ++i) {
+            if (i < kW) dl->AddRectFilled(ImVec2(at.x + i * px - 0.5f, at.y), ImVec2(at.x + i * px + 0.5f, at.y + sh), Hex(0x000000, 70));
+            if (i < kH) dl->AddRectFilled(ImVec2(at.x, at.y + i * px - 0.5f), ImVec2(at.x + sw, at.y + i * px + 0.5f), Hex(0x000000, 70));
+        }
+    dl->PopClipRect();
+    ImGui::Dummy(ImVec2(outerMax.x - outerMin.x, outerMax.y - outerMin.y));
+}
+
+// The banner as Armoury Crate will get it: 256 x 64, the text shrunk to fit like the export.
+void BannerPreview(const std::string& text, int size, bool invert, const Fonts& f, float width) {
+    using namespace oledview;
+    const float px = std::max(1.f, std::min(2.f, std::floor(width / kW * 4) / 4));
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    const float sw = kW * px, sh = kH * px;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(at, ImVec2(at.x + sw, at.y + sh), Hex(invert ? 0xFFFFFF : 0x000000), 4 * S());
+    dl->AddRect(at, ImVec2(at.x + sw, at.y + sh), Hex(0x2A3040), 4 * S());
+    ImFont* font = f.regular;
+    float pt = static_cast<float>(std::clamp(size, 8, 48));
+    while (pt > 8 && font->CalcTextSizeA(pt * px, FLT_MAX, 0, text.c_str()).x > (kW - 8) * px) pt -= 1;
+    const ImVec2 ts = font->CalcTextSizeA(pt * px, FLT_MAX, 0, text.c_str());
+    dl->PushClipRect(at, ImVec2(at.x + sw, at.y + sh), true);
+    dl->AddText(font, pt * px, ImVec2(at.x + (sw - ts.x) / 2, at.y + (sh - ts.y) / 2), Hex(invert ? 0x000000 : 0xFFFFFF), text.c_str());
+    dl->PopClipRect();
+    ImGui::Dummy(ImVec2(sw, sh));
+}
+
+void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
+    BeginCard("azoth-oled");
+    auto settings = ctl.prefs().azothOled;
+    // Title, a Test tag, and how the screen is doing on the right.
+    {
+        IconItem(Icon::Grid, 18 * S(), Hex(kAccent));
+        ImGui::SameLine(0, 10 * S());
+        ImGui::PushFont(f.bold);
+        ImGui::TextUnformatted("OLED display");
+        ImGui::PopFont();
+        ImGui::SameLine();
+        Pill("Test", kAccent);
+        using OS = AzothOutput::OledState;
+        const char* text = "Armoury Crate";
+        unsigned color = kMuted;
+        if (settings.direct) {
+            const auto connection = ctl.azoth().connection();
+            if (connection == azoth::Connection::ReceiverOnly) {
+                text = ctl.azothAsleep() ? "Paused; connection unverified" : "Receiver only";
+            } else if (connection == azoth::Connection::Disconnected) {
+                text = "Keyboard disconnected";
+                color = kAmber;
+            } else switch (ctl.azoth().oledState()) {
+            case OS::Active: text = ctl.azoth().wireless() ? "Confirmed (Omni)" : "Confirmed (USB)"; color = kGreen; break;
+            case OS::Asleep: text = "Paused while asleep"; break;
+            case OS::NotFound: text = "Keyboard not found"; color = kAmber; break;
+            case OS::Failed: text = "OLED request failed"; color = kAmber; break;
+            default: text = "Waiting for keyboard"; break;
+            }
+        }
+        const float pw = ImGui::CalcTextSize(text).x + 20 * S();
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - pw));
+        Pill(text, color);
+    }
+    Muted("The original ROG Azoth's 256 x 64 screen, controlled apart from the keys.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+
+    const float mockW = std::min(ImGui::GetContentRegionAvail().x, 600 * S());
+    OledMockup(settings, f, mockW);
+    ImGui::PushFont(f.caption);
+    Muted(settings.direct && settings.enabled && settings.content == azoth::OledContent::Animation
+              ? "Preview. The keyboard plays its own animation; this stands in for it."
+          : settings.direct && settings.enabled && settings.content == azoth::OledContent::Clock
+              ? "Preview of the clock, from this PC's time. The keyboard draws it in its own style."
+          : settings.direct && !settings.enabled ? "Preview: the screen is off."
+                                                 : "Preview.");
+    ImGui::PopFont();
+
+    if (settings.direct) {
+        if (const auto error = ctl.azoth().oledError()) {
+            const char* text =
+                error == ERROR_TIMEOUT
+                    ? "The keyboard didn't acknowledge the OLED command. Try USB, keep the keyboard awake, and turn off "
+                      "Armoury Crate's live OLED modes before retrying."
+                : error == ERROR_NOT_SUPPORTED
+                    ? "The keyboard rejected the request. Check the response details below. Switching from receiver to USB is automatic."
+                    : nullptr;
+            char other[160];
+            if (!text) {
+                snprintf(other, sizeof other, "OLED request failed (Windows error %lu). Reconnect the keyboard and retry; details are in the log.",
+                         static_cast<unsigned long>(error));
+                text = other;
+            }
+            ImGui::Dummy(ImVec2(0, 2 * S()));
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, V4(kAmber, 0.08f));
+            ImGui::PushStyleColor(ImGuiCol_Border, V4(kAmber, 0.35f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10 * S());
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12 * S(), 10 * S()));
+            ImGui::BeginChild("oled-error", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(kAmber));
+            ImGui::TextWrapped("%s", text);
+            ImGui::PopStyleColor();
+            ImGui::EndChild();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor(2);
+            const auto details = ctl.azoth().oledFailureDetails();
+            if (!details.empty() && ImGui::TreeNode("OLED response details")) {
+                ImGui::TextWrapped("%s", details.c_str());
+                ImGui::TreePop();
+            }
+        }
+        if (ctl.azoth().connection() == azoth::Connection::ReceiverOnly)
+            Muted("The USB receiver is present, but the keyboard hasn't answered. Use 2.4 GHz mode or connect the "
+                  "keyboard by USB. OLED commands wait for a keyboard connection.");
+    }
+
+    // A thin rule and a bold heading between the card's parts.
+    auto section = [&](const char* title) {
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+        const ImVec2 a = ImGui::GetCursorScreenPos();
+        ImGui::GetWindowDrawList()->AddLine(a, ImVec2(a.x + ImGui::GetContentRegionAvail().x, a.y), Hex(kBorder), std::max(1.f, S()));
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+        ImGui::PushFont(f.bold);
+        ImGui::TextUnformatted(title);
+        ImGui::PopFont();
+    };
+
+    section("Screen");
+    {
+        static const char* kOwner[] = {"Armoury Crate", "LumaBridge (direct USB)"};
+        int owner = settings.direct ? 1 : 0;
+        if (Segmented("oled-owner", &owner, kOwner, 2, std::min(ImGui::GetContentRegionAvail().x, 420 * S()))) {
+            settings.direct = owner == 1;
+            ctl.SetAzothOled(settings);
+        }
+    }
+    if (settings.direct) {
+        bool changed = Toggle("Screen on", &settings.enabled);
+        ImGui::BeginDisabled(!settings.enabled);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Brightness");
+        ImGui::SameLine(0, 12 * S());
+        ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 260 * S()));
+        changed |= ImGui::SliderInt("##oled-brightness", &settings.brightness, 0, 100, "%d%%");
+        ImGui::PushFont(f.caption);
+        Muted("The keyboard rounds brightness up in steps of 25%%.");
+        ImGui::PopFont();
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+        ImGui::TextUnformatted("Show");
+        static const char* kShow[] = {"Keep current", "Animation", "Clock"};
+        int content = static_cast<int>(settings.content);
+        if (Segmented("oled-show", &content, kShow, 3, std::min(ImGui::GetContentRegionAvail().x, 420 * S()))) {
+            settings.content = static_cast<azoth::OledContent>(content);
+            changed = true;
+        }
+        if (settings.content == azoth::OledContent::Animation) {
+            static const char* kAnimations[] = {"1", "2", "3", "4", "5", "6"};
+            ImGui::TextUnformatted("Built-in animation");
+            changed |= Segmented("oled-animation", &settings.animation, kAnimations, 6, std::min(ImGui::GetContentRegionAvail().x, 300 * S()));
+            const int animation = ctl.azoth().oledAnimation();
+            if (animation >= 0) {
+                ImGui::PushFont(f.caption);
+                Muted("The keyboard last confirmed animation %d.", animation + 1);
+                ImGui::PopFont();
+            }
+        } else if (settings.content == azoth::OledContent::Clock) {
+            changed |= Toggle("12-hour clock", &settings.clock12Hour);
+            ImGui::PushFont(f.caption);
+            Muted("Uses this PC's local date and time. Updates once per minute while the keyboard is awake.");
+            ImGui::PopFont();
+        }
+        ImGui::EndDisabled();
+        if (changed) ctl.SetAzothOled(settings);
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+        if (Btn("Reapply and retry")) ctl.ReapplyAzothOled();
+        ImGui::PushFont(f.caption);
+        Muted("Armoury Crate's live clock, music and hardware-info modes can overwrite direct control. Choose "
+              "Armoury Crate above to stop LumaBridge's OLED requests, then apply your screen there.");
+        ImGui::PopFont();
+    } else {
+        Muted("Keeps the current display untouched. Armoury Crate can show custom images or GIFs, banners, music, "
+              "hardware information and its other OLED modes while LumaBridge controls the keyboard lighting.");
+    }
+
+    section("Custom images and GIFs");
+    Muted("Armoury Crate uploads them: ROG Azoth > OLED > Image or Animation > Custom image/animation > Replace File > Apply. "
+          "Use a 256 x 64 image; ASUS lists up to 196 GIF frames at 25 fps for this model.");
+    if (Btn("Open Armoury Crate")) {
+        // Stop our display updates before opening the app that will own it.
+        settings.direct = false;
+        ctl.SetAzothOled(settings);
+        ui.azothOledMessage = LaunchArmouryCrate() ? "Armoury Crate opened. Select ROG Azoth, then OLED."
+                                                 : "Armoury Crate couldn't be opened. Install it for custom image/GIF uploads.";
+    }
+
+    section("Make a banner for Armoury Crate");
+    char text[1024]{};
+    const auto savedText = Utf8(ctl.prefs().azothOledBanner);
+    std::snprintf(text, sizeof text, "%s", savedText.c_str());
+    BannerPreview(savedText, ctl.prefs().azothOledBannerSize, ctl.prefs().azothOledBannerInvert, f,
+                  std::min(ImGui::GetContentRegionAvail().x, 512 * S()));
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Text");
+    ImGui::SameLine(0, 12 * S());
+    ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 320 * S()));
+    if (ImGui::InputText("##banner-text", text, sizeof text)) {
+        const int count = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
+        if (count > 0) {
+            std::wstring wide(static_cast<size_t>(count), L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, text, -1, wide.data(), count);
+            wide.resize(static_cast<size_t>(count - 1));
+            ctl.prefs().azothOledBanner = wide;
+            ctl.Changed();
+        }
+    }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Size");
+    ImGui::SameLine(0, 12 * S());
+    ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 200 * S()));
+    if (ImGui::SliderInt("##banner-size", &ctl.prefs().azothOledBannerSize, 8, 48)) ctl.Changed();
+    ImGui::SameLine(0, 20 * S());
+    if (Toggle("White background", &ctl.prefs().azothOledBannerInvert)) ctl.Changed();
+    if (PrimaryButton("Export banner and open folder")) {
+        std::string error;
+        if (ExportAzothOledBanner(ctl.prefs().azothOledBanner, ctl.prefs().azothOledBannerSize,
+                                 ctl.prefs().azothOledBannerInvert, error)) {
+            const auto dir = AzothOledAssetDirectory();
+            ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            ui.azothOledMessage = "Saved banner.bmp. Upload it with Replace File in Armoury Crate, then Apply.";
+        } else ui.azothOledMessage = error;
+    }
+    ImGui::PushFont(f.caption);
+    Muted("Exports a black-and-white 256 x 64 BMP; long text shrinks to fit. Exporting prepares a file; "
+          "Armoury Crate performs the upload.");
+    ImGui::PopFont();
+    if (!ui.azothOledMessage.empty()) Muted("%s", ui.azothOledMessage.c_str());
     EndCard();
 }
 
@@ -6287,6 +6778,42 @@ void NzxtCard(Controller& ctl, const Fonts& f);
 
 const sensors::GpuStat* MainGpu(const sensors::SystemSnapshot& snap) { return MainGpuOf(snap); }
 
+// The sticks the firmware reports, one row each: click one for its details.
+void MemorySticksCard(UiState& ui, const Fonts& f, const sensors::SystemSnapshot& snap) {
+    BeginCard("memory-sticks");
+    CardTitle(f, "Memory sticks", Icon::Memory);
+    if (snap.smbios.memory.empty()) {
+        Muted("Your board's firmware doesn't list the sticks.");
+        EndCard();
+        return;
+    }
+    Muted("As your board's firmware reports them. Click a stick for its details.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    if (ImGui::BeginTable("memory-sticks-table", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Stick", ImGuiTableColumnFlags_WidthStretch, 2.2f);
+        ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthStretch, 1.2f);
+        ImGui::TableSetupColumn("Size and speed", ImGuiTableColumnFlags_WidthStretch, 1.6f);
+        ImGui::TableHeadersRow();
+        for (size_t i = 0; i < snap.smbios.memory.size(); ++i) {
+            const auto& m = snap.smbios.memory[i];
+            ImGui::PushID(static_cast<int>(i));
+            const float rowH = 32 * S();
+            ImGui::TableNextRow(0, rowH);
+            RowCell(rowH);
+            const bool open = ClickableRow();
+            ImGui::TextUnformatted(Ellipsize(sensors::FriendlyMemory(m.manufacturer, m.part), ImGui::GetContentRegionAvail().x).c_str());
+            RowCell(rowH);
+            CellText(m.slot.empty() ? "-" : m.slot);
+            RowCell(rowH);
+            CellText(std::to_string(m.sizeMb / 1024) + " GB, " + std::to_string(m.speedMts) + " MT/s");
+            ImGui::PopID();
+            if (open) ui.deviceDetail = "memory-module:" + std::to_string(i);
+        }
+        ImGui::EndTable();
+    }
+    EndCard();
+}
+
 void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f,
                       const sensors::SystemSnapshot& snap) {
     const std::string& id = ui.deviceDetail;
@@ -6430,9 +6957,22 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         const Integration* setup = HelperSetup(ctl, in, ui);
         const bool setUp = setup && setup->state == IntegrationState::Active;
         const SetupHardware hw = DetectSetup(snap.smbios);
-        std::string detail = hw.ramName.empty() ? "HyperX / Kingston FURY RGB DDR4" : hw.ramName;
-        if (hw.sticks) detail += ", " + std::to_string(hw.sticks) + " stick" + (hw.sticks == 1 ? "" : "s") + " found";
-        if (!DeviceHeader(ui, f, Icon::Memory, "Memory (RAM)", RamStatus(ctl, setUp), true, detail)) return;
+        const bool rgb = HasRgbRam(ctl, snap);
+        std::string detail = hw.sticks ? std::to_string(hw.sticks) + " stick" + (hw.sticks == 1 ? "" : "s") + " found" : "";
+        if (rgb && hw.ramName.empty()) detail = "HyperX / Kingston FURY RGB DDR4" + (detail.empty() ? "" : ", " + detail);
+        else if (!hw.ramName.empty()) detail = hw.ramName + (detail.empty() ? "" : ", " + detail);
+        if (!DeviceHeader(ui, f, Icon::Memory, "Memory (RAM)",
+                          rgb ? RamStatus(ctl, setUp) : DeviceStatus("Detected", kGreen), rgb, detail)) return;
+        MemorySticksCard(ui, f, snap);
+        if (!rgb) {
+            BeginCard("memory-nolight");
+            CardTitle(f, "Lighting", Icon::Lighting);
+            Muted("No RGB memory LumaBridge can light was found. LumaBridge lights HyperX / Kingston FURY RGB DDR4 itself; "
+                  "other RGB memory can be lit through OpenRGB's SDK server.");
+            if (Btn("Open lighting connections")) { ui.page = Page::Integrations; ui.deviceDetail.clear(); }
+            EndCard();
+            return;
+        }
         MemoryCard(ctl, in, ui, f);
         RamSlotsCard(ctl, f);
         HardwareCard(ctl, in, ui, f);
@@ -6452,6 +6992,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
                           "By cable, or wirelessly through its ROG Omni receiver"))
             return;
         AzothCard(ctl, f);
+        AzothOledCard(ctl, ui, f);
         DeviceLightingCard(ctl, ui, f, device::kKeyboard);
         return;
     }
@@ -6484,9 +7025,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
             ImGui::Text("%.1f GB, %u MT/s", m.sizeMb / 1024.0, m.speedMts);
             Muted("Detected from motherboard firmware. This confirms the installed module; lighting support "
                   "is confirmed by a lighting connection.");
-            if (HasRgbRam(ctl, snap)) {
-                if (Btn("Native RAM lighting settings")) ui.deviceDetail = device::kRam;
-            }
+            if (Btn("<  Memory (RAM)")) ui.deviceDetail = device::kRam;
             Muted("For other RGB memory families and chipsets, use OpenRGB's SDK server. Detected RGB memory "
                   "appears as a separate lighting device with its own switch.");
             if (Btn("Open lighting connections")) { ui.page = Page::Integrations; ui.deviceDetail.clear(); }
@@ -6566,6 +7105,12 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         return;
     }
     ui.deviceDetail.clear();
+}
+
+// "3 sticks, 32 GB @ 3600 MT/s" for the list's Kind column ("Memory" if the firmware names none).
+std::string MemoryKind(const sensors::SystemSnapshot& snap, const std::string& fallback) {
+    const std::string out = MemorySummary(snap.smbios);
+    return out.empty() ? (fallback.empty() ? std::string("Memory") : fallback) : out;
 }
 
 void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) {
@@ -6650,27 +7195,24 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
             r.leds = d.lightCount;
             rows.push_back(r);
         }
+        // All the sticks under one entry; its page lists each stick and, for RGB memory LumaBridge
+        // can light, has the lighting settings.
         if (HasRgbRam(ctl, snap)) {
             const Integration* setup = HelperSetup(ctl, in, ui);
             const SetupHardware hw = DetectSetup(snap.smbios);
-            rows.push_back({device::kRam, "Native RAM lighting", hw.ramName.empty() ? "Memory" : hw.ramName, Icon::Memory,
+            rows.push_back({device::kRam, "Memory (RAM)", MemoryKind(snap, hw.ramName), Icon::Memory,
                             RamStatus(ctl, setup && setup->state == IntegrationState::Active),
                             ctl.prefs().ramLighting && ctl.hardware().sticks() ? ctl.hardware().sticks() * 5 : -1});
-        }
-        for (size_t i = 0; i < snap.smbios.memory.size(); ++i) {
-            const auto& m = snap.smbios.memory[i];
-            const std::string name = sensors::FriendlyMemory(m.manufacturer, m.part) +
-                                     (m.slot.empty() ? " #" + std::to_string(i + 1) : " (" + m.slot + ")");
-            rows.push_back({"memory-module:" + std::to_string(i), name,
-                            "Memory, " + std::to_string(m.sizeMb / 1024) + " GB, " + std::to_string(m.speedMts) + " MT/s",
-                            Icon::Memory, DeviceStatus("Detected", kGreen, "Module information from motherboard firmware")});
+        } else if (!snap.smbios.memory.empty()) {
+            rows.push_back({device::kRam, "Memory (RAM)", MemoryKind(snap, ""), Icon::Memory,
+                            DeviceStatus("Detected", kGreen, "Module information from motherboard firmware; no RGB memory LumaBridge can light")});
         }
         if (HasLogitechRgb(ctl))
             rows.push_back({device::kMouse, LogitechName(ctl), LogitechKinds(ctl) + (ctl.logitech().sdkActive() ? ", through G HUB" : ", direct HID++ when supported"), Icon::Mouse,
                             LogitechStatus(ctl)});
         // Shown whenever switched on, found or not: otherwise a device that fails to be found has
         // no row to click for why (the exact diagnostic a "not found" state exists to answer).
-        if (ctl.prefs().azothKeyboard || HasAzoth(ctl))
+        if (ctl.prefs().azothKeyboard || ctl.prefs().azothOled.direct || HasAzoth(ctl))
             rows.push_back({device::kKeyboard, "ASUS ROG Azoth", "Keyboard", Icon::Keyboard, AzothStatus(ctl)});
         if (ctl.prefs().dualsenseController || HasDualSense(ctl))
             rows.push_back({device::kController, "DualSense", "Controller", Icon::Game, DualSenseStatus(ctl)});
@@ -6734,9 +7276,9 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
         if (rows.empty()) Muted("Nothing LumaBridge can light was found on this PC yet.");
         else if (ImGui::BeginTable("devices", devicesNarrow ? 3 : 5,
                                    ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("Device", ImGuiTableColumnFlags_WidthStretch, 2.6f);
-            if (!devicesNarrow) ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthStretch, 1.4f);
-            ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, devicesNarrow ? 2.2f : 1.8f);
+            ImGui::TableSetupColumn("Device", ImGuiTableColumnFlags_WidthStretch, 2.2f);
+            if (!devicesNarrow) ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthStretch, 1.6f);
+            ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 2.2f);
             if (!devicesNarrow) ImGui::TableSetupColumn("LEDs", ImGuiTableColumnFlags_WidthFixed, 50 * S());
             ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 24 * S());
             ImGui::TableHeadersRow();
@@ -6753,38 +7295,32 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
                     lastCategory = category;
                 }
                 ImGui::PushID(n++);
-                ImGui::TableNextRow(0, 34 * S());
-                ImGui::TableNextColumn();
-                // The whole row opens the device's page.
-                ImGui::PushStyleColor(ImGuiCol_Header, V4(kAccent, 0.18f));
-                ImGui::PushStyleColor(ImGuiCol_HeaderHovered, V4(kAccent, 0.14f));
-                const bool open = ImGui::Selectable("##row", false,
-                                                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
-                                                    ImVec2(0, 26 * S()));
-                ImGui::PopStyleColor(2);
-                if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                ImGui::SameLine(0, 0);
-                ImGui::AlignTextToFramePadding();  // the icon and name on the row's text line
+                // One line per cell, centered in the row; the whole row opens the device's page.
+                const float rowH = 34 * S();
+                ImGui::TableNextRow(0, rowH);
+                RowCell(rowH);
+                const bool open = ClickableRow();
                 IconItem(r.icon, 16 * S(), r.status.color == kGreen ? Hex(kAccent) : Hex(kMuted));
                 ImGui::SameLine();
-                ImGui::TextUnformatted(r.name.c_str());
-                if (!devicesNarrow) {
-                    ImGui::TableNextColumn();
-                    ImGui::AlignTextToFramePadding();
-                    Muted("%s", r.kind.c_str());
+                ImGui::PushStyleColor(ImGuiCol_Text, V4(kText));
+                {
+                    const std::string name = Ellipsize(r.name, ImGui::GetContentRegionAvail().x);
+                    ImGui::TextUnformatted(name.c_str());
+                    if (name != r.name && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", r.name.c_str());
                 }
-                ImGui::TableNextColumn();
-                ImGui::AlignTextToFramePadding();
-                Pill(r.status.text.c_str(), r.status.color);
-                if (!r.status.tip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", r.status.tip.c_str());
+                ImGui::PopStyleColor();
                 if (!devicesNarrow) {
-                    ImGui::TableNextColumn();
-                    ImGui::AlignTextToFramePadding();
-                    if (r.leds >= 0) Muted("%d", r.leds);
+                    RowCell(rowH);
+                    CellText(r.kind);
                 }
-                ImGui::TableNextColumn();
-                ImGui::AlignTextToFramePadding();
-                Muted(">");
+                RowCell(rowH);
+                CellPill(r.status.text, r.status.color, r.status.tip);
+                if (!devicesNarrow) {
+                    RowCell(rowH);
+                    if (r.leds >= 0) CellText(std::to_string(r.leds));
+                }
+                RowCell(rowH);
+                CellText(">");
                 ImGui::PopID();
                 if (open) ui.deviceDetail = r.id;
             }
@@ -7376,22 +7912,14 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
         for (const Row& row : rows) {
             const InstalledGame& g = *row.g;
             ImGui::PushID(id++);
-            ImGui::TableNextRow(0, 34 * S());
-            ImGui::TableNextColumn();
+            // One line per cell, centered in the row; the whole row opens the game's page.
+            const float rowH = 34 * S();
+            ImGui::TableNextRow(0, rowH);
+            RowCell(rowH);
             const std::string name = ToUtf8(g.name);
-            // The whole row opens the game's page.
-            ImGui::PushStyleColor(ImGuiCol_Header, V4(kAccent, 0.18f));
-            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, V4(kAccent, 0.14f));
-            const bool open = ImGui::Selectable("##row", false,
-                                                ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
-                                                ImVec2(0, 26 * S()));
-            ImGui::PopStyleColor(2);
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                ImGui::SetTooltip("%s", ToUtf8(g.exePath.empty() ? g.dir : g.exePath).c_str());
-            }
-            ImGui::SameLine(0, 0);
-            ImGui::AlignTextToFramePadding();
+            bool hovered = false;
+            const bool open = ClickableRow(&hovered);
+            if (hovered) ImGui::SetTooltip("%s", ToUtf8(g.exePath.empty() ? g.dir : g.exePath).c_str());
             if (row.running) ImGui::PushFont(f.bold);
             ImGui::TextUnformatted(name.c_str());
             if (row.running) ImGui::PopFont();
@@ -7400,20 +7928,19 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
                 Pill("Running", kAccent);
             }
             if (!gamesNarrow) {
-                ImGui::TableNextColumn();
-                ImGui::AlignTextToFramePadding();
-                Muted("%s", ToUtf8(g.store).c_str());
+                RowCell(rowH);
+                CellText(ToUtf8(g.store));
             }
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
+            RowCell(rowH);
             const games::GameProfile* profile = ProfileFor(&g, row.running, name);
             const LightingStatus st = GameLighting(ctl, g, row.running, profile);
-            if (st.pill) Pill(st.text, st.color);
-            else Muted("%s", st.text);
-            if (!st.tip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", st.tip.c_str());
+            if (st.pill) CellPill(st.text, st.color, st.tip);
+            else {
+                CellText(st.text);
+                if (!st.tip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", st.tip.c_str());
+            }
             if (!gamesNarrow) {
-                ImGui::TableNextColumn();
-                ImGui::AlignTextToFramePadding();
+                RowCell(rowH);
                 if (!profile || profile->kind != games::ProfileKind::NotAGame) {
                     const std::string key = games::Normalize(name);
                     auto it = ctl.prefs().gameModes.find(key);
@@ -7431,9 +7958,8 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
                     else Muted("Default");
                 }
             }
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            Muted(">");
+            RowCell(rowH);
+            CellText(">");
             ImGui::PopID();
             if (open) OpenGame(ui, name, nullptr);
         }
@@ -7822,26 +8348,53 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width, bool col
         }
     }
 
-    // Collapse / expand: a small chevron row, same style as the nav items below.
+    // Collapse / expand: a full-width button under the logo (square when collapsed), with a
+    // panel icon whose left pane is filled while the menu is open.
     {
+        ImGui::Dummy(ImVec2(0, 2 * S()));
         const ImVec2 p = ImGui::GetCursorScreenPos();
-        const float w = ImGui::GetContentRegionAvail().x, h = 28 * S();
+        const float w = ImGui::GetContentRegionAvail().x, h = 38 * S();
         const bool clicked = ImGui::InvisibleButton("collapse", ImVec2(w, h));
-        const bool hovered = ImGui::IsItemHovered();
+        const bool hovered = ImGui::IsItemHovered(), held = ImGui::IsItemActive();
         if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         if (clicked) ui.sidebarCollapsed = !ui.sidebarCollapsed;
-        if (collapsed && hovered) ImGui::SetTooltip(ui.sidebarCollapsed ? "Expand" : "Collapse");
+        if (collapsed && hovered) ImGui::SetTooltip(ui.sidebarCollapsed ? "Expand the menu" : "Collapse the menu");
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        if (hovered) dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Hex(kCardHover), 8 * S());
-        // Right (tap to expand) when collapsed, left (tap to collapse) when open.
-        const ImVec2 c(p.x + h / 2, p.y + h / 2);
-        const float len = 4 * S(), dir = collapsed ? -1.f : 1.f, lw = std::max(1.5f, 2 * S());
+        const float round = 10 * S(), lw = std::max(1.2f, 1.6f * S());
+        dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Hex(held ? kBorder : hovered ? kCardHover : kCard), round);
+        dl->AddRect(p, ImVec2(p.x + w, p.y + h), hovered ? Hex(kAccent, 150) : Hex(kBorder), round, 0, std::max(1.f, S()));
         const ImU32 col = hovered ? Hex(kText) : Hex(kMuted);
-        dl->AddLine(ImVec2(c.x + dir * len, c.y - len), ImVec2(c.x - dir * len * 0.2f, c.y), col, lw);
-        dl->AddLine(ImVec2(c.x - dir * len * 0.2f, c.y), ImVec2(c.x + dir * len, c.y + len), col, lw);
-        if (!collapsed) dl->AddText(ImVec2(p.x + h, p.y + (h - ImGui::GetTextLineHeight()) / 2), Hex(kMuted), "Collapse");
+        const float iw = 18 * S(), ih = 15 * S();
+        const float ix = collapsed ? p.x + (w - iw) / 2 : p.x + 13 * S(), iy = p.y + (h - ih) / 2;
+        const float split = ix + iw * 0.38f;
+        if (!collapsed)
+            dl->AddRectFilled(ImVec2(ix, iy), ImVec2(split, iy + ih), Hex(hovered ? kAccentHover : kAccent, 170), 3 * S(),
+                              ImDrawFlags_RoundCornersLeft);
+        dl->AddRect(ImVec2(ix, iy), ImVec2(ix + iw, iy + ih), col, 3 * S(), 0, lw);
+        dl->AddLine(ImVec2(split, iy), ImVec2(split, iy + ih), col, lw);
+        if (!collapsed) {
+            dl->AddText(ImVec2(ix + iw + 11 * S(), p.y + (h - ImGui::GetFontSize()) / 2), col, "Collapse");
+            // A chevron on the right: which way the menu goes.
+            const ImVec2 c(p.x + w - 16 * S(), p.y + h / 2);
+            const float len = 4 * S();
+            dl->AddLine(ImVec2(c.x + len * 0.5f, c.y - len), ImVec2(c.x - len * 0.5f, c.y), col, lw);
+            dl->AddLine(ImVec2(c.x - len * 0.5f, c.y), ImVec2(c.x + len * 0.5f, c.y + len), col, lw);
+        }
     }
-    ImGui::Dummy(ImVec2(0, collapsed ? 10 * S() : 14 * S()));
+    ImGui::Dummy(ImVec2(0, collapsed ? 6 * S() : 8 * S()));
+
+    // The status card at the bottom keeps its size on any screen; the pages scroll above it.
+    ImGui::PushFont(f.bold);
+    const float boldH = ImGui::GetFontSize();
+    ImGui::PopFont();
+    ImGui::PushFont(f.caption);
+    const float capH = ImGui::GetFontSize();
+    ImGui::PopFont();
+    const float cardPad = 12 * S(), orbR = collapsed ? 12 * S() : 14 * S();
+    const float topBlock = std::max(orbR * 2 + 4 * S(), boldH + 4 * S() + capH * 2 + 2 * S());
+    const float statusH = collapsed ? 52 * S() : cardPad + topBlock + 17 * S() + capH + cardPad;
+    const float gap = 12 * S();
+    const float navH = std::max(44 * S(), ImGui::GetContentRegionAvail().y - statusH - gap);
 
     const struct {
         Page page;
@@ -7851,67 +8404,109 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width, bool col
                  {Page::Lighting, "Lighting", Icon::Lighting},      {Page::GamesList, "Games List", Icon::Game},
                  {Page::Devices, "Devices", Icon::Leds},            {Page::Integrations, "Integrations", Icon::Plug},
                  {Page::Settings, "Settings", Icon::Gear}};
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    for (const auto& it : items) {
-        const bool sel = ui.page == it.page;
-        const ImVec2 p = ImGui::GetCursorScreenPos();
-        const float w = ImGui::GetContentRegionAvail().x, h = 40 * S();
-        ImGui::PushID(it.label);
-        if (ImGui::InvisibleButton("nav", ImVec2(w, h))) ui.page = it.page;
-        const bool hovered = ImGui::IsItemHovered();
-        if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        ImGui::PopID();
-        if (sel) {
-            dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Hex(kAccent, 42), 10 * S());
-            dl->AddRectFilled(ImVec2(p.x, p.y + 10 * S()), ImVec2(p.x + 3 * S(), p.y + h - 10 * S()), Hex(kAccentHover), 2 * S());
-        } else if (hovered) {
-            dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Hex(kCardHover), 10 * S());
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 5 * S());
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, V4(kSidebar, 0));
+    ImGui::BeginChild("nav", ImVec2(0, navH), ImGuiChildFlags_None);
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        for (const auto& it : items) {
+            const bool sel = ui.page == it.page;
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x, h = 40 * S();
+            ImGui::PushID(it.label);
+            if (ImGui::InvisibleButton("nav", ImVec2(w, h))) ui.page = it.page;
+            const bool hovered = ImGui::IsItemHovered();
+            if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            ImGui::PopID();
+            if (sel) {
+                dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Hex(kAccent, 42), 10 * S());
+                dl->AddRectFilled(ImVec2(p.x, p.y + 10 * S()), ImVec2(p.x + 3 * S(), p.y + h - 10 * S()), Hex(kAccentHover), 2 * S());
+            } else if (hovered) {
+                dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Hex(kCardHover), 10 * S());
+            }
+            const float iconX = collapsed ? p.x + w / 2 : p.x + 22 * S();
+            DrawIcon(it.icon, ImVec2(iconX, p.y + h / 2), 18 * S(), sel ? Hex(kAccentHover) : hovered ? Hex(kText) : Hex(kMuted));
+            if (!collapsed) {
+                ImGui::PushFont(sel ? f.bold : f.regular);
+                dl->AddText(ImVec2(p.x + 44 * S(), p.y + (h - ImGui::GetFontSize()) / 2), sel || hovered ? Hex(kText) : Hex(kMuted),
+                            it.label);
+                ImGui::PopFont();
+            } else if (hovered) {
+                ImGui::SetTooltip("%s", it.label);
+            }
+            if (&it != &items[std::size(items) - 1]) ImGui::Dummy(ImVec2(0, 2 * S()));
         }
-        const float iconX = collapsed ? p.x + w / 2 : p.x + 22 * S();
-        DrawIcon(it.icon, ImVec2(iconX, p.y + h / 2), 18 * S(), sel ? Hex(kAccentHover) : hovered ? Hex(kText) : Hex(kMuted));
-        if (!collapsed) {
-            ImGui::PushFont(sel ? f.bold : f.regular);
-            dl->AddText(ImVec2(p.x + 44 * S(), p.y + (h - ImGui::GetFontSize()) / 2), sel || hovered ? Hex(kText) : Hex(kMuted), it.label);
-            ImGui::PopFont();
-        } else if (hovered) {
-            ImGui::SetTooltip("%s", it.label);
-        }
-        ImGui::Dummy(ImVec2(0, 2 * S()));
+        // A soft fade where more of the menu is scrolled out of view.
+        const ImVec2 np = ImGui::GetWindowPos(), ns = ImGui::GetWindowSize();
+        const float fade = 18 * S();
+        if (ImGui::GetScrollY() > 0.5f)
+            dl->AddRectFilledMultiColor(np, ImVec2(np.x + ns.x, np.y + fade), Hex(kSidebar), Hex(kSidebar), Hex(kSidebar, 0),
+                                        Hex(kSidebar, 0));
+        if (ImGui::GetScrollY() < ImGui::GetScrollMaxY() - 0.5f)
+            dl->AddRectFilledMultiColor(ImVec2(np.x, np.y + ns.y - fade), ImVec2(np.x + ns.x, np.y + ns.y), Hex(kSidebar, 0),
+                                        Hex(kSidebar, 0), Hex(kSidebar), Hex(kSidebar));
     }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
 
-    // Live output at the bottom of the sidebar.
-    const auto& out = ctl.output();
-    const float orbR = collapsed ? 14 * S() : 22 * S();
-    const float reserve = collapsed ? orbR * 2 + 16 * S() : orbR * 2 + 76 * S();
-    const float bottom = ImGui::GetWindowHeight() - 20 * S();
-    ImGui::SetCursorPosY(bottom - reserve);  // leaves room for the version line (when shown)
-    ImVec2 p = ImGui::GetCursorScreenPos();
-    const float orbX = collapsed ? p.x + ImGui::GetContentRegionAvail().x / 2 : p.x + orbR + 4 * S();
-    Orb(ImVec2(orbX, p.y + orbR + 4 * S()), orbR, PreviewColor(out));
-    if (collapsed) {
-        if (ImGui::IsMouseHoveringRect(ImVec2(orbX - orbR, p.y), ImVec2(orbX + orbR, p.y + orbR * 2 + 8 * S())))
-            ImGui::SetTooltip("%s: %s", ctl.prefs().mode == Mode::Auto ? "Auto" : "Manual", out.label.c_str());
-        ImGui::Dummy(ImVec2(0, orbR * 2 + 8 * S()));
-    } else {
-        ImGui::Dummy(ImVec2(0, orbR * 2 + 14 * S()));
-        ImGui::PushFont(f.bold);
-        ImGui::TextUnformatted(ctl.prefs().mode == Mode::Auto ? "Auto" : "Manual");
-        ImGui::PopFont();
-        // Version in the bottom-left corner.
-        {
+    // Live output and the version, in their own card at the bottom.
+    {
+        const auto& out = ctl.output();
+        ImGui::SetCursorPosY(ImGui::GetWindowHeight() - ImGui::GetStyle().WindowPadding.y - statusH);
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float w = ImGui::GetContentRegionAvail().x;
+        const ImVec2 q(p.x + w, p.y + statusH);
+        ImGui::Dummy(ImVec2(w, statusH));
+        const bool hovered = ImGui::IsMouseHoveringRect(p, q) && ImGui::IsWindowHovered();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(p, q, Hex(kCard), 12 * S());
+        dl->AddRect(p, q, Hex(kBorder), 12 * S(), 0, std::max(1.f, S()));
+        dl->PushClipRect(p, q, true);
+        const char* mode = ctl.prefs().mode == Mode::Auto ? "Auto" : "Manual";
+        char handback[64] = "";
+        if (const uint64_t left = ctl.handbackMsLeft())
+            snprintf(handback, sizeof handback, "Handing back to Armoury Crate... %d s", static_cast<int>((left + 999) / 1000));
+        const std::string label = handback[0] ? std::string(handback) : out.label;
+        bool cut = false;
+        if (collapsed) {
+            Orb(ImVec2(p.x + w / 2, p.y + statusH / 2), orbR, PreviewColor(out));
+        } else {
+            Orb(ImVec2(p.x + cardPad + orbR, p.y + cardPad + topBlock / 2), orbR, PreviewColor(out));
+            const float tx = p.x + cardPad + orbR * 2 + 12 * S(), tw = q.x - cardPad - tx;
+            float y = p.y + cardPad + (topBlock - (boldH + 4 * S() + capH * 2 + 2 * S())) / 2;
+            ImGui::PushFont(f.bold);
+            dl->AddText(ImVec2(tx, y), Hex(kText), mode);
+            ImGui::PopFont();
+            y += boldH + 4 * S();
+            // The output in up to two lines, the rest cut with "...".
             ImGui::PushFont(f.caption);
-            const ImVec2 size = ImGui::CalcTextSize(kVersionText);
-            const ImVec2 at(ImGui::GetWindowPos().x + ImGui::GetStyle().WindowPadding.x,
-                            ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - size.y - 8 * S());
-            ImGui::GetWindowDrawList()->AddText(at, Hex(kMuted, 160), kVersionText);
+            ImFont* font = ImGui::GetFont();
+            const float scale = ImGui::GetFontSize() / font->FontSize;
+            const char* at = label.c_str();
+            const char* end = at + label.size();
+            for (int line = 0; line < 2 && at < end; ++line) {
+                while (at < end && *at == ' ') ++at;
+                const char* brk = font->CalcWordWrapPositionA(scale, at, end, tw);
+                if (brk == at) brk = at + 1;
+                std::string text(at, brk);
+                if (line == 1 && brk < end) {
+                    text = Ellipsize(std::string(at, end), tw);
+                    cut = true;
+                }
+                dl->AddText(ImVec2(tx, y), Hex(kMuted), text.c_str());
+                y += capH + 2 * S();
+                at = brk;
+            }
+            // The version under a thin line.
+            const float lineY = q.y - cardPad - capH - 9 * S();
+            dl->AddLine(ImVec2(p.x + cardPad, lineY), ImVec2(q.x - cardPad, lineY), Hex(kBorder), std::max(1.f, S()));
+            dl->AddText(ImVec2(p.x + cardPad, q.y - cardPad - capH), Hex(kMuted, 170), kVersionText);
             ImGui::PopFont();
         }
-        ImGui::PushFont(f.caption);
-        if (const uint64_t left = ctl.handbackMsLeft())
-            Muted("Handing back to Armoury Crate... %d s", static_cast<int>((left + 999) / 1000));
-        else
-            Muted("%s", out.label.c_str());
-        ImGui::PopFont();
+        dl->PopClipRect();
+        if (hovered && collapsed) ImGui::SetTooltip("%s: %s\nLumaBridge %s", mode, label.c_str(), kVersionText);
+        else if (hovered && cut) ImGui::SetTooltip("%s", label.c_str());
     }
 
     ImGui::EndChild();
