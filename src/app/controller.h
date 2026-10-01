@@ -30,6 +30,7 @@
 #include "logitech_output.h"
 #include "azoth_output.h"
 #include "dualsense_output.h"
+#include "pad_input.h"
 #include "openrgb_output.h"
 #include "lamparray_output.h"
 #include "hardware_helper.h"
@@ -187,6 +188,8 @@ public:
     nzxt::KrakenState krakenState() const { return kraken_.state(); }
     bool krakenListening() const { return kraken_.listening(); }
     unsigned long krakenError() const { return kraken_.lastError(); }
+    bool krakenLightingActive() const { return kraken_.lightingActive(); }
+    unsigned long krakenLightingError() const { return kraken_.lightingError(); }
     void RescanPresence();
 
     // ASUS ROG Azoth over USB (wired).
@@ -195,6 +198,8 @@ public:
 
     // Sony DualSense lightbar, by USB or Bluetooth (experimental).
     const DualSenseOutput& dualsense() const { return dualsense_; }
+    const PadInput& pad() const { return pad_; }
+    void SetPadInputEnabled(bool on);
     void SetDualSenseEnabled(bool on);
 
     // Devices with Windows' lighting standard built in (HID LampArray), lit directly.
@@ -208,6 +213,7 @@ public:
     // Devices OpenRGB supports, through its SDK server (optional).
     const OpenRgbOutput& openRgb() const { return openRgb_; }
     void SetOpenRgbEnabled(bool on);
+    void SetOpenRgbPort(int port);
     // Whether LumaBridge lights this OpenRGB device: the user's choice, else on unless
     // LumaBridge already lights it itself (Aura, Logitech, the Azoth, FURY / HyperX memory).
     bool OpenRgbOn(const OpenRgbDevice& d) const;
@@ -270,6 +276,7 @@ private:
     LogitechOutput logitech_;
     AzothOutput azoth_;
     DualSenseOutput dualsense_;
+    PadInput pad_;
     OpenRgbOutput openRgb_;
     LampArrayOutput lampArray_;
     HardwareHelper hardware_;

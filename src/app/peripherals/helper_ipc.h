@@ -26,8 +26,8 @@ enum class RamStatus : uint32_t {
     Starting,
     Ready,         // found the sticks, waiting for colors
     Active,        // writing colors
-    NoModule,      // SmbusPIIX4.bin missing next to the helper
-    ModuleFailed,  // PawnIO refused the module: not an AMD chipset
+    NoModule,      // AMD / Intel SMBus module missing next to the helper
+    ModuleFailed,  // PawnIO refused both AMD and Intel SMBus modules
     NotKingston,   // SMBIOS lists no Kingston / HyperX memory
     NoController,  // nothing answers at 0x27
     NoSticks,      // no DDR4 stick answers at 0x50-0x53

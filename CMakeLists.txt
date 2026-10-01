@@ -150,7 +150,7 @@ if(LUMA_ARCH STREQUAL "x64")
         src/app/device_inventory.cpp
         src/app/sensors/system_monitor.cpp
         src/app/peripherals/logitech_output.cpp
-        src/app/peripherals/azoth_output.cpp src/app/peripherals/dualsense_output.cpp src/app/peripherals/hardware_helper.cpp
+        src/app/peripherals/azoth_output.cpp src/app/peripherals/dualsense_output.cpp src/app/peripherals/pad_input.cpp src/app/peripherals/hardware_helper.cpp
         src/app/peripherals/openrgb_output.cpp src/app/peripherals/lamparray_output.cpp
         src/app/peripherals/ghub_settings.cpp
         src/integrations/logitech/real_logiled.cpp
@@ -231,7 +231,7 @@ install(TARGETS lumabridge_proxy chroma_emu corsair_emu lightfx_emu RUNTIME DEST
 install(TARGETS hw_helper RUNTIME DESTINATION .)
 # PawnIO, bundled unmodified (third_party/pawnio/README.md): installed by Install-Helper.ps1.
 install(FILES third_party/pawnio/PawnIO_setup.exe third_party/pawnio/COPYING third_party/pawnio/README.md DESTINATION pawnio)
-install(FILES third_party/pawnio/modules/SmbusPIIX4.bin third_party/pawnio/modules/LpcIO.bin
+install(FILES third_party/pawnio/modules/SmbusPIIX4.bin third_party/pawnio/modules/SmbusI801.bin third_party/pawnio/modules/LpcIO.bin
         third_party/pawnio/modules/AMDFamily17.bin third_party/pawnio/modules/IntelMSR.bin
         third_party/pawnio/modules/COPYING DESTINATION pawnio/modules)
 install(TARGETS aura-test aura-usb-test ram-probe ghub-probe chroma-probe device-probe hidpp-probe azoth-probe logiled-harness RUNTIME DESTINATION tools)

@@ -96,6 +96,7 @@ public:
     enum class Result { Ok, NoDriver, NoFile, Refused };
     ~PawnModule() { Close(); }
     Result Load(const wchar_t* file) {
+        Close();
         std::vector<uint8_t> blob;
         if (!ReadFileBytes(ExeDir() + L"\\" + file, &blob)) return Result::NoFile;
         h_ = CreateFileW(L"\\\\?\\GLOBALROOT\\Device\\PawnIO", GENERIC_READ | GENERIC_WRITE,
@@ -190,11 +191,18 @@ public:
     // Finds the controller and the sticks (read only).
     void Start() {
         status_ = helper::RamStatus::Starting;
-        switch (smbus_.Load(L"SmbusPIIX4.bin")) {
-        case PawnModule::Result::Ok: break;
-        case PawnModule::Result::NoFile: status_ = helper::RamStatus::NoModule; return;
-        default: status_ = helper::RamStatus::ModuleFailed; return;
-        }
+        // The signed modules expose the same transfer API. Each validates the chipset
+        // before loading, so Intel machines can use the same RGB-only register allow-list.
+        const auto amd = smbus_.Load(L"SmbusPIIX4.bin");
+        if (amd != PawnModule::Result::Ok) {
+            const auto intel = smbus_.Load(L"SmbusI801.bin");
+            if (intel != PawnModule::Result::Ok) {
+                status_ = intel == PawnModule::Result::NoFile || amd == PawnModule::Result::NoFile
+                              ? helper::RamStatus::NoModule : helper::RamStatus::ModuleFailed;
+                return;
+            }
+            Log("RAM: using Intel I801 SMBus (experimental)");
+        } else Log("RAM: using AMD PIIX4 SMBus");
         if (!KingstonMemory()) {
             status_ = helper::RamStatus::NotKingston;
             return;

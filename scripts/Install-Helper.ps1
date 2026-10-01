@@ -35,10 +35,10 @@ $TaskPath = '\LumaBridge\'
 $TaskName = 'Hardware helper'
 # Bumped whenever the task or the helper changes; LumaBridge asks to set it up again when
 # the recorded version is older (kHelperTaskVersion in src/app/integrations.h).
-$TaskVersion = 2
+$TaskVersion = 3
 $VersionKey = 'HKLM:\SOFTWARE\LumaBridge'
 $InstallDir = Join-Path $env:ProgramFiles 'LumaBridge'
-$Modules = 'SmbusPIIX4.bin', 'LpcIO.bin', 'AMDFamily17.bin', 'IntelMSR.bin'
+$Modules = 'SmbusPIIX4.bin', 'SmbusI801.bin', 'LpcIO.bin', 'AMDFamily17.bin', 'IntelMSR.bin'
 
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not ([Security.Principal.WindowsPrincipal] $id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {

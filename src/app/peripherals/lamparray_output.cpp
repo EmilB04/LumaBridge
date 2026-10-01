@@ -13,6 +13,7 @@ extern "C" {
 
 #include "lamparray.h"
 #include "log.h"
+#include "lighting_identity.h"
 
 namespace luma::app {
 namespace {
@@ -25,8 +26,11 @@ constexpr uint64_t kRefreshMs = 5000;     // every lamp again now and then
 constexpr DWORD kFrameMs = 33;
 
 std::string Narrow(const wchar_t* w) {
-    char b[256] = {};
-    WideCharToMultiByte(CP_UTF8, 0, w, -1, b, sizeof b, nullptr, nullptr);
+    const int size = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+    if (size <= 1) return {};
+    std::string b(static_cast<size_t>(size), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, b.data(), size, nullptr, nullptr);
+    b.pop_back();
     return b;
 }
 
@@ -42,6 +46,7 @@ std::vector<std::wstring> LampArrayPaths() {
     for (DWORD i = 0; SetupDiEnumDeviceInterfaces(set, nullptr, &hid, i, &iface); ++i) {
         DWORD need = 0;
         SetupDiGetDeviceInterfaceDetailW(set, &iface, nullptr, 0, &need, nullptr);
+        if (need < sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W)) continue;
         std::vector<BYTE> buf(need);
         auto* detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W*>(buf.data());
         detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
@@ -69,6 +74,9 @@ public:
     // when it can't be lit.
     bool Open(const std::wstring& path) {
         path_ = path;
+        info_.path = Narrow(path.c_str());
+        info_.id = lighting::Identity({info_.path});
+        info_.name = "Lighting device";
         h_ = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
                          OPEN_EXISTING, 0, nullptr);
         if (h_ == INVALID_HANDLE_VALUE) {
@@ -128,6 +136,7 @@ public:
                 break;
             Lamp l;
             l.id = static_cast<uint16_t>(Value(la::kAttributesResponseReport, la::kLampId));
+            if (l.id != id) break;  // do not light a repeated or mismatched lamp response
             l.x = Value(la::kAttributesResponseReport, la::kPositionX);
             if (lamps_.empty()) {
                 levels_[0] = Value(la::kAttributesResponseReport, la::kRedLevelCount);
@@ -137,8 +146,8 @@ public:
             }
             lamps_.push_back(l);
         }
-        if (lamps_.empty()) {
-            info_.problem = "Its lamps couldn't be read";
+        if (lamps_.size() != info_.lamps) {
+            info_.problem = "Not all of its lamps could be read";
             return false;
         }
         minX_ = maxX_ = lamps_[0].x;
@@ -341,6 +350,12 @@ void LampArrayOutput::Run() {
         if (now >= nextScan) {
             nextScan = now + kRescanMs;
             const auto paths = LampArrayPaths();
+            // Access can recover when another lighting app closes, without unplugging.
+            const auto previousFailures = unusable;
+            for (const auto& failed : previousFailures)
+                seen.erase(std::remove(seen.begin(), seen.end(), failed.first), seen.end());
+            unusable.clear();
+            const size_t devicesBefore = devs.size();
             // Unplugged: drop (their handles are gone anyway).
             devs.erase(std::remove_if(devs.begin(), devs.end(),
                                       [&](const auto& d) { return std::find(paths.begin(), paths.end(), d->path()) == paths.end(); }),
@@ -348,12 +363,7 @@ void LampArrayOutput::Run() {
             seen.erase(std::remove_if(seen.begin(), seen.end(),
                                       [&](const std::wstring& p) { return std::find(paths.begin(), paths.end(), p) == paths.end(); }),
                        seen.end());
-            bool changed = false;
-            const size_t before = unusable.size();
-            unusable.erase(std::remove_if(unusable.begin(), unusable.end(),
-                                          [&](const auto& u) { return std::find(paths.begin(), paths.end(), u.first) == paths.end(); }),
-                           unusable.end());
-            changed = unusable.size() != before;
+            bool changed = devs.size() != devicesBefore || !previousFailures.empty();
             for (const std::wstring& p : paths) {
                 if (std::find(seen.begin(), seen.end(), p) != seen.end()) continue;
                 seen.push_back(p);
@@ -361,7 +371,10 @@ void LampArrayOutput::Run() {
                 if (d->Open(p)) {
                     devs.push_back(std::move(d));
                 } else {
-                    LUMA_INFO("LampArray: %s can't be lit: %s", d->info().name.c_str(), d->info().problem.c_str());
+                    const bool sameProblem = std::any_of(previousFailures.begin(), previousFailures.end(), [&](const auto& previous) {
+                        return previous.first == p && previous.second.problem == d->info().problem;
+                    });
+                    if (!sameProblem) LUMA_INFO("LampArray: %s can't be lit: %s", d->info().name.c_str(), d->info().problem.c_str());
                     unusable.emplace_back(p, d->info());
                 }
                 changed = true;
@@ -386,7 +399,7 @@ void LampArrayOutput::Run() {
         DWORD wait = kFrameMs;
         for (auto it = devs.begin(); it != devs.end();) {
             Device& d = **it;
-            const bool wanted = own && std::find(skip.begin(), skip.end(), d.info().name) == skip.end();
+            const bool wanted = own && std::find(skip.begin(), skip.end(), d.info().id) == skip.end();
             bool ok = true;
             if (!wanted) {
                 if (d.controlling) ok = d.Autonomous(true);  // its own effect again

@@ -114,15 +114,95 @@ void Kraken::Start(uint16_t pid, bool screen) {
     stop_ = false;
     state_ = KrakenState::Searching;
     thread_ = std::thread(&Kraken::Run, this, pid, screen);
+    if (LightingChannels(pid)) lightingThread_ = std::thread(&Kraken::RunLighting, this, pid);
 }
 
 void Kraken::Stop() {
     if (!thread_.joinable()) return;
     stop_ = true;
     thread_.join();
+    if (lightingThread_.joinable()) lightingThread_.join();
+    lightingActive_ = false;
     state_ = KrakenState::Off;
     std::lock_guard<std::mutex> lock(mutex_);
     status_ = {};
+}
+
+void Kraken::SetLighting(const fx::Params& effect, double brightness, bool own) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (effect.kind != effect_.kind || effect.speed != effect_.speed) effectSince_ = GetTickCount64();
+    effect_ = effect;
+    brightness_ = brightness;
+    ownLighting_ = own;
+}
+
+void Kraken::RunLighting(uint16_t pid) {
+    HANDLE h = INVALID_HANDLE_VALUE;
+    HANDLE ev = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!ev) { lightingError_ = GetLastError(); return; }
+    DWORD outputLength = 0;
+    uint64_t nextTry = 0, sentAt = 0;
+    Rgb last{};
+    auto close = [&] {
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        h = INVALID_HANDLE_VALUE;
+        lightingActive_ = false;
+        sentAt = 0;
+    };
+    while (!stop_) {
+        Sleep(100);  // ten colors per second; do not hammer the cooler's USB controller
+        fx::Params effect;
+        double level;
+        bool own;
+        uint64_t since;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            effect = effect_; level = brightness_; own = ownLighting_; since = effectSince_;
+        }
+        if (!own) { close(); nextTry = 0; continue; }
+        const uint64_t now = GetTickCount64();
+        if (h == INVALID_HANDLE_VALUE) {
+            if (now < nextTry) continue;
+            nextTry = now + 5000;
+            for (const auto& f : FindInterfaces(pid)) {
+                if (f.inLen < 64 || f.outLen < 64 || f.outLen > 256 || f.usagePage < 0xFF00) continue;
+                h = CreateFileW(f.path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+                if (h != INVALID_HANDLE_VALUE) { outputLength = f.outLen; break; }
+                lightingError_ = GetLastError();
+            }
+            if (h == INVALID_HANDLE_VALUE) continue;
+        }
+        const Rgb color = Scale(fx::Render(effect, fx::Seconds(effect, now, since), 0, 1), level);
+        if (sentAt && color == last && now - sentAt < 3000) continue;
+        const auto packet = FixedLighting(LightingChannels(pid), color);
+        std::vector<uint8_t> report(outputLength);
+        std::copy(packet.begin(), packet.end(), report.begin());
+        OVERLAPPED ov{};
+        ov.hEvent = ev;
+        ResetEvent(ev);
+        DWORD written = 0;
+        const BOOL started = WriteFile(h, report.data(), outputLength, nullptr, &ov);
+        const DWORD error = started ? ERROR_SUCCESS : GetLastError();
+        bool ok = started || error == ERROR_IO_PENDING;
+        if (ok) {
+            if (WaitForSingleObject(ev, 500) != WAIT_OBJECT_0) CancelIoEx(h, &ov);
+            ok = GetOverlappedResult(h, &ov, &written, TRUE) && written == outputLength;
+        }
+        if (!ok) {
+            lightingError_ = error != ERROR_SUCCESS && error != ERROR_IO_PENDING ? error : GetLastError();
+            LUMA_WARN("NZXT Kraken %04X: lighting write failed (error %lu)", pid, lightingError_.load());
+            close();
+            nextTry = now + 5000;
+            continue;
+        }
+        lightingError_ = 0;
+        lightingActive_ = true;
+        sentAt = now;
+        last = color;
+    }
+    close();
+    CloseHandle(ev);
 }
 
 void Kraken::Run(uint16_t pid, bool screen) {

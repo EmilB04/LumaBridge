@@ -17,6 +17,7 @@
 #include "logitech_hidpp.h"
 #include "ghub_settings.h"
 #include "device_sleep.h"
+#include "lighting_identity.h"
 
 namespace luma::app {
 namespace {
@@ -63,8 +64,10 @@ bool Controller::Init() {
     if (prefs_.logitechDevices) logitech_.Start(AppDirectory() + L"\\integrations\\LumaBridge_x64.dll");
     if (prefs_.azothKeyboard) azoth_.Start();
     if (prefs_.dualsenseController) dualsense_.Start();
-    if (prefs_.openRgb) openRgb_.Start(static_cast<uint16_t>(prefs_.openRgbPort));
-    if (prefs_.lampArray) lampArray_.Start();
+    pad_.SetMapping(prefs_.padMapping);
+    if (prefs_.padInput) pad_.Start();
+    openRgb_.Start(static_cast<uint16_t>(prefs_.openRgbPort));
+    lampArray_.Start();
     logitechInputAt_ = azothInputAt_ = GetTickCount64();  // awake at start
     hardware_.Start();
     return true;
@@ -98,8 +101,8 @@ uint64_t Controller::AzothSleepMs(bool dynamicActive) const {
 
 void Controller::SetLampArrayEnabled(bool on) {
     prefs_.lampArray = on;
-    if (on) lampArray_.Start();
-    else lampArray_.Stop();  // each device runs its own effect again
+    lampArray_.Set(DeviceEffect(device::kOther), 0, false, {});
+    lampArray_.Start();  // discovery continues while lighting is off
     Changed();
 }
 
@@ -107,49 +110,57 @@ bool Controller::LampArrayDefaultOn(const LampArrayDevice& d) const {
     if (!d.problem.empty()) return false;
     if (d.vid == azoth::kVendor) {
         if (d.pid == azoth::Product(azoth::Link::Wired) || d.pid == azoth::Product(azoth::Link::Wireless))
-            return !prefs_.azothKeyboard;
+            return !(prefs_.azothKeyboard &&
+                     (azoth_.state() == AzothOutput::State::Active || azoth_.state() == AzothOutput::State::Released));
         for (uint16_t pid : aurausb::MainboardProductIds())
-            if (d.pid == pid) return false;  // the Aura controller: LumaBridge's own Aura connection
+            if (d.pid == pid && auraStatus().connected) return false;
     }
-    if (d.vid == hidpp::kVendor && prefs_.logitechDevices) return false;
+    if (d.vid == hidpp::kVendor && prefs_.logitechDevices &&
+        (logitech_.state() == LogitechOutput::State::Active || logitech_.state() == LogitechOutput::State::Released)) return false;
     return true;
 }
 
 bool Controller::LampArrayOn(const LampArrayDevice& d) const {
     if (!d.problem.empty()) return false;
-    auto it = prefs_.lampArrayDevices.find(d.name);
-    return it != prefs_.lampArrayDevices.end() ? it->second : LampArrayDefaultOn(d);
+    return lighting::Enabled(prefs_.lampArrayDevices, d.id, d.name, LampArrayDefaultOn(d));
 }
 
 void Controller::SetOpenRgbEnabled(bool on) {
     prefs_.openRgb = on;
-    if (on) openRgb_.Start(static_cast<uint16_t>(prefs_.openRgbPort));
-    else openRgb_.Stop();  // each device gets its own effect back
+    openRgb_.Set(DeviceEffect(device::kOther), 0, false, {});
+    openRgb_.Start(static_cast<uint16_t>(prefs_.openRgbPort));
     Changed();
 }
 
-namespace {
-bool Has(const std::string& s, const char* part) {
-    std::string a = s, b = part;
-    for (auto& c : a) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    for (auto& c : b) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return a.find(b) != std::string::npos;
-}
-}  // namespace
-
 bool Controller::OpenRgbDefaultOn(const OpenRgbDevice& d) const {
-    const std::string who = d.name + " " + d.vendor;
-    // ASUS Aura: the motherboard and its headers (LumaBridge's own Aura connection).
-    if (!knownDevices_.empty() && Has(who, "asus") && (d.type == 0 || d.type == 4)) return false;
-    if (prefs_.logitechDevices && Has(who, "logitech")) return false;
-    if (prefs_.azothKeyboard && Has(who, "azoth")) return false;
-    if (prefs_.ramLighting && d.type == 1 && (Has(who, "kingston") || Has(who, "hyperx") || Has(who, "fury"))) return false;
-    return true;
+    const lighting::NativeConnections available{
+        auraStatus().connected,
+        prefs_.logitechDevices && (logitech_.state() == LogitechOutput::State::Active ||
+                                  logitech_.state() == LogitechOutput::State::Released),
+        prefs_.azothKeyboard && (azoth_.state() == AzothOutput::State::Active ||
+                                azoth_.state() == AzothOutput::State::Released),
+        prefs_.ramLighting && hardware_.sticks() > 0 &&
+            (hardware_.ramState() == HardwareHelper::RamState::Active || hardware_.ramState() == HardwareHelper::RamState::Released),
+        prefs_.nzxtLighting && kraken_.lightingActive(),
+        prefs_.dualsenseController && (dualsense_.state() == DualSenseOutput::State::Active ||
+                                      dualsense_.state() == DualSenseOutput::State::Connecting ||
+                                      dualsense_.state() == DualSenseOutput::State::Released)};
+    if (prefs_.lampArray && !DeviceNative(prefs_, device::kOther))
+        for (const auto& lamp : lampArray_.devices())
+            if (LampArrayOn(lamp) && lighting::SameLocation(d.location, lamp.path)) return false;
+    return !lighting::PreferNative(d.type, d.name + " " + d.vendor, available);
 }
 
 bool Controller::OpenRgbOn(const OpenRgbDevice& d) const {
-    auto it = prefs_.openRgbDevices.find(d.name);
-    return it != prefs_.openRgbDevices.end() ? it->second : OpenRgbDefaultOn(d);
+    return lighting::Enabled(prefs_.openRgbDevices, d.id, d.name, OpenRgbDefaultOn(d));
+}
+
+void Controller::SetOpenRgbPort(int port) {
+    if (port < 1 || port > 65535 || port == prefs_.openRgbPort) return;
+    openRgb_.Stop();
+    prefs_.openRgbPort = port;
+    openRgb_.Start(static_cast<uint16_t>(port));
+    Changed();
 }
 
 void Controller::SetAzothEnabled(bool on) {
@@ -163,6 +174,13 @@ void Controller::SetDualSenseEnabled(bool on) {
     prefs_.dualsenseController = on;
     if (on) dualsense_.Start();
     else dualsense_.Stop();
+    Changed();
+}
+
+void Controller::SetPadInputEnabled(bool on) {
+    prefs_.padInput = on;
+    if (on) pad_.Start();
+    else pad_.Stop();  // lets go of any key it holds
     Changed();
 }
 
@@ -335,6 +353,7 @@ void Controller::Shutdown(bool handBack) {
     logitech_.Stop();
     azoth_.Stop();
     dualsense_.Stop();
+    pad_.Stop();
     openRgb_.Stop();
     kraken_.Stop();
     lampArray_.Stop();
@@ -352,6 +371,7 @@ void Controller::Changed() {
     if (mirror_.IsRunning() && cfg_.maxUpdateHz != mirrorHz_) mirror_.Stop();  // restarted by Tick
     mirror_.SetCorrection(cfg_.auraCorrection);
     mirror_.SetDisabledDevices(cfg_.auraDisabledDevices);
+    pad_.SetMapping(prefs_.padMapping);
     outputApplied_ = false;  // re-apply manual color / effect edits right away
     dirty_ = true;
     dirtySince_ = GetTickCount64();
@@ -767,14 +787,14 @@ void Controller::Tick() {
     {
         std::vector<std::string> skip;
         for (const LampArrayDevice& d : lampArray_.devices())
-            if (!LampArrayOn(d)) skip.push_back(d.name);
+            if (!LampArrayOn(d)) skip.push_back(d.id);
         lampArray_.Set(DeviceEffect(device::kOther), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kOther),
                        prefs_.lampArray && !output_.stopped && !DeviceNative(prefs_, device::kOther), skip);
     }
     {
         std::vector<std::string> skip;
         for (const OpenRgbDevice& d : openRgb_.devices())
-            if (!OpenRgbOn(d)) skip.push_back(d.name);
+            if (!OpenRgbOn(d)) skip.push_back(d.id);
         openRgb_.Set(DeviceEffect(device::kOther), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kOther),
                      prefs_.openRgb && !output_.stopped && !DeviceNative(prefs_, device::kOther), skip);
     }
@@ -791,6 +811,9 @@ void Controller::Tick() {
                        sleep::Level(now, azothInputAt_, AzothSleepMs(dynamic)),
                    prefs_.azothKeyboard && !output_.stopped && !DeviceNative(prefs_, device::kKeyboard));
     }
+    kraken_.SetLighting(DeviceEffect(device::kOther),
+                       cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kOther),
+                       prefs_.nzxtLighting && !output_.stopped && !DeviceNative(prefs_, device::kOther));
     dualsense_.Set(DeviceEffect(device::kController),
                    cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kController),
                    prefs_.dualsenseController && !output_.stopped && !DeviceNative(prefs_, device::kController));

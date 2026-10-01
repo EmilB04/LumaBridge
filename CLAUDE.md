@@ -44,8 +44,10 @@ the current state, how to build and test from Linux, and what's planned.
      `docs/releases/vX.Y.Z.md` (same style as the earlier notes: a one-line "Pre-release."
      summary, then New / Changed / Fixed, then Download).
   2. Push both branches and wait for the `build` workflow to pass on `main`.
-  3. Run the workflow by hand: `build.yml`, `workflow_dispatch` on ref `main` with input
-     `release_version` = `vX.Y.Z`. It builds, tests and publishes the release with
+  3. Pushing the "Release vX.Y.Z" commit to `main` publishes the release by itself once the
+     build and tests pass (`build.yml` reads the tag from the commit title). If that didn't
+     happen, run it by hand: `workflow_dispatch` on ref `main` with input `release_version` =
+     `vX.Y.Z` (it refuses to run if the release already exists). It publishes
      `LumaBridge-vX.Y.Z.zip`. Check that the run succeeded.
 - **GitHub access:** through the GitHub MCP tools (`mcp__github__*`): Actions runs, running
   the workflow. There's no `gh` CLI. Git itself pushes over HTTPS through the session's

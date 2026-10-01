@@ -35,9 +35,9 @@ std::wstring Schtasks(const wchar_t* verb) {
 
 const char* RamProblemText(helper::RamStatus s) {
     switch (s) {
-    case helper::RamStatus::NoModule: return "The helper's SMBus module is missing: click Set up again.";
+    case helper::RamStatus::NoModule: return "The helper's SMBus module is missing: click Set up again to install the AMD / Intel modules.";
     case helper::RamStatus::ModuleFailed:
-        return "PawnIO couldn't load its SMBus module. RAM lighting needs an AMD chipset for now.";
+        return "PawnIO couldn't load either SMBus module. Native RAM lighting needs a supported AMD or Intel chipset; OpenRGB can provide another connection.";
     case helper::RamStatus::NotKingston: return "No HyperX / Kingston FURY memory found.";
     case helper::RamStatus::NoController:
         return "No HyperX RGB controller answered on the SMBus (are these the RGB version of the sticks?).";

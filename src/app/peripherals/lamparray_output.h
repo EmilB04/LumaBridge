@@ -21,6 +21,8 @@ struct LampArrayDevice {
     uint32_t kind = 0;     // lamparray::KindName
     uint32_t lamps = 0;
     std::string problem;   // why it can't be lit ("" when it can)
+    std::string id;        // HID interface identity, independent of the product name
+    std::string path;      // matches another backend's location for the same HID collection
 };
 
 class LampArrayOutput {
@@ -32,7 +34,7 @@ public:
     void Stop();
 
     // What the devices should show. `own = false` gives every device its own effect back;
-    // `skip`: names of devices LumaBridge leaves alone (lit natively, or switched off).
+    // `skip`: identities of devices LumaBridge leaves alone (lit natively, or switched off).
     void Set(const fx::Params& effect, double brightness, bool own, const std::vector<std::string>& skip);
 
     State state() const { return state_; }

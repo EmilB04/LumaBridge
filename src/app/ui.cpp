@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "notifications.h"
 
 #include <shellapi.h>
 
@@ -6,6 +7,7 @@
 #include <cstdarg>
 #include <functional>
 #include <map>
+#include <set>
 #include <iterator>
 #include <cctype>
 #include <cmath>
@@ -1461,6 +1463,7 @@ int LitDevices(Controller& ctl) {
             for (const auto& d : LampArrayLit(ctl)) n += d.problem.empty() && d.lamps > 0;
         if (ctl.openRgb().state() == OpenRgbOutput::State::Connected)
             for (const auto& d : OpenRgbLit(ctl)) n += d.leds > 0;
+        if (prefs.nzxtLighting && ctl.krakenLightingActive()) ++n;
     }
     return n;
 }
@@ -4923,6 +4926,7 @@ struct DeviceStatus {
 };
 
 DeviceStatus OpenRgbStatus(const Controller& ctl, const OpenRgbDevice& d) {
+    if (!ctl.prefs().openRgb) return {"Detected, control off", kMuted, "Enable OpenRGB lighting in Integrations."};
     if (!ctl.OpenRgbOn(d))
         return ctl.OpenRgbDefaultOn(d) ? DeviceStatus{"Off", kMuted}
                                        : DeviceStatus{"Lit by LumaBridge itself", kMuted,
@@ -4932,6 +4936,7 @@ DeviceStatus OpenRgbStatus(const Controller& ctl, const OpenRgbDevice& d) {
 
 DeviceStatus LampArrayStatus(const Controller& ctl, const LampArrayDevice& d) {
     if (!d.problem.empty()) return {"Can't light it", kAmber, d.problem};
+    if (!ctl.prefs().lampArray) return {"Detected, control off", kMuted};
     if (!ctl.LampArrayOn(d))
         return ctl.LampArrayDefaultOn(d) ? DeviceStatus{"Off", kMuted}
                                          : DeviceStatus{"Lit by LumaBridge itself", kMuted,
@@ -5087,6 +5092,261 @@ void AzothCard(Controller& ctl, const Fonts& f) {
     EndCard();
 }
 
+// ---- Game controller: live view, battery, report timing and button mapping -----------------
+
+// A small label chip, lit while its button is held.
+void PadChip(ImDrawList* dl, ImVec2 c, float w, float h, const char* label, bool on) {
+    const ImVec2 a(c.x - w / 2, c.y - h / 2), b(c.x + w / 2, c.y + h / 2);
+    dl->AddRectFilled(a, b, Hex(on ? kAccent : kCardHover), h / 2);
+    dl->AddRect(a, b, Hex(on ? kAccentHover : kBorder), h / 2);
+    const ImVec2 ts = ImGui::CalcTextSize(label);
+    dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), Hex(on ? 0xFFFFFF : kMuted), label);
+}
+
+void PadStick(ImDrawList* dl, ImVec2 c, float r, uint8_t x, uint8_t y, bool pressed) {
+    dl->AddCircleFilled(c, r, Hex(kTrack), 32);
+    dl->AddCircle(c, r, Hex(pressed ? kAccentHover : kBorder), 32, pressed ? 2.f * S() : 1.2f * S());
+    dl->AddLine(ImVec2(c.x - r, c.y), ImVec2(c.x + r, c.y), Hex(kBorder, 120));
+    dl->AddLine(ImVec2(c.x, c.y - r), ImVec2(c.x, c.y + r), Hex(kBorder, 120));
+    const ImVec2 d(c.x + (x - 128) / 127.f * r * 0.8f, c.y + (y - 128) / 127.f * r * 0.8f);
+    dl->AddCircleFilled(d, r * 0.28f, Hex(pressed ? kAccentHover : kAccent), 20);
+}
+
+void PadBar(ImDrawList* dl, ImVec2 a, ImVec2 size, float fill, const char* label, uint8_t raw) {
+    dl->AddRectFilled(a, ImVec2(a.x + size.x, a.y + size.y), Hex(kTrack), size.y / 2);
+    if (fill > 0.01f)
+        dl->AddRectFilled(a, ImVec2(a.x + size.x * fill, a.y + size.y), Hex(kAccent), size.y / 2);
+    char text[24];
+    snprintf(text, sizeof text, "%s %d", label, raw);
+    dl->AddText(ImVec2(a.x, a.y + size.y + 2 * S()), Hex(kMuted), text);
+}
+
+void PadLiveCard(Controller& ctl, const Fonts& f, const PadInput::Snapshot& snap) {
+    BeginCard("pad-live");
+    CardTitle(f, "Live", Icon::Gauge);
+    bool input = ctl.prefs().padInput;
+    if (Toggle("Read the controller", &input)) ctl.SetPadInputEnabled(input);
+    if (!input) {
+        Muted("Switched off. Nothing is read from the controller, and no mapping runs.");
+        EndCard();
+        return;
+    }
+    if (!snap.connected) {
+        Muted("No DualSense or DualShock 4 found by USB or Bluetooth yet; LumaBridge keeps looking.");
+        if (snap.error) Muted("The last read failed (error %lu): unplugged, or out of Bluetooth range?", snap.error);
+        EndCard();
+        return;
+    }
+    const pad::State& st = snap.state;
+    Muted("%s by %s. Press things on it: they light up here.", pad::ModelName(st.model), snap.bluetooth ? "Bluetooth" : "USB cable");
+    if (snap.bluetooth && snap.reports > 60 && st.battery < 0)
+        Muted("Only the short Bluetooth report is arriving, so there is no battery or motion data. Reconnect the controller.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+
+    const float W = std::min(ImGui::GetContentRegionAvail().x, 620 * S()), H = 250 * S();
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(o, ImVec2(o.x + W, o.y + H), Hex(kBg), 12 * S());
+    auto at = [&](float fx, float fy) { return ImVec2(o.x + W * fx, o.y + H * fy); };
+    const float chipH = 20 * S();
+
+    // Triggers and shoulder buttons.
+    PadBar(dl, at(0.04f, 0.05f), ImVec2(W * 0.24f, 10 * S()), st.l2 / 255.f, "L2", st.l2);
+    PadBar(dl, at(0.72f, 0.05f), ImVec2(W * 0.24f, 10 * S()), st.r2 / 255.f, "R2", st.r2);
+    PadChip(dl, at(0.16f, 0.25f), W * 0.2f, chipH, "L1", st.Down(pad::kL1));
+    PadChip(dl, at(0.84f, 0.25f), W * 0.2f, chipH, "R1", st.Down(pad::kR1));
+
+    // D-pad (left) and face buttons (right).
+    const ImVec2 dc = at(0.16f, 0.52f), fc = at(0.84f, 0.52f);
+    const float arm = 24 * S(), key = 16 * S();
+    auto cell = [&](ImVec2 c, bool on) {
+        dl->AddRectFilled(ImVec2(c.x - key / 2, c.y - key / 2), ImVec2(c.x + key / 2, c.y + key / 2), Hex(on ? kAccent : kCardHover), 4 * S());
+    };
+    cell(ImVec2(dc.x, dc.y - arm), st.Down(pad::kUp));
+    cell(ImVec2(dc.x, dc.y + arm), st.Down(pad::kDown));
+    cell(ImVec2(dc.x - arm, dc.y), st.Down(pad::kLeft));
+    cell(ImVec2(dc.x + arm, dc.y), st.Down(pad::kRight));
+    auto face = [&](ImVec2 c, bool on, const char* label) {
+        dl->AddCircleFilled(c, key * 0.75f, Hex(on ? kAccent : kCardHover), 20);
+        dl->AddCircle(c, key * 0.75f, Hex(on ? kAccentHover : kBorder), 20);
+        const ImVec2 ts = ImGui::CalcTextSize(label);
+        dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), Hex(on ? 0xFFFFFF : kMuted), label);
+    };
+    face(ImVec2(fc.x, fc.y - arm), st.Down(pad::kTriangle), "T");
+    face(ImVec2(fc.x, fc.y + arm), st.Down(pad::kCross), "X");
+    face(ImVec2(fc.x - arm, fc.y), st.Down(pad::kSquare), "S");
+    face(ImVec2(fc.x + arm, fc.y), st.Down(pad::kCircle), "O");
+
+    // Touchpad with the fingers on it, and the small buttons around it.
+    const ImVec2 ta = at(0.34f, 0.12f), tb = at(0.66f, 0.40f);
+    dl->AddRectFilled(ta, tb, Hex(kTrack), 8 * S());
+    dl->AddRect(ta, tb, Hex(st.Down(pad::kTouchpad) ? kAccentHover : kBorder), 8 * S(), 0, st.Down(pad::kTouchpad) ? 2.f * S() : 1.f * S());
+    for (int i = 0; i < 2; ++i)
+        if (st.touch[i].down)
+            dl->AddCircleFilled(ImVec2(ta.x + (tb.x - ta.x) * std::min(1.f, st.touch[i].x / 1919.f),
+                                       ta.y + (tb.y - ta.y) * std::min(1.f, st.touch[i].y / 1079.f)),
+                                7 * S(), Hex(i ? kAccent2 : kAccent), 16);
+    PadChip(dl, at(0.27f, 0.20f), W * 0.12f, chipH, pad::ButtonName(st.model, pad::kCreate), st.Down(pad::kCreate));
+    PadChip(dl, at(0.73f, 0.20f), W * 0.12f, chipH, "Options", st.Down(pad::kOptions));
+    PadChip(dl, at(0.50f, 0.50f), W * 0.10f, chipH, "PS", st.Down(pad::kPs));
+    if (st.model == pad::Model::DualSense) PadChip(dl, at(0.50f, 0.60f), W * 0.10f, chipH, "Mute", st.Down(pad::kMute));
+
+    // Sticks.
+    const float r = std::min(W * 0.11f, 38 * S());
+    PadStick(dl, at(0.34f, 0.80f), r, st.lx, st.ly, st.Down(pad::kL3));
+    PadStick(dl, at(0.66f, 0.80f), r, st.rx, st.ry, st.Down(pad::kR3));
+    ImGui::Dummy(ImVec2(W, H));
+    Muted("Left stick %d, %d   Right stick %d, %d   Touches: %d", st.lx, st.ly, st.rx, st.ry,
+          (st.touch[0].down ? 1 : 0) + (st.touch[1].down ? 1 : 0));
+    Muted("Gyroscope %d, %d, %d   Accelerometer %d, %d, %d", st.gyro[0], st.gyro[1], st.gyro[2], st.accel[0], st.accel[1], st.accel[2]);
+    EndCard();
+}
+
+void PadBatteryCard(const Fonts& f, const PadInput::Snapshot& snap) {
+    BeginCard("pad-battery");
+    CardTitle(f, "Battery", Icon::Bolt);
+    if (!snap.connected) {
+        Muted("Connect the controller to see its battery.");
+        EndCard();
+        return;
+    }
+    const pad::State& st = snap.state;
+    if (st.battery < 0) {
+        Muted("The controller isn't reporting its battery over this connection yet.");
+        EndCard();
+        return;
+    }
+    const unsigned color = st.charging || st.full ? kGreen : st.battery <= 15 ? kRed : st.battery <= 30 ? kAmber : kAccent;
+    ImGui::PushFont(f.title);
+    ImGui::Text("%d%%", st.battery);
+    ImGui::PopFont();
+    const ImVec2 a = ImGui::GetCursorScreenPos();
+    const float w = std::min(ImGui::GetContentRegionAvail().x, 320 * S()), h = 12 * S();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), Hex(kTrack), h / 2);
+    dl->AddRectFilled(a, ImVec2(a.x + w * st.battery / 100.f, a.y + h), Hex(color), h / 2);
+    ImGui::Dummy(ImVec2(w, h + 4 * S()));
+    Pill(st.full ? "Fully charged" : st.charging ? "Charging" : snap.bluetooth ? "On battery" : "On the cable", color);
+    Muted("The controller reports its charge in steps of 10 %%, so this moves in steps too.");
+    EndCard();
+}
+
+void PadTimingCard(const Fonts& f, const PadInput::Snapshot& snap) {
+    BeginCard("pad-timing");
+    CardTitle(f, "Report timing", Icon::Gauge);
+    if (!snap.connected) {
+        Muted("Connect the controller to see how steadily it reports.");
+        EndCard();
+        return;
+    }
+    Muted("How often the controller sends its state, and how even that is. Lower and steadier is better. Bluetooth is "
+          "slower than a cable. This is the controller's own timing, not the delay inside a game.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    PillFlow({{std::to_string(static_cast<int>(snap.rateHz + 0.5)) + " reports a second", kAccent},
+              {"Average " + std::to_string(snap.averageMs).substr(0, std::to_string(snap.averageMs).find('.') + 2) + " ms", kMuted},
+              {"Slowest " + std::to_string(snap.maxMs).substr(0, std::to_string(snap.maxMs).find('.') + 2) + " ms",
+               snap.maxMs > 30 ? kAmber : kMuted},
+              {"Jitter " + std::to_string(snap.jitterMs).substr(0, std::to_string(snap.jitterMs).find('.') + 2) + " ms",
+               snap.jitterMs > 5 ? kAmber : kMuted}});
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    // Graph of the last intervals, scaled to at least 20 ms.
+    const ImVec2 a = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x, h = 70 * S();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), Hex(kBg), 8 * S());
+    const auto& hist = snap.history;
+    float top = 20.f;
+    for (float v : hist) top = std::max(top, v);
+    if (hist.size() > 1) {
+        std::vector<ImVec2> pts;
+        for (size_t i = 0; i < hist.size(); ++i)
+            pts.push_back(ImVec2(a.x + w * i / (hist.size() - 1), a.y + h - 4 * S() - (h - 8 * S()) * std::min(hist[i], top) / top));
+        dl->AddPolyline(pts.data(), static_cast<int>(pts.size()), Hex(kAccent), 0, 1.6f * S());
+    }
+    char scale[24];
+    snprintf(scale, sizeof scale, "%.0f ms", top);
+    dl->AddText(ImVec2(a.x + 6 * S(), a.y + 4 * S()), Hex(kMuted), scale);
+    ImGui::Dummy(ImVec2(w, h));
+    EndCard();
+}
+
+bool BindingCombo(const char* id, pad::Binding* b) {
+    bool changed = false;
+    ImGui::SetNextItemWidth(190 * S());
+    if (ImGui::BeginCombo(id, pad::BindingLabel(*b).c_str())) {
+        if (ImGui::Selectable("Not mapped", b->action == pad::Action::None)) { *b = pad::Binding{}; changed = true; }
+        ImGui::SeparatorText("Mouse");
+        for (uint16_t c = 1; c <= 5; ++c)
+            if (ImGui::Selectable(pad::MouseName(c), b->action == pad::Action::Mouse && b->code == c)) {
+                *b = {pad::Action::Mouse, c};
+                changed = true;
+            }
+        ImGui::SeparatorText("Keyboard");
+        for (const auto& k : pad::Keys())
+            if (ImGui::Selectable(k.name, b->action == pad::Action::Key && b->code == k.vk)) {
+                *b = {pad::Action::Key, k.vk};
+                changed = true;
+            }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    return changed;
+}
+
+void PadMappingCard(Controller& ctl, const Fonts& f, const PadInput::Snapshot& snap) {
+    pad::Mapping& m = ctl.prefs().padMapping;
+    BeginCard("pad-mapping");
+    CardTitle(f, "Button mapping", Icon::Keyboard);
+    Muted("Make a controller button press a keyboard key or a mouse button, and optionally move the mouse with the right "
+          "stick. This adds keyboard and mouse input only: games still see the controller itself, and there is no "
+          "virtual gamepad (that needs a driver). Some online games with anti-cheat may not accept it.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    bool changed = false;
+    changed |= Toggle("Use this mapping", &m.enabled);
+    if (m.enabled) {
+        ImGui::SameLine();
+        if (!ctl.prefs().padInput) Pill("Controller reading is off", kAmber);
+        else if (!snap.connected) Pill("Waiting for the controller", kAmber);
+        else if (!m.AnyMapped()) Pill("Nothing mapped yet", kMuted);
+        else Pill("Active", kGreen);
+    }
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    changed |= Toggle("Right stick moves the mouse", &m.rightStickMouse);
+    if (m.rightStickMouse) {
+        float speed = static_cast<float>(m.mouseSpeed), dz = static_cast<float>(m.deadzone);
+        if (LabeledSlider("Mouse speed", &speed, 1, 30, "%.0f")) { m.mouseSpeed = static_cast<int>(speed); changed = true; }
+        if (LabeledSlider("Dead zone", &dz, 0, 50, "%.0f%%")) { m.deadzone = static_cast<int>(dz); changed = true; }
+    }
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    const pad::Model model = snap.connected ? snap.state.model : pad::Model::DualSense;
+    if (ImGui::BeginTable("pad-map", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthStretch, 1.f);
+        ImGui::TableSetupColumn("Does", ImGuiTableColumnFlags_WidthStretch, 1.6f);
+        ImGui::TableHeadersRow();
+        for (int b = 0; b < pad::kButtonCount; ++b) {
+            if (b == pad::kMute && model == pad::Model::DualShock4) continue;  // not on a DualShock 4
+            ImGui::PushID(b);
+            ImGui::TableNextRow(0, ImGui::GetFrameHeight() + 8 * S());
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            const bool held = snap.connected && snap.state.Down(b);
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(held ? kAccentHover : kText));
+            ImGui::TextUnformatted(pad::ButtonName(model, b));
+            ImGui::PopStyleColor();
+            ImGui::TableNextColumn();
+            changed |= BindingCombo("##binding", &m.buttons[static_cast<size_t>(b)]);
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    if (Btn("Clear all")) {
+        m.buttons = {};
+        changed = true;
+    }
+    if (changed) ctl.Changed();
+    EndCard();
+}
+
 void DualSenseCard(Controller& ctl, const Fonts& f) {
     BeginCard("dualsense");
     CardTitle(f, "Settings", Icon::Gear);
@@ -5215,7 +5475,7 @@ void MemoryCard(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
 
     BeginCard("memory");
     CardTitle(f, "Settings", Icon::Gear);
-    Muted("HyperX / Kingston FURY RGB DDR4 sticks show LumaBridge's effect across their five LEDs (AMD chipsets). "
+    Muted("HyperX / Kingston FURY RGB DDR4 sticks show LumaBridge's effect across their five LEDs (supported AMD and Intel chipsets; Intel is experimental). "
           "LumaBridge only ever writes the sticks' lighting registers, never their configuration chip. If the sticks "
           "flicker, Armoury Crate is lighting them too: switch the RAM off in Armoury Crate.");
     if (on && setUp && hw.ramState() == HardwareHelper::RamState::Problem) {
@@ -5593,7 +5853,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
                 SaveLayout(ctl, l);
             }
         }
-        Muted("Its lighting%s stays with its own app.", aio->lcd ? " and screen" : "");
+        Muted("RGB fans connected to a motherboard header or another controller are lit through that connection.");
         EndCard();
         return;
     }
@@ -5606,7 +5866,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         }
         std::string detail = "Graphics card";
         if (g->vramTotal) detail += ", " + Gb(g->vramTotal) + " of its own memory";
-        if (!DeviceHeader(ui, f, Icon::Gpu, sensors::FriendlyGpu(g->name), DeviceStatus("No RGB", kMuted), false, detail)) return;
+        if (!DeviceHeader(ui, f, Icon::Gpu, sensors::FriendlyGpu(g->name), DeviceStatus("Detected", kMuted), false, detail)) return;
         BeginCard("gpu-now");
         CardTitle(f, "Now", Icon::Gauge);
         bool any = false;
@@ -5635,7 +5895,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         EndCard();
         BeginCard("gpu-rgb");
         CardTitle(f, "Lighting", Icon::Lighting);
-        Muted("LumaBridge can't light this card: no RGB on it that LumaBridge can control. If it has lights that "
+        Muted("GPU lighting is available when a connected RGB driver exposes this card. If it has lights that "
               "OpenRGB supports, turn on OpenRGB under Integrations and it appears in the list as its own device.");
         EndCard();
         return;
@@ -5698,16 +5958,51 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         return;
     }
     if (id == device::kController) {
-        if (!DeviceHeader(ui, f, Icon::Game, "DualSense", DualSenseStatus(ctl), true, "By USB cable, or Bluetooth"))
+        const PadInput::Snapshot pad = ctl.pad().Get();
+        const char* model = pad.connected ? pad::ModelName(pad.state.model) : "DualSense";
+        if (!DeviceHeader(ui, f, Icon::Game, model, DualSenseStatus(ctl), true, "By USB cable, or Bluetooth"))
             return;
+        PadLiveCard(ctl, f, pad);
+        PadBatteryCard(f, pad);
+        PadTimingCard(f, pad);
+        PadMappingCard(ctl, f, pad);
         DualSenseCard(ctl, f);
         DeviceLightingCard(ctl, ui, f, device::kController);
         return;
     }
+    if (id.rfind("memory-module:", 0) == 0) {
+        for (size_t i = 0; i < snap.smbios.memory.size(); ++i) {
+            if (id != "memory-module:" + std::to_string(i)) continue;
+            const auto& m = snap.smbios.memory[i];
+            const std::string name = sensors::FriendlyMemory(m.manufacturer, m.part);
+            if (!DeviceHeader(ui, f, Icon::Memory, name, DeviceStatus("Detected", kGreen), false,
+                              "Memory module, " + m.slot)) return;
+            BeginCard("memory-module");
+            CardTitle(f, "Module", Icon::Memory);
+            if (!m.slot.empty()) Muted("Slot: %s", m.slot.c_str());
+            if (!m.bank.empty()) Muted("Bank: %s", m.bank.c_str());
+            Muted("Manufacturer: %s", m.manufacturer.c_str());
+            Muted("Part number: %s", m.part.c_str());
+            ImGui::Text("%.1f GB, %u MT/s", m.sizeMb / 1024.0, m.speedMts);
+            Muted("Detected from motherboard firmware. This confirms the installed module; lighting support "
+                  "is confirmed by a lighting connection.");
+            if (HasRgbRam(ctl, snap)) {
+                if (Btn("Native RAM lighting settings")) ui.deviceDetail = device::kRam;
+            }
+            Muted("For other RGB memory families and chipsets, use OpenRGB's SDK server. Detected RGB memory "
+                  "appears as a separate lighting device with its own switch.");
+            if (Btn("Open lighting connections")) { ui.page = Page::Integrations; ui.deviceDetail.clear(); }
+            EndCard();
+            return;
+        }
+        if (Btn("<  All devices")) ui.deviceDetail.clear();
+        Muted("This memory module is no longer reported.");
+        return;
+    }
     if (id.rfind("lamparray:", 0) == 0) {
-        const std::string name = id.substr(10);
+        const std::string identity = id.substr(10);
         for (const auto& d : ctl.lampArray().devices()) {
-            if (d.name != name) continue;
+            if (d.id != identity) continue;
             char vidpid[16];
             snprintf(vidpid, sizeof vidpid, "%04X:%04X", d.vid, d.pid);
             const std::string detail = std::string(lamparray::KindName(d.kind)) + ", " + std::to_string(d.lamps) +
@@ -5722,9 +6017,10 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
                 Muted("If Windows' own Dynamic Lighting (Settings > Personalization > Dynamic Lighting) controls it, "
                       "turn that off for this device.");
             } else {
+                if (!ctl.prefs().lampArray && Btn("Enable Windows lighting")) ctl.SetLampArrayEnabled(true);
                 bool on = ctl.LampArrayOn(d);
                 if (Toggle("Light it", &on)) {
-                    ctl.prefs().lampArrayDevices[d.name] = on;
+                    ctl.prefs().lampArrayDevices[d.id] = on;
                     ctl.Changed();
                 }
                 if (!ctl.LampArrayDefaultOn(d))
@@ -5743,17 +6039,20 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         return;
     }
     if (id.rfind("openrgb:", 0) == 0) {
-        const std::string name = id.substr(8);
+        const std::string identity = id.substr(8);
         for (const auto& d : ctl.openRgb().devices()) {
-            if (d.name != name) continue;
+            if (d.id != identity) continue;
             const std::string detail = std::string(openrgb::TypeName(d.type)) + (d.vendor.empty() ? "" : " by " + d.vendor) +
                                        ", " + std::to_string(d.leds) + " LEDs, through OpenRGB";
             if (!DeviceHeader(ui, f, Icon::Leds, d.name, OpenRgbStatus(ctl, d), false, detail)) return;
             BeginCard("openrgb-device");
             CardTitle(f, "Settings", Icon::Gear);
             bool on = ctl.OpenRgbOn(d);
+            if (!ctl.prefs().openRgb && Btn("Enable OpenRGB lighting")) ctl.SetOpenRgbEnabled(true);
+            if (!d.location.empty()) Muted("Location: %s", d.location.c_str());
+            if (!d.serial.empty()) Muted("Serial: %s", d.serial.c_str());
             if (Toggle("Light it through OpenRGB", &on)) {
-                ctl.prefs().openRgbDevices[d.name] = on;
+                ctl.prefs().openRgbDevices[d.id] = on;
                 ctl.Changed();
             }
             if (!ctl.OpenRgbDefaultOn(d))
@@ -5798,7 +6097,7 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
         ImGui::SameLine();
         Muted("%d lighting device%s under LumaBridge control.", lit, lit == 1 ? "" : "s");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Includes Aura, RAM, peripherals, Windows lighting and OpenRGB.\nFans on one header and RAM sticks controlled together count as one group.");
+            ImGui::SetTooltip("Includes Aura, RAM, NZXT, peripherals, Windows lighting and OpenRGB.\nFans on one header and RAM sticks controlled together count as one group.");
     } else {
         Pill("Waiting for devices", kAmber);
         Muted("No lighting devices are following LumaBridge right now. Check their status below.");
@@ -5856,9 +6155,17 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
         if (HasRgbRam(ctl, snap)) {
             const Integration* setup = HelperSetup(ctl, in, ui);
             const SetupHardware hw = DetectSetup(snap.smbios);
-            rows.push_back({device::kRam, "Memory (RAM)", hw.ramName.empty() ? "Memory" : hw.ramName, Icon::Memory,
+            rows.push_back({device::kRam, "Native RAM lighting", hw.ramName.empty() ? "Memory" : hw.ramName, Icon::Memory,
                             RamStatus(ctl, setup && setup->state == IntegrationState::Active),
                             ctl.prefs().ramLighting && ctl.hardware().sticks() ? ctl.hardware().sticks() * 5 : -1});
+        }
+        for (size_t i = 0; i < snap.smbios.memory.size(); ++i) {
+            const auto& m = snap.smbios.memory[i];
+            const std::string name = sensors::FriendlyMemory(m.manufacturer, m.part) +
+                                     (m.slot.empty() ? " #" + std::to_string(i + 1) : " (" + m.slot + ")");
+            rows.push_back({"memory-module:" + std::to_string(i), name,
+                            "Memory, " + std::to_string(m.sizeMb / 1024) + " GB, " + std::to_string(m.speedMts) + " MT/s",
+                            Icon::Memory, DeviceStatus("Detected", kGreen, "Module information from motherboard firmware")});
         }
         if (HasLogitechRgb(ctl))
             rows.push_back({device::kMouse, LogitechName(ctl), LogitechKinds(ctl) + ", through G HUB", Icon::Mouse,
@@ -5869,14 +6176,22 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
             rows.push_back({device::kKeyboard, "ASUS ROG Azoth", "Keyboard", Icon::Keyboard, AzothStatus(ctl)});
         if (ctl.prefs().dualsenseController || HasDualSense(ctl))
             rows.push_back({device::kController, "DualSense", "Controller", Icon::Game, DualSenseStatus(ctl)});
-        if (ctl.prefs().lampArray)
-            for (const auto& d : ctl.lampArray().devices())
-                rows.push_back({"lamparray:" + d.name, d.name, std::string(lamparray::KindName(d.kind)) + ", Windows lighting standard",
+        for (const auto& d : ctl.lampArray().devices())
+            rows.push_back({"lamparray:" + d.id, d.name, std::string(lamparray::KindName(d.kind)) + ", Windows lighting standard",
                                 Icon::Leds, LampArrayStatus(ctl, d), d.lamps ? static_cast<int>(d.lamps) : -1});
-        if (ctl.prefs().openRgb)
-            for (const auto& d : ctl.openRgb().devices())
-                rows.push_back({"openrgb:" + d.name, d.name, std::string(openrgb::TypeName(d.type)) + ", through OpenRGB",
-                                Icon::Leds, OpenRgbStatus(ctl, d), static_cast<int>(d.leds)});
+        const auto openRgbDevices = ctl.openRgb().devices();
+        size_t openRgbIndex = 0;
+        for (const auto& d : openRgbDevices) {
+            ++openRgbIndex;
+            const bool sameName = std::count_if(openRgbDevices.begin(), openRgbDevices.end(), [&](const OpenRgbDevice& other) {
+                return other.name == d.name;
+            }) > 1;
+            const std::string label = d.name + (sameName ? " (" + (d.serial.empty() ? std::to_string(openRgbIndex) : d.serial) + ")" : "");
+            const Icon icon = d.type == 1 ? Icon::Memory : d.type == 2 ? Icon::Gpu : d.type == 3 ? Icon::Fan :
+                              d.type == 5 ? Icon::Keyboard : d.type == 6 ? Icon::Mouse : d.type == 10 ? Icon::Game : Icon::Leds;
+            rows.push_back({"openrgb:" + d.id, label, std::string(openrgb::TypeName(d.type)) + ", through OpenRGB",
+                            icon, OpenRgbStatus(ctl, d), static_cast<int>(d.leds)});
+        }
         // The AIO cooler and the graphics card: listed with their readings, lit or not.
         if (const catalog::AioModel* aio = ctl.presence().Aio()) {
             const nzxt::Status k = ctl.kraken();
@@ -5887,13 +6202,15 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
         }
         if (const sensors::GpuStat* g = MainGpu(snap))
             rows.push_back({"gpu", sensors::FriendlyGpu(g->name), "Graphics card", Icon::Gpu,
-                            DeviceStatus("No RGB", kMuted, "LumaBridge can't light this card; its readings are on its page")});
+                            DeviceStatus("Detected", kMuted, "Readings on its page; a connected RGB driver confirms lighting support")});
         auto rowCategory = [](const Row& r) {
-            if (r.id == "aio") return 2;
-            if (r.id == "gpu") return 3;
-            if (r.icon == Icon::Mouse || r.icon == Icon::Keyboard || r.icon == Icon::Game) return 1;
+            if (r.id.rfind("aura:", 0) == 0) return 0;
+            if (r.id == "aio" || r.icon == Icon::Fan) return 3;
+            if (r.id == "gpu" || r.icon == Icon::Gpu) return 4;
+            if (r.icon == Icon::Memory) return 1;
+            if (r.icon == Icon::Mouse || r.icon == Icon::Keyboard || r.icon == Icon::Game) return 2;
             if (r.kind.find("Keyboard") != std::string::npos || r.kind.find("Mouse") != std::string::npos ||
-                r.kind.find("Headset") != std::string::npos || r.kind.find("Controller") != std::string::npos) return 1;
+                r.kind.find("Headset") != std::string::npos || r.kind.find("Controller") != std::string::npos) return 2;
             return 0;
         };
         std::stable_sort(rows.begin(), rows.end(), [&](const Row& a, const Row& b) { return rowCategory(a) < rowCategory(b); });
@@ -5926,7 +6243,7 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
             ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 24 * S());
             ImGui::TableHeadersRow();
             int n = 0, lastCategory = -1;
-            static const char* categories[] = {"PC lighting", "Peripherals", "Cooling", "Graphics"};
+            static const char* categories[] = {"Fan and RGB controllers", "Memory", "Peripherals", "Cooling", "Graphics"};
             for (const Row& r : rows) {
                 const int category = rowCategory(r);
                 if (category != lastCategory) {
@@ -6703,8 +7020,28 @@ void NzxtCard(Controller& ctl, const Fonts& f) {
                   : "It isn't answering status requests; LumaBridge keeps trying. The log (Settings) lists its interfaces.");
     }
     if (k.valid && ctl.krakenListening()) Muted("Read alongside NZXT CAM (listening to the readings it asks for).");
-    Muted("Read only: the liquid temperature and pump and fan speeds show on the dashboard and in My setup. "
-          "NZXT CAM keeps the lighting, the fan curves and the pump's screen.");
+    Muted("Liquid temperature and pump and fan speeds show on the dashboard and in My setup.");
+    if (nzxt::LightingChannels(aio->pid)) {
+        bool on = ctl.prefs().nzxtLighting;
+        if (Toggle("Light the Kraken (experimental)", &on)) {
+            ctl.prefs().nzxtLighting = on;
+            ctl.Changed();
+        }
+        Muted(aio->pid == 0x3008 ? "Lights accessories on the Kraken's NZXT RGB connector. The LCD stays with CAM."
+                                 : "Lights the pump ring, logo and attached NZXT RGB accessories together.");
+        if (on) {
+            if (ctl.krakenLightingActive()) Pill("Following LumaBridge", kGreen);
+            else if (ctl.krakenLightingError()) Muted("Lighting unavailable (Windows error %lu). Close CAM's lighting control and retry.",
+                                                    ctl.krakenLightingError());
+            else Muted("Waiting for lighting access...");
+        }
+        Muted("Uses documented lighting commands; these models still need hardware testing. When disabled, "
+              "LumaBridge stops sending colors; CAM can take over, otherwise the last color remains.");
+    } else {
+        Muted("This model has no supported RGB channel on its pump USB connection. Its RGB fans may be connected "
+              "to the motherboard's ARGB header or a separate RGB controller; use that device's lighting settings.");
+    }
+    Muted("Fan and pump curves and the LCD stay with NZXT CAM.");
     EndCard();
 }
 
@@ -6746,15 +7083,16 @@ void OpenRgbCard(Controller& ctl, const Fonts& f) {
     const auto devs = ctl.openRgb().devices();
     char pill[48];
     snprintf(pill, sizeof pill, "Connected, %d device%s", static_cast<int>(devs.size()), devs.size() == 1 ? "" : "s");
-    if (!ctl.prefs().openRgb) Pill("Off", kMuted);
-    else if (st == OpenRgbOutput::State::Connected) Pill(pill, kGreen);
-    else Pill("OpenRGB isn't running", kAmber);
-    Muted("Only if you already use OpenRGB: LumaBridge then also lights what OpenRGB supports, while OpenRGB runs "
-          "with its SDK server on (its SDK Server tab > Start Server). LumaBridge doesn't need it. Devices LumaBridge "
-          "lights itself are left to LumaBridge.");
+    if (st == OpenRgbOutput::State::Connected) Pill(pill, kGreen);
+    else Pill("Waiting for SDK server", kMuted);
+    Muted("Adds support for RGB memory, coolers, graphics cards, keyboards, mice, fans and controllers across "
+          "many brands. Run OpenRGB, open its SDK Server tab and Start Server. Devices appear automatically "
+          "even while lighting control is off. Enable control below to make them follow LumaBridge.");
+    Muted("Working native connections take priority. Unsupported or unavailable native connections can use "
+          "OpenRGB instead. Each device has its own switch on Devices.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
     bool on = ctl.prefs().openRgb;
-    if (Toggle("Enabled", &on)) ctl.SetOpenRgbEnabled(on);
+    if (Toggle("Lighting control", &on)) ctl.SetOpenRgbEnabled(on);
     ImGui::SameLine(0, 24 * S());
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Port");
@@ -6762,12 +7100,7 @@ void OpenRgbCard(Controller& ctl, const Fonts& f) {
     ImGui::SetNextItemWidth(110 * S());
     int port = ctl.prefs().openRgbPort;
     if (ImGui::InputInt("##orgbport", &port, 0, 0) && port > 0 && port < 65536) {
-        ctl.prefs().openRgbPort = port;
-        ctl.Changed();
-        if (ctl.prefs().openRgb) {  // reconnect on the new port
-            ctl.SetOpenRgbEnabled(false);
-            ctl.SetOpenRgbEnabled(true);
-        }
+        ctl.SetOpenRgbPort(port);
     }
     EndCard();
 }
@@ -7247,11 +7580,13 @@ void SetupDevicesStep(Controller& ctl, UiState& ui, const Fonts& f) {
         line(Icon::Leds, ctl.LampArrayOn(d), d.name,
              std::string(lamparray::KindName(d.kind)) +
                  (!d.problem.empty()           ? " - " + d.problem
+                  : !ctl.prefs().lampArray     ? " - detected, lighting control off"
                   : ctl.LampArrayOn(d)         ? ", " + std::to_string(d.lamps) + " lamps, Windows lighting standard"
                                                : " - lit by LumaBridge another way"));
     for (const auto& d : ctl.openRgb().devices())
         line(Icon::Leds, ctl.OpenRgbOn(d), d.name,
-             std::string(openrgb::TypeName(d.type)) + (ctl.OpenRgbOn(d) ? ", through OpenRGB" : " - lit by LumaBridge itself"));
+             std::string(openrgb::TypeName(d.type)) + (!ctl.prefs().openRgb ? " - detected, lighting control off" :
+                                                    ctl.OpenRgbOn(d) ? ", through OpenRGB" : " - not selected for OpenRGB control"));
     if (hw.ram != RamStyle::Generic)
         line(Icon::Memory, true, hw.ramName.empty() ? "RGB memory" : hw.ramName,
              "RGB memory - confirmed once Hardware access is set up");
@@ -7873,6 +8208,402 @@ void ExplainModes() {
             "devices or each one. Games don't change it.");
 }
 
+// ---- Notification center ---------------------------------------------------------------------
+
+// Whether a built-in game feed has data, and its port if one can be taken by another program.
+struct FeedFact {
+    bool busy = false, seen = false, needsSetup = false;
+    int port = 0;
+};
+
+FeedFact FeedFactOf(const GameFeeds& fd, const Prefs& p, games::Feed feed) {
+    using F = games::Feed;
+    FeedFact r;
+    switch (feed) {
+    case F::Cs2Gsi: r = {!fd.Cs2Listening(), fd.Cs2Seen(), true, GameFeeds::kCs2Port}; break;
+    case F::Dota2Gsi: r = {!fd.Cs2Listening(), fd.Dota2Seen(), true, GameFeeds::kCs2Port}; break;
+    case F::RocketLeagueStats: r.seen = fd.RocketLeagueConnected(); r.needsSetup = true; break;
+    case F::WarThunderApi: r.seen = fd.WarThunderSeen(); break;
+    case F::LeagueLiveClient: r.seen = fd.LeagueSeen(); break;
+    case F::ForzaDataOut: r = {fd.ForzaPortBusy(), fd.ForzaSeen(), true, p.forzaPort}; break;
+    case F::F1Telemetry: r = {fd.F1PortBusy(), fd.F1Seen(), true, p.f1Port}; break;
+    case F::BeamNgOutGauge: r = {fd.UdpPortBusy(GameFeeds::kBeamNg), fd.UdpSeen(GameFeeds::kBeamNg), true, p.beamngPort}; break;
+    case F::DirtRallyUdp: r = {fd.UdpPortBusy(GameFeeds::kDirt), fd.UdpSeen(GameFeeds::kDirt), true, p.dirtPort}; break;
+    case F::Ams2Udp: r = {fd.UdpPortBusy(GameFeeds::kAms2), fd.UdpSeen(GameFeeds::kAms2), true, p.ams2Port}; break;
+    case F::XPlaneUdp: r = {fd.UdpPortBusy(GameFeeds::kXPlane), fd.UdpSeen(GameFeeds::kXPlane), true, p.xplanePort}; break;
+    case F::DcsExport: r = {fd.DcsPortBusy(), fd.DcsSeen(), true, 49717}; break;
+    case F::FlightSimConnect: r.seen = fd.FlightSimSeen(); break;
+    case F::EliteStatus: r.seen = fd.EliteSeen(); break;
+    default: break;
+    }
+    return r;
+}
+
+// What needs attention right now, from the controller's state.
+std::vector<notify::Notice> CollectNotices(Controller& ctl, Integrations& in, UiState& ui, const sensors::SystemSnapshot& snap) {
+    notify::Facts f;
+    f.pausedAfterCrash = ctl.pause() == Controller::Pause::AfterCrash;
+    f.pausedByUser = ctl.pause() == Controller::Pause::ByUser;
+    const std::string maker = snap.smbios.boardMaker;
+    f.asusBoard = maker.find("ASUS") != std::string::npos || maker.find("Asus") != std::string::npos;
+    const auto aura = ctl.auraStatus();
+    f.auraRunning = aura.running;
+    f.auraConnected = aura.connected;
+    f.sensorsMissing = snap.ready && !snap.lhmConnected;
+    for (const auto& d : ctl.presence().inventory.devices) f.windowsProblems += d.problem ? 1 : 0;
+    EnsureIntegrations(ctl, in, ui);
+    for (const auto& it : in.list())
+        f.integrations.push_back({it.id, it.name, it.detail, it.state == IntegrationState::Problem});
+    const PadInput::Snapshot pad = ctl.pad().Get();
+    f.padConnected = pad.connected;
+    f.padBattery = pad.state.battery;
+    f.padCharging = pad.state.charging || pad.state.full;
+    f.padName = pad::ModelName(pad.state.model);
+    f.dualsenseWriteFailed = ctl.prefs().dualsenseController && ctl.dualsense().state() == DualSenseOutput::State::NotFound &&
+                             ctl.dualsense().lastWriteError() != 0;
+    // Games that are running: how long each has been up, to tell "starting" from "sends nothing".
+    static std::map<std::string, uint64_t> since;
+    const uint64_t now = GetTickCount64();
+    std::set<std::string> running;
+    for (const auto& g : ctl.games()) {
+        if (!g.profile) continue;
+        const std::string key = g.profile->key;
+        running.insert(key);
+        if (!since.count(key)) since[key] = now;
+        const FeedFact ff = FeedFactOf(ctl.feeds(), ctl.prefs(), g.profile->feed);
+        notify::GameFact gf;
+        gf.key = key;
+        gf.title = g.profile->title;
+        gf.running = true;
+        gf.portBusy = ff.busy;
+        gf.port = ff.port;
+        gf.silent = ff.needsSetup && !ff.seen && now - since[key] > 120000;
+        gf.blocked = g.profile->blocked;
+        f.games.push_back(gf);
+    }
+    for (auto it = since.begin(); it != since.end();) it = running.count(it->first) ? std::next(it) : since.erase(it);
+    auto notices = notify::Collect(f);
+    notify::WithGameKeys(&notices, f.games);
+    return notices;
+}
+
+void OpenNotice(UiState& ui, const notify::Notice& n) {
+    ui.openPending = true;
+    ui.openWhere = static_cast<int>(n.where);
+    ui.openArg = n.arg;
+    ui.openKey = n.argKey;
+}
+
+// Takes a pending "Open" from a notice: the page and whatever it opens on. Runs before the page
+// is drawn, and keeps the page's own "just arrived" resets from undoing it.
+void ApplyOpen(UiState& ui) {
+    if (!ui.openPending) return;
+    ui.openPending = false;
+    using W = notify::Where;
+    switch (static_cast<W>(ui.openWhere)) {
+    case W::Lighting: ui.page = Page::Lighting; break;
+    case W::Devices:
+        ui.page = Page::Devices;
+        ui.deviceDetail.clear();
+        ui.devicesTab = 0;
+        break;
+    case W::DevicesHardware:
+        ui.page = Page::Devices;
+        ui.deviceDetail.clear();
+        ui.devicesTab = 1;
+        break;
+    case W::DevicesController:
+        ui.page = Page::Devices;
+        ui.deviceDetail = device::kController;
+        ui.devicesTab = 0;
+        break;
+    case W::Integrations: ui.page = Page::Integrations; ui.integrationsLoaded = false; break;
+    case W::GamesList:
+        ui.page = Page::GamesList;
+        OpenGame(ui, ui.openArg, ui.openKey.empty() ? nullptr : ui.openKey.c_str());
+        break;
+    case W::Settings: ui.page = Page::Settings; break;
+    default: return;
+    }
+    ui.lastPage = ui.page;  // no "just arrived" reset
+    ui.devicesLanding = false;
+}
+
+unsigned SeverityColor(notify::Severity s) {
+    return s == notify::Severity::Error ? kRed : s == notify::Severity::Warning ? kAmber : kAccent2;
+}
+
+// A palette color through the current style alpha, so it fades in with the list.
+ImU32 Faded(unsigned rgb, float a = 1.f) { return ImGui::GetColorU32(V4(rgb, a)); }
+
+// A notice's mark: a tinted circle with "!" for a problem, a triangle for a warning and "i" for a
+// note. The shapes differ as well as the colors, so they can be told apart without color.
+void SeverityMark(ImDrawList* dl, ImVec2 c, float r, notify::Severity s) {
+    const unsigned col = SeverityColor(s);
+    dl->AddCircleFilled(c, r, Faded(col, 0.14f), 32);
+    dl->AddCircle(c, r, Faded(col, 0.45f), 32, 1.f * S());
+    const ImU32 ink = Faded(col);
+    switch (s) {
+    case notify::Severity::Error:
+        dl->AddLine(ImVec2(c.x, c.y - r * 0.48f), ImVec2(c.x, c.y + r * 0.12f), ink, 2.4f * S());
+        dl->AddCircleFilled(ImVec2(c.x, c.y + r * 0.42f), 1.5f * S(), ink, 10);
+        break;
+    case notify::Severity::Warning:
+        dl->AddTriangle(ImVec2(c.x, c.y - r * 0.52f), ImVec2(c.x + r * 0.56f, c.y + r * 0.42f),
+                        ImVec2(c.x - r * 0.56f, c.y + r * 0.42f), ink, 1.6f * S());
+        dl->AddLine(ImVec2(c.x, c.y - r * 0.18f), ImVec2(c.x, c.y + r * 0.1f), ink, 1.5f * S());
+        dl->AddCircleFilled(ImVec2(c.x, c.y + r * 0.26f), 1.f * S(), ink, 8);
+        break;
+    default:
+        dl->AddCircleFilled(ImVec2(c.x, c.y - r * 0.42f), 1.5f * S(), ink, 10);
+        dl->AddLine(ImVec2(c.x, c.y - r * 0.12f), ImVec2(c.x, c.y + r * 0.48f), ink, 2.2f * S());
+        break;
+    }
+}
+
+// Text that acts as a link: muted until hovered.
+bool LinkText(const char* label, unsigned color = kMuted) {
+    const ImVec2 p = ImGui::GetCursorScreenPos(), ts = ImGui::CalcTextSize(label, nullptr, true);
+    const bool clicked = ImGui::InvisibleButton(label, ts);
+    const bool hovered = ImGui::IsItemHovered();
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddText(p, Faded(hovered ? kText : color), label, LabelEnd(label));
+    if (hovered) dl->AddLine(ImVec2(p.x, p.y + ts.y), ImVec2(p.x + ts.x, p.y + ts.y), Faded(kText, 0.5f), 1.f);
+    return clicked;
+}
+
+// A notice's action ("Open", "Open game"): a small accent-tinted pill, like the status pills.
+bool NoticeAction(const char* label) {
+    const ImVec2 p = ImGui::GetCursorScreenPos(), ts = ImGui::CalcTextSize(label, nullptr, true);
+    const ImVec2 pad(11 * S(), 4 * S()), size(ts.x + pad.x * 2, ts.y + pad.y * 2);
+    const bool clicked = ImGui::InvisibleButton(label, size);
+    const bool hovered = ImGui::IsItemHovered();
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), Faded(kAccent, hovered ? 0.9f : 0.2f), size.y / 2);
+    dl->AddText(ImVec2(p.x + pad.x, p.y + pad.y), Faded(hovered ? 0xFFFFFF : kAccentHover), label, LabelEnd(label));
+    return clicked;
+}
+
+// One notice as a tile: its mark, title, detail and action, and a cross to dismiss it.
+void NoticeTile(UiState& ui, const Fonts& f, const notify::Notice& n, bool* closePopup) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float w = ImGui::GetContentRegionAvail().x;
+    const float pad = 12 * S(), r = 13 * S(), cross = 22 * S();
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const float textX = p0.x + pad + r * 2 + 12 * S();
+    const float right = p0.x + w - pad;
+
+    // The content goes on top; the tile's background is drawn under it once its height is known.
+    dl->ChannelsSplit(2);
+    dl->ChannelsSetCurrent(1);
+    ImGui::SetCursorScreenPos(ImVec2(textX, p0.y + pad));
+    const float localX = ImGui::GetCursorPosX();
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 3 * S()));
+    ImGui::BeginGroup();
+    ImGui::PushTextWrapPos(localX + (right - cross - 6 * S() - textX));
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted(n.title.c_str());
+    ImGui::PopFont();
+    ImGui::PopTextWrapPos();
+    ImGui::PushTextWrapPos(localX + (right - textX));
+    ImGui::PushStyleColor(ImGuiCol_Text, V4(kMuted));
+    ImGui::TextUnformatted(n.detail.c_str());
+    ImGui::PopStyleColor();
+    ImGui::PopTextWrapPos();
+    if (n.where != notify::Where::None) {
+        ImGui::Dummy(ImVec2(0, 3 * S()));
+        if (NoticeAction(n.action.empty() ? "Open" : n.action.c_str())) {
+            OpenNotice(ui, n);
+            *closePopup = true;
+        }
+    }
+    ImGui::EndGroup();
+    ImGui::PopStyleVar();
+    const ImVec2 p1(p0.x + w, ImGui::GetItemRectMax().y + pad);
+    const float titleH = ImGui::GetTextLineHeight();
+
+    // Dismiss: a cross in the top-right corner.
+    ImGui::SetCursorScreenPos(ImVec2(right - cross + 4 * S(), p0.y + pad + titleH / 2 - cross / 2));
+    const ImVec2 cp = ImGui::GetCursorScreenPos();
+    if (ImGui::InvisibleButton("dismiss", ImVec2(cross, cross))) ui.noticesDismissed.push_back(n.id);
+    const bool crossHovered = ImGui::IsItemHovered();
+    if (crossHovered) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        ImGui::SetTooltip("Dismiss");
+        dl->AddCircleFilled(ImVec2(cp.x + cross / 2, cp.y + cross / 2), cross / 2, Faded(kBorder), 20);
+    }
+    const ImVec2 cc(cp.x + cross / 2, cp.y + cross / 2);
+    const float k = 4 * S();
+    const ImU32 ink = Faded(crossHovered ? kText : kMuted);
+    dl->AddLine(ImVec2(cc.x - k, cc.y - k), ImVec2(cc.x + k, cc.y + k), ink, 1.5f * S());
+    dl->AddLine(ImVec2(cc.x - k, cc.y + k), ImVec2(cc.x + k, cc.y - k), ink, 1.5f * S());
+
+    SeverityMark(dl, ImVec2(p0.x + pad + r, p0.y + pad + titleH / 2 + 2 * S()), r, n.severity);
+
+    dl->ChannelsSetCurrent(0);
+    const bool hovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(p0, p1);
+    const float round = 10 * S();
+    dl->AddRectFilled(p0, p1, Faded(hovered ? kCardHover : 0x191D27), round);
+    dl->AddRectFilled(p0, p1, Faded(SeverityColor(n.severity), 0.04f), round);
+    dl->AddRect(p0, p1, Faded(hovered ? 0x343B4E : kBorder, 0.8f), round);
+    dl->ChannelsMerge();
+
+    ImGui::SetCursorScreenPos(ImVec2(p0.x, p1.y));
+    ImGui::Dummy(ImVec2(w, 8 * S()));
+}
+
+// The bell in the header, with a count badge; clicking it opens the list under it.
+void NotificationBell(UiState& ui, const Fonts& f, const std::vector<notify::Notice>& all, float size) {
+    const auto shown = notify::Visible(all, &ui.noticesDismissed);
+    ImGui::PushID("bell");
+    ImGuiStorage* st = ImGui::GetStateStorage();
+    const ImGuiID openedAt = ImGui::GetID("opened-at"), wasOpen = ImGui::GetID("was-open");
+    const ImVec2 a = ImGui::GetCursorScreenPos();
+    const bool clicked = ImGui::InvisibleButton("bell", ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered();
+    // A click outside the list closes it as the mouse goes down, so remember whether it was open
+    // then: a click on the bell itself then closes the list instead of opening it again.
+    if (ImGui::IsItemActivated()) st->SetBool(wasOpen, ImGui::IsPopupOpen("notices"));
+    if (hovered) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (shown.empty()) ImGui::SetTooltip("Notifications: all good");
+        else ImGui::SetTooltip("%d notification%s", static_cast<int>(shown.size()), shown.size() == 1 ? "" : "s");
+    }
+    if (clicked && !st->GetBool(wasOpen)) {
+        ImGui::OpenPopup("notices");
+        st->SetFloat(openedAt, static_cast<float>(ImGui::GetTime()));
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const bool open = ImGui::IsPopupOpen("notices");
+    dl->AddRectFilled(a, ImVec2(a.x + size, a.y + size), Hex(open ? kAccent : hovered ? kCardHover : kTrack), size / 2);
+    dl->AddRect(a, ImVec2(a.x + size, a.y + size), Hex(open ? kAccentHover : kBorder, 160), size / 2);
+    // A bell: a dome, a flared lip and a clapper.
+    const ImVec2 c(a.x + size / 2, a.y + size / 2);
+    const float r = size * 0.22f;
+    const ImU32 ink = Hex(open ? 0xFFFFFF : hovered ? kText : kMuted);
+    dl->PathArcTo(ImVec2(c.x, c.y - r * 0.15f), r, 3.14159f, 6.2831853f, 16);
+    dl->PathLineTo(ImVec2(c.x + r, c.y + r * 0.75f));
+    dl->PathLineTo(ImVec2(c.x - r, c.y + r * 0.75f));
+    dl->PathFillConvex(ink);
+    dl->AddRectFilled(ImVec2(c.x - r * 1.25f, c.y + r * 0.7f), ImVec2(c.x + r * 1.25f, c.y + r * 0.95f), ink, r * 0.12f);
+    dl->AddCircleFilled(ImVec2(c.x, c.y + r * 1.3f), r * 0.28f, ink, 10);
+    if (!shown.empty()) {
+        // The count in a pill colored by the most serious notice, cut out of the bell's edge.
+        const std::string count = notify::BadgeText(shown.size());
+        ImGui::PushFont(f.caption);
+        const ImVec2 ts = ImGui::CalcTextSize(count.c_str());
+        const float bh = 17 * S(), bw = std::max(bh, ts.x + 9 * S());
+        const ImVec2 b0(a.x + size - bw + 5 * S(), a.y - 3 * S()), b1(b0.x + bw, b0.y + bh);
+        const float ring = 2 * S();
+        dl->AddRectFilled(ImVec2(b0.x - ring, b0.y - ring), ImVec2(b1.x + ring, b1.y + ring), Hex(kBg), bh / 2 + ring);
+        dl->AddRectFilled(b0, b1, Hex(SeverityColor(notify::Worst(shown))), bh / 2);
+        dl->AddText(ImVec2(b0.x + (bw - ts.x) / 2, b0.y + (bh - ts.y) / 2), Hex(0x10131A), count.c_str());
+        ImGui::PopFont();
+    }
+
+    // The list, right-aligned under the bell; it fades and slides in as it opens.
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float w = std::min(420 * S(), vp->WorkSize.x - 40 * S());
+    const float t = std::clamp((static_cast<float>(ImGui::GetTime()) - st->GetFloat(openedAt)) / 0.14f, 0.f, 1.f);
+    const float ease = 1.f - (1.f - t) * (1.f - t);
+    const float top = a.y + size + 8 * S();
+    ImGui::SetNextWindowPos(ImVec2(a.x + size - w, top + (1.f - ease) * 6 * S()));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(w, 0), ImVec2(w, FLT_MAX));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, V4(kCard));
+    ImGui::PushStyleColor(ImGuiCol_Border, V4(kBorder));
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ease);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 14 * S());
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14 * S(), 14 * S()));
+    if (ImGui::BeginPopup("notices")) {
+        bool close = false;
+        // Heading: the title and what the list holds, with "Dismiss all" across from them.
+        ImGui::Indent(2 * S());
+        const float lineEnd = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;  // for right-aligned links
+        ImGui::PushFont(f.bold);
+        ImGui::TextUnformatted("Notifications");
+        ImGui::PopFont();
+        if (shown.size() > 1) {
+            ImGui::SameLine(lineEnd - ImGui::CalcTextSize("Dismiss all").x);
+            if (LinkText("Dismiss all"))
+                for (const auto& n : shown) ui.noticesDismissed.push_back(n.id);
+        }
+        if (!shown.empty()) {
+            ImGui::PushFont(f.caption);
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(kMuted));
+            ImGui::TextUnformatted(notify::Summary(shown).c_str());
+            ImGui::PopStyleColor();
+            ImGui::PopFont();
+        }
+        ImGui::Unindent(2 * S());
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+
+        if (shown.empty()) {
+            // All clear: a check in a green circle, and one line under it.
+            const float cw = ImGui::GetContentRegionAvail().x, cr = 18 * S();
+            ImGui::Dummy(ImVec2(0, 10 * S()));
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const ImVec2 cc(p.x + cw / 2, p.y + cr);
+            ImDrawList* pdl = ImGui::GetWindowDrawList();
+            pdl->AddCircleFilled(cc, cr, Faded(kGreen, 0.14f), 32);
+            pdl->AddCircle(cc, cr, Faded(kGreen, 0.45f), 32, 1.f * S());
+            const ImVec2 check[] = {ImVec2(cc.x - cr * 0.38f, cc.y + cr * 0.02f), ImVec2(cc.x - cr * 0.1f, cc.y + cr * 0.3f),
+                                    ImVec2(cc.x + cr * 0.4f, cc.y - cr * 0.28f)};
+            pdl->AddPolyline(check, 3, Faded(kGreen), ImDrawFlags_None, 2.4f * S());
+            ImGui::Dummy(ImVec2(cw, cr * 2 + 10 * S()));
+            auto centered = [&](const char* text) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (cw - ImGui::CalcTextSize(text).x) / 2);
+                ImGui::TextUnformatted(text);
+            };
+            // With some dismissed, "all good" would claim too much.
+            const bool caughtUp = !ui.noticesDismissed.empty();
+            ImGui::PushFont(f.bold);
+            centered(caughtUp ? "All caught up" : "All good");
+            ImGui::PopFont();
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(kMuted));
+            centered(caughtUp ? "Nothing new since you dismissed the rest." : "Nothing needs your attention right now.");
+            ImGui::PopStyleColor();
+            ImGui::Dummy(ImVec2(0, 10 * S()));
+        } else {
+            // The notices scroll under the heading when they don't all fit.
+            const float bottom = vp->WorkPos.y + vp->WorkSize.y - 24 * S();
+            const float maxH = std::max(140 * S(), std::min(460 * S(), bottom - ImGui::GetCursorScreenPos().y - 50 * S()));
+            ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, maxH));
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, V4(kCard, 0.f));
+            ImGui::BeginChild("notice-list", ImVec2(0, 0), ImGuiChildFlags_AutoResizeY);
+            int index = 0;
+            for (const auto& n : shown) {
+                ImGui::PushID(index++);
+                NoticeTile(ui, f, n, &close);
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+        }
+
+        // Dismissed notices that still apply can be brought back.
+        if (!ui.noticesDismissed.empty()) {
+            ImGui::Dummy(ImVec2(0, 2 * S()));
+            ImGui::Indent(2 * S());
+            ImGui::PushFont(f.caption);
+            const size_t hidden = ui.noticesDismissed.size();
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(kMuted));
+            ImGui::Text("%d dismissed", static_cast<int>(hidden));
+            ImGui::PopStyleColor();
+            ImGui::SameLine(lineEnd - ImGui::CalcTextSize("Show again").x);
+            if (LinkText("Show again")) ui.noticesDismissed.clear();
+            ImGui::PopFont();
+            ImGui::Unindent(2 * S());
+        }
+        if (close) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
+    ImGui::PopID();  // the popup shares the bell's ID scope, so OpenPopup and BeginPopup agree
+}
+
 void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui, const Fonts& f) {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -7895,6 +8626,8 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
         Splash(ui, f);
         return;
     }
+    ApplyOpen(ui);  // "Open" on a notification
+    const std::vector<notify::Notice> notices = CollectNotices(ctl, integrations, ui, ctl.monitor().Snapshot());
     // Icon-only below 760: the sidebar's full width plus the main content couldn't both fit.
     // Its width eases towards that target instead of jumping; the content (labels or icons
     // only) switches partway through, once there's room either way.
@@ -7932,9 +8665,11 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
     {
         g_fonts = &f;
         int mode = ctl.prefs().mode == Mode::Manual ? 1 : 0;
-        const float w = 250 * S(), help = 20 * S(), gap = 10 * S();
-        ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - w - gap - help);
+        const float w = 250 * S(), help = 20 * S(), gap = 10 * S(), bell = 38 * S();
+        ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - w - gap - help - gap - bell);
         const float y = ImGui::GetCursorPosY();
+        NotificationBell(ui, f, notices, bell);
+        ImGui::SameLine(0, gap);
         ImGui::SetCursorPosY(y + (38 * S() - help) / 2);
         HelpBadge("modes-help", help, ExplainModes);
         ImGui::SameLine(0, gap);

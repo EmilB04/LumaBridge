@@ -186,8 +186,23 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (!v.empty()) p.azothKeyboard = v != L"0";
     v = Read(ini, L"App", L"DualsenseController");
     if (!v.empty()) p.dualsenseController = v != L"0";
+    v = Read(ini, L"Controller", L"Input");
+    if (!v.empty()) p.padInput = v != L"0";
+    v = Read(ini, L"Controller", L"MapEnabled");
+    if (!v.empty()) p.padMapping.enabled = v != L"0";
+    v = Read(ini, L"Controller", L"MapMouseStick");
+    if (!v.empty()) p.padMapping.rightStickMouse = v != L"0";
+    v = Read(ini, L"Controller", L"MouseSpeed");
+    if (!v.empty()) p.padMapping.mouseSpeed = std::clamp(_wtoi(v.c_str()), 1, 30);
+    v = Read(ini, L"Controller", L"Deadzone");
+    if (!v.empty()) p.padMapping.deadzone = std::clamp(_wtoi(v.c_str()), 0, 50);
+    for (int b = 0; b < pad::kButtonCount; ++b)
+        p.padMapping.buttons[static_cast<size_t>(b)] =
+            pad::DecodeBinding(Narrow(Read(ini, L"Controller", (L"Map." + Widen(pad::ButtonName(b))).c_str())));
     v = Read(ini, L"App", L"RamLighting");
     if (!v.empty()) p.ramLighting = v != L"0";
+    v = Read(ini, L"App", L"NzxtLighting");
+    if (!v.empty()) p.nzxtLighting = v != L"0";
     p.setupDone = Read(ini, L"App", L"SetupDone") == L"1";
     v = Read(ini, L"LampArray", L"Enabled");
     if (!v.empty()) p.lampArray = v != L"0";
@@ -205,7 +220,7 @@ Prefs LoadPrefs(const std::wstring& ini) {
     v = Read(ini, L"OpenRGB", L"Enabled");
     if (!v.empty()) p.openRgb = v != L"0";
     v = Read(ini, L"OpenRGB", L"Port");
-    if (!v.empty() && _wtoi(v.c_str()) > 0) p.openRgbPort = _wtoi(v.c_str());
+    if (!v.empty() && _wtoi(v.c_str()) > 0 && _wtoi(v.c_str()) < 65536) p.openRgbPort = _wtoi(v.c_str());
     {
         const std::string list = Narrow(Read(ini, L"OpenRGB", L"Devices"));  // "name=1|name=0"
         for (size_t pos = 0; pos < list.size();) {
@@ -337,6 +352,14 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"LogitechKeepInGames", p.logitechForce ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"AzothKeyboard", p.azothKeyboard ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"DualsenseController", p.dualsenseController ? L"1" : L"0");
+    WriteConfigValue(ini, L"Controller", L"Input", p.padInput ? L"1" : L"0");
+    WriteConfigValue(ini, L"Controller", L"MapEnabled", p.padMapping.enabled ? L"1" : L"0");
+    WriteConfigValue(ini, L"Controller", L"MapMouseStick", p.padMapping.rightStickMouse ? L"1" : L"0");
+    WriteConfigValue(ini, L"Controller", L"MouseSpeed", Num(p.padMapping.mouseSpeed));
+    WriteConfigValue(ini, L"Controller", L"Deadzone", Num(p.padMapping.deadzone));
+    for (int b = 0; b < pad::kButtonCount; ++b)
+        WriteConfigValue(ini, L"Controller", (L"Map." + Widen(pad::ButtonName(b))).c_str(),
+                         Widen(pad::EncodeBinding(p.padMapping.buttons[static_cast<size_t>(b)])));
     WriteConfigValue(ini, L"Sleep", L"Logitech", p.logitechSleep ? L"1" : L"0");
     WriteConfigValue(ini, L"Sleep", L"LogitechSeconds", Num(p.logitechSleepSec));
     WriteConfigValue(ini, L"Sleep", L"LogitechIgnoreDynamic", p.logitechSleepIgnoreDynamic ? L"1" : L"0");
@@ -344,6 +367,7 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"Sleep", L"AzothSeconds", Num(p.azothSleepSec));
     WriteConfigValue(ini, L"Sleep", L"AzothIgnoreDynamic", p.azothSleepIgnoreDynamic ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"RamLighting", p.ramLighting ? L"1" : L"0");
+    WriteConfigValue(ini, L"App", L"NzxtLighting", p.nzxtLighting ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"RamSlots", p.ramSlots < 0 ? L"auto" : Num(p.ramSlots));
     WriteConfigValue(ini, L"App", L"RamRelease", p.ramRelease == 1 ? L"off" : p.ramRelease == 2 ? L"keep" : L"rainbow");
 

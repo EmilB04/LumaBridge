@@ -5,6 +5,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <map>
 
 #include "log.h"
 #include "openrgb_protocol.h"
@@ -24,6 +25,8 @@ public:
 
     bool Connect(uint16_t port) {
         Close();
+        broken_ = false;
+        listChanged_ = false;
         s_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (s_ == INVALID_SOCKET) return false;
         sockaddr_in a{};
@@ -36,6 +39,8 @@ public:
         }
         const BOOL noDelay = TRUE;
         setsockopt(s_, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&noDelay), sizeof noDelay);
+        const DWORD sendTimeout = 1000;
+        setsockopt(s_, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&sendTimeout), sizeof sendTimeout);
         return true;
     }
 
@@ -49,7 +54,7 @@ public:
         size_t sent = 0;
         while (sent < p.size()) {
             const int n = send(s_, reinterpret_cast<const char*>(p.data() + sent), static_cast<int>(p.size() - sent), 0);
-            if (n <= 0) return false;
+            if (n <= 0) { broken_ = true; return false; }
             sent += static_cast<size_t>(n);
         }
         return true;
@@ -57,7 +62,7 @@ public:
 
     // Waits up to `ms` for a packet with this ID (others are skipped; a device list update is
     // noted). False when none came or the connection broke (see broken()).
-    bool Receive(uint32_t id, openrgb::Bytes* data, DWORD ms) {
+    bool Receive(uint32_t id, openrgb::Bytes* data, DWORD ms, uint32_t device = 0) {
         const uint64_t until = GetTickCount64() + ms;
         for (;;) {
             const uint64_t now = GetTickCount64();
@@ -66,7 +71,7 @@ public:
             openrgb::Bytes d;
             if (!ReadPacket(&h, &d, static_cast<DWORD>(until - now))) return false;
             if (h.id == openrgb::kDeviceListUpdated) listChanged_ = true;
-            if (h.id == id) {
+            if (h.id == id && h.device == device) {
                 *data = std::move(d);
                 return true;
             }
@@ -101,7 +106,10 @@ private:
         size_t got = 0;
         while (got < n) {
             const uint64_t now = GetTickCount64();
-            if (now >= until || !Readable(static_cast<DWORD>(until - now))) return false;
+            if (now >= until || !Readable(static_cast<DWORD>(until - now))) {
+                if (got) broken_ = true;  // a partial packet cannot be parsed as a new header
+                return false;
+            }
             const int k = recv(s_, reinterpret_cast<char*>(p + got), static_cast<int>(n - got), 0);
             if (k <= 0) {
                 broken_ = true;
@@ -122,7 +130,11 @@ private:
         *h = *parsed;
         d->assign(h->size, 0);
         // The data follows right away; give a big controller description time to arrive.
-        return h->size == 0 || ReadExact(d->data(), d->size(), std::max<DWORD>(ms, 2000));
+        if (h->size && !ReadExact(d->data(), d->size(), std::max<DWORD>(ms, 2000))) {
+            broken_ = true;
+            return false;
+        }
+        return true;
     }
 
     SOCKET s_ = INVALID_SOCKET;
@@ -182,26 +194,44 @@ void OpenRgbOutput::Run() {
         if (i < custom.size()) custom[i] = false;
     };
     auto enumerate = [&] {
+        const auto previous = ctrls;
+        const auto previouslyOwned = custom;
         ctrls.clear();
         openrgb::Bytes d;
         if (!link.Send(0, openrgb::kRequestControllerCount) || !link.Receive(openrgb::kRequestControllerCount, &d, 2000) ||
             d.size() < 4)
             return false;
         const uint32_t count = d[0] | d[1] << 8 | d[2] << 16 | static_cast<uint32_t>(d[3]) << 24;
+        if (count > 256) return false;
         std::vector<OpenRgbDevice> list;
+        std::map<std::string, unsigned> occurrences;
         for (uint32_t i = 0; i < count && i < 256; ++i) {
             openrgb::Controller c;
             if (link.Send(i, openrgb::kRequestControllerData, version ? openrgb::U32Data(version) : openrgb::Bytes{}) &&
-                link.Receive(openrgb::kRequestControllerData, &d, 3000)) {
+                link.Receive(openrgb::kRequestControllerData, &d, 3000, i)) {
                 if (auto parsed = openrgb::ParseController(d.data(), d.size(), version)) c = *parsed;
                 else LUMA_WARN("OpenRGB: couldn't read device %u's description - left out", i);
-            }
+            } else return false;  // late replies must not be mistaken for the next device
             if (link.broken()) return false;
+            const std::string base = openrgb::Identity(c);
+            c.id = base + "-" + std::to_string(occurrences[base]++);
+            // Indices can move when a controller is unplugged. Restore modes by identity,
+            // never send an old controller's saved mode to its replacement at that index.
+            for (size_t old = 0; old < previous.size(); ++old)
+                if (old < previouslyOwned.size() && previouslyOwned[old] && previous[old].id == c.id) {
+                    c.activeMode = previous[old].activeMode;
+                    c.activeModeData = previous[old].activeModeData;
+                    break;
+                }
             ctrls.push_back(c);  // keeps the indexes in step with OpenRGB's
-            if (c.leds) list.push_back(OpenRgbDevice{c.name, c.vendor, c.type, c.leds});
+            if (c.leds) list.push_back(OpenRgbDevice{c.name, c.vendor, c.type, c.leds, c.id, c.location, c.serial});
             LUMA_INFO("OpenRGB device %u: %s (%s, %u LEDs)", i, c.name.c_str(), openrgb::TypeName(c.type), c.leds);
         }
         custom.assign(ctrls.size(), false);
+        for (size_t i = 0; i < ctrls.size(); ++i)
+            for (size_t old = 0; old < previous.size(); ++old)
+                if (old < previouslyOwned.size() && previouslyOwned[old] && previous[old].id == ctrls[i].id)
+                    custom[i] = true;
         lastSent.assign(ctrls.size(), {});
         sentAt.assign(ctrls.size(), 0);
         std::lock_guard<std::mutex> lock(mutex_);
@@ -253,7 +283,6 @@ void OpenRgbOutput::Run() {
             continue;
         }
         if (link.TakeListChanged()) {
-            for (size_t i = 0; i < ctrls.size(); ++i) release(i);
             if (!enumerate()) {
                 drop();
                 continue;
@@ -276,7 +305,7 @@ void OpenRgbOutput::Run() {
         const double t = fx::Seconds(effect, now, since);
         for (size_t i = 0; i < ctrls.size(); ++i) {
             const openrgb::Controller& c = ctrls[i];
-            const bool wanted = own && c.leds && std::find(skip.begin(), skip.end(), c.name) == skip.end();
+            const bool wanted = own && c.leds && std::find(skip.begin(), skip.end(), c.id) == skip.end();
             if (!wanted) {
                 release(i);
                 continue;
@@ -289,12 +318,32 @@ void OpenRgbOutput::Run() {
                     colors.push_back(Scale(fx::Render(effect, t, static_cast<int>(k), static_cast<int>(z.leds)), level));
             while (colors.size() < c.leds) colors.push_back(colors.empty() ? Scale(fx::Render(effect, t, 0, 1), level) : colors.back());
             if (!custom[i]) {
-                link.Send(static_cast<uint32_t>(i), openrgb::kSetCustomMode);  // direct control
+                // Discovery can run with control off for hours. Save the current mode at
+                // takeover, rather than restoring a stale mode from the initial scan.
+                openrgb::Bytes description;
+                if (!link.Send(static_cast<uint32_t>(i), openrgb::kRequestControllerData,
+                               version ? openrgb::U32Data(version) : openrgb::Bytes{}) ||
+                    !link.Receive(openrgb::kRequestControllerData, &description, 3000, static_cast<uint32_t>(i))) {
+                    drop(); break;
+                }
+                const auto current = openrgb::ParseController(description.data(), description.size(), version);
+                if (!current) { drop(); break; }
+                if (openrgb::Identity(*current) != openrgb::Identity(c)) {
+                    if (!enumerate()) drop();
+                    break;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (!own_ || std::find(skip_.begin(), skip_.end(), c.id) != skip_.end()) continue;
+                }
+                ctrls[i].activeMode = current->activeMode;
+                ctrls[i].activeModeData = current->activeModeData;
+                if (!link.Send(static_cast<uint32_t>(i), openrgb::kSetCustomMode)) { drop(); break; }
                 custom[i] = true;
                 lastSent[i].clear();
             }
             if (colors == lastSent[i] && now - sentAt[i] < kRefreshMs) continue;
-            if (!link.Send(static_cast<uint32_t>(i), openrgb::kUpdateLeds, openrgb::UpdateLeds(colors))) break;
+            if (!link.Send(static_cast<uint32_t>(i), openrgb::kUpdateLeds, openrgb::UpdateLeds(colors))) { drop(); break; }
             lastSent[i] = colors;
             sentAt[i] = now;
         }

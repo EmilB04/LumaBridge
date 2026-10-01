@@ -19,6 +19,7 @@ struct OpenRgbDevice {
     std::string name, vendor;
     int type = -1;  // openrgb::TypeName
     uint32_t leds = 0;
+    std::string id, location, serial;
 };
 
 class OpenRgbOutput {
@@ -30,7 +31,7 @@ public:
     void Stop();
 
     // What the devices should show. `own = false` gives every device its own effect back;
-    // `skip`: names of devices LumaBridge leaves alone (lit natively, or switched off).
+    // `skip`: identities of devices LumaBridge leaves alone (lit natively, or switched off).
     void Set(const fx::Params& effect, double brightness, bool own, const std::vector<std::string>& skip);
 
     State state() const { return state_; }

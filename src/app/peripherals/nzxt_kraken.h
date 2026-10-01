@@ -1,7 +1,8 @@
 // NZXT Kraken AIO coolers (X53/X63/X73, Z53/Z63/Z73, Kraken and Kraken Elite 2023+): reading
 // their status over USB HID, as documented by liquidctl (the open-source cooler tool): the
 // liquid's temperature, the pump's speed and duty, and on the screen models the fans on the
-// pump's fan header. Read only: the lighting and the screen stay with NZXT CAM.
+// pump's fan header. Readings work alongside CAM. Supported X3/Z3 lighting is optional;
+// the LCD and pump/fan curves stay with CAM.
 // The parsing is pure and tested; the reading is in nzxt_kraken.cpp.
 #pragma once
 
@@ -12,6 +13,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "effects.h"
+#include "nzxt_lighting.h"
 
 namespace luma::app::nzxt {
 
@@ -72,16 +75,27 @@ public:
     // LumaBridge then reads the status replies CAM asks for.
     bool listening() const { return listening_; }
     unsigned long lastError() const { return lastError_; }  // Windows' error opening it (0: none)
+    void SetLighting(const fx::Params& effect, double brightness, bool own);
+    bool lightingActive() const { return lightingActive_; }
+    unsigned long lightingError() const { return lightingError_; }
 
 private:
     void Run(uint16_t pid, bool screen);
+    void RunLighting(uint16_t pid);
     std::thread thread_;
+    std::thread lightingThread_;
     std::atomic<bool> stop_{false};
     std::atomic<KrakenState> state_{KrakenState::Off};
     std::atomic<bool> listening_{false};
     std::atomic<unsigned long> lastError_{0};
     mutable std::mutex mutex_;
     Status status_;
+    fx::Params effect_;
+    double brightness_ = 1;
+    bool ownLighting_ = false;
+    uint64_t effectSince_ = 0;
+    std::atomic<bool> lightingActive_{false};
+    std::atomic<unsigned long> lightingError_{0};
 };
 
 }  // namespace luma::app::nzxt

@@ -31,6 +31,8 @@
 #include "dcs_lighting.h"
 #include "beamng_lighting.h"
 #include "device_inventory.h"
+#include "pad_mapping.h"
+#include "notifications.h"
 #include "dirt_lighting.h"
 #include "ams2_lighting.h"
 #include "xplane_lighting.h"
@@ -1079,6 +1081,18 @@ static void TestAioCatalog() {
     CHECK(!luma::app::nzxt::Parse(r, sizeof r, true).valid);  // no reading yet
     r[0] = 0x11;
     CHECK(!luma::app::nzxt::Parse(r, sizeof r, true).valid);  // not a status report
+    namespace nz = luma::app::nzxt;
+    CHECK(nz::LightingChannels(0x2007) == 7 && nz::LightingChannels(0x2014) == 7);
+    CHECK(nz::LightingChannels(0x3008) == 1);
+    CHECK(nz::LightingChannels(0x300E) == 0 && nz::LightingChannels(0x3012) == 0);
+    CHECK(nz::LightingChannels(0xFFFF) == 0);
+    const auto rgb = nz::FixedLighting(7, luma::Rgb{0x11, 0x22, 0x33});
+    CHECK(rgb[0] == 0x2A && rgb[1] == 4 && rgb[2] == 7 && rgb[3] == 7);
+    CHECK(rgb[7] == 0x22 && rgb[8] == 0x11 && rgb[9] == 0x33);
+    CHECK(rgb[55] == 0 && rgb[56] == 1 && rgb[57] == 0 && rgb[58] == 40 && rgb[59] == 3);
+    // Lighting must never use the pump/fan speed opcodes 0x72 or 0x21.
+    CHECK(rgb[0] != 0x72 && rgb[0] != 0x21);
+
 }
 
 static void TestPerf() {
@@ -1406,6 +1420,159 @@ static void TestInventoryKinds() {
     CHECK(KindName("HIDClass") == "Input device (HID)");
     CHECK(KindName("SomethingNew") == "SomethingNew");  // unknown: Windows' own (English) class name
     CHECK(KindName("") == "Other device");
+}
+
+static void TestPadInput() {
+    using namespace luma::app::pad;
+    // A DualSense USB report (0x01): sticks, triggers, buttons, motion, a touch, battery.
+    std::vector<uint8_t> r(64, 0);
+    r[0] = 0x01;
+    r[1] = 10; r[2] = 200; r[3] = 128; r[4] = 128; r[5] = 255; r[6] = 40;
+    r[1 + 7] = 0x20 | 2;           // Cross, d-pad right
+    r[1 + 8] = 0x01 | 0x20 | 0x80; // L1, Options, R3
+    r[1 + 9] = 0x01 | 0x02;        // PS, touchpad click
+    r[1 + 15] = 0x34; r[1 + 16] = 0x12;     // gyro x = 0x1234
+    r[1 + 23] = 0xFF; r[1 + 24] = 0xFF;     // accel y = -1
+    r[1 + 32] = 0x05;                        // touch 0 down, id 5
+    r[1 + 33] = 0x40; r[1 + 34] = 0x02 | 0x30; r[1 + 35] = 0x07;  // x = 0x240, y = 3 | 7 << 4 = 115
+    r[1 + 36] = 0x80;                        // touch 1 up
+    r[1 + 52] = 0x07 | 0x10;                 // 7 tenths, charging
+    State s;
+    CHECK(ParseDualSense(r.data(), r.size(), &s));
+    CHECK(s.model == Model::DualSense && s.lx == 10 && s.ly == 200 && s.l2 == 255 && s.r2 == 40);
+    CHECK(s.Down(kCross) && s.Down(kRight) && !s.Down(kUp) && s.Down(kL1) && s.Down(kOptions) && s.Down(kR3));
+    CHECK(s.Down(kPs) && s.Down(kTouchpad) && !s.Down(kMute) && !s.Down(kSquare));
+    CHECK(s.gyro[0] == 0x1234 && s.accel[1] == -1);
+    CHECK(s.touch[0].down && s.touch[0].x == 0x240 && s.touch[0].y == 115 && !s.touch[1].down);
+    CHECK(s.battery == 75 && s.charging && !s.full);
+    r[1 + 52] = 0x0A | 0x20;  // full
+    ParseDualSense(r.data(), r.size(), &s);
+    CHECK(s.battery == 100 && s.full);
+    r[1 + 52] = 0x0A;  // discharging, 10 tenths: capped at 100
+    ParseDualSense(r.data(), r.size(), &s);
+    CHECK(s.battery == 100 && !s.charging);
+    r[1 + 7] = 8;  // d-pad released
+    ParseDualSense(r.data(), r.size(), &s);
+    CHECK(!s.Down(kUp) && !s.Down(kRight));
+    // Bluetooth (0x31): the same data two bytes in. A short report or wrong id is refused.
+    std::vector<uint8_t> bt(78, 0);
+    bt[0] = 0x31;
+    bt[2 + 4] = 99;
+    bt[2 + 7] = 0x40;
+    bt[2 + 52] = 0x03;
+    CHECK(ParseDualSense(bt.data(), bt.size(), &s) && s.l2 == 99 && s.Down(kCircle) && s.battery == 35);
+    CHECK(!ParseDualSense(bt.data(), 10, &s));
+    bt[0] = 0x07;
+    CHECK(!ParseDualSense(bt.data(), bt.size(), &s));
+    // DualShock 4 (USB 0x01): sticks, d-pad up-left, Square, L2 as button, battery on the cable.
+    std::vector<uint8_t> d(64, 0);
+    d[0] = 0x01;
+    d[1] = 1; d[2] = 2; d[3] = 3; d[4] = 4;
+    d[1 + 4] = 7 | 0x10;       // up-left + Square
+    d[1 + 5] = 0x04 | 0x10;    // L2, Share
+    d[1 + 6] = 0x01;           // PS
+    d[1 + 7] = 77; d[1 + 8] = 88;
+    d[1 + 29] = 0x10 | 0x0B;   // cable, level 11: full
+    CHECK(ParseDualShock4(d.data(), d.size(), &s));
+    CHECK(s.model == Model::DualShock4 && s.lx == 1 && s.ry == 4 && s.l2 == 77 && s.r2 == 88);
+    CHECK(s.Down(kUp) && s.Down(kLeft) && s.Down(kSquare) && s.Down(kL2) && s.Down(kCreate) && s.Down(kPs));
+    CHECK(s.full && s.battery == 100);
+    CHECK(std::string(ButtonName(Model::DualShock4, kCreate)) == "Share" && std::string(ButtonName(Model::DualSense, kCreate)) == "Create");
+    d[1 + 29] = 0x04;  // on battery, level 4 of 8
+    ParseDualShock4(d.data(), d.size(), &s);
+    CHECK(s.battery == 50 && !s.charging);
+    CHECK(ModelOf(kSony, kDualSenseEdge) == Model::DualSense && ModelOf(kSony, kDualShock4V2) == Model::DualShock4 &&
+          ModelOf(0x1234, kDualSense) == Model::None);
+
+    // Sticks: centered is zero, the dead zone is taken out and the rest stretched.
+    CHECK(StickAxis(128, 0.15f) == 0.f && StickAxis(135, 0.15f) == 0.f);
+    CHECK(StickAxis(255, 0.15f) == 1.f && StickAxis(0, 0.15f) < -0.99f);
+    CHECK(StickAxis(128 + 70, 0.15f) > 0.3f && StickAxis(128 + 70, 0.15f) < 0.5f);
+
+    // Report timing: 250 reports a second, even.
+    ReportStats st;
+    for (int i = 0; i < 600; ++i) st.OnReport(1000000ull + static_cast<uint64_t>(i) * 4000);
+    CHECK(std::fabs(st.rateHz() - 250) < 2 && std::fabs(st.averageMs() - 4.0) < 0.01 && st.jitterMs() < 0.01);
+    CHECK(st.History().size() == ReportStats::kHistory && st.maxMs() < 4.01);
+    st.OnReport(1000000ull + 600ull * 4000 + 50000);  // one late report
+    CHECK(st.maxMs() > 50 && st.jitterMs() > 1);
+
+    // Mapping: only mapped buttons make events; wheel notches are presses only; stored as text.
+    Mapping m;
+    m.buttons[kCross] = {Action::Key, 0x20};      // Space
+    m.buttons[kR1] = {Action::Mouse, 1};          // left click
+    CHECK(m.buttons[kCircle] == Binding{} && !m.AnyMapped() == false);
+    auto ev = Diff(m, 0, Bit(kCross) | Bit(kCircle));
+    CHECK(ev.size() == 1 && ev[0].down && ev[0].binding == m.buttons[kCross]);
+    ev = Diff(m, Bit(kCross) | Bit(kR1), Bit(kR1));
+    CHECK(ev.size() == 1 && !ev[0].down && ev[0].binding.code == 0x20);
+    CHECK(Diff(m, Bit(kCross), Bit(kCross)).empty());
+    CHECK(EncodeBinding(m.buttons[kCross]) == "key:Space" && EncodeBinding(m.buttons[kR1]) == "mouse:Left click");
+    CHECK(EncodeBinding(Binding{}) == "none");
+    CHECK(DecodeBinding("key:Left arrow") == (Binding{Action::Key, 0x25}) && DecodeBinding("mouse:Wheel down") == (Binding{Action::Mouse, 5}));
+    CHECK(DecodeBinding("key:Nonsense") == Binding{} && DecodeBinding("") == Binding{});
+    CHECK(BindingLabel(Binding{}) == "Not mapped" && BindingLabel({Action::Key, 'W'}) == "W");
+    // Mouse stick: nothing inside the dead zone; slow pushes still add up to whole pixels.
+    MouseStick ms;
+    Mapping mm;
+    mm.rightStickMouse = true;
+    mm.mouseSpeed = 10;
+    int dx = 9, dy = 9;
+    ms.Step(mm, 128, 128, 8, &dx, &dy);
+    CHECK(dx == 0 && dy == 0);
+    ms.Step(mm, 255, 128, 8, &dx, &dy);
+    CHECK(dx >= 8 && dy == 0);
+    int total = 0;
+    for (int i = 0; i < 100; ++i) { ms.Step(mm, 128 + 40, 128, 8, &dx, &dy); total += dx; }
+    CHECK(total > 0);
+}
+
+static void TestNotifications() {
+    using namespace luma::app::notify;
+    Facts f;
+    CHECK(Collect(f).empty());  // nothing wrong: nothing shown
+    f.pausedAfterCrash = true;
+    f.asusBoard = f.auraRunning = true;  // not connected, but paused: only the pause is reported
+    auto n = Collect(f);
+    CHECK(n.size() == 1 && n[0].id == "paused-crash" && n[0].where == Where::Devices);
+    f.pausedAfterCrash = false;
+    n = Collect(f);
+    CHECK(n.size() == 1 && n[0].id == "aura-missing");
+    f.asusBoard = false;  // no ASUS board: a missing Aura controller is normal
+    CHECK(Collect(f).empty());
+    f.integrations = {{"logitech", "Logitech LIGHTSYNC", "Not writable", true}, {"chroma", "Razer Chroma", "", false}};
+    f.windowsProblems = 2;
+    f.padConnected = true; f.padBattery = 8; f.padName = "DualSense";
+    f.sensorsMissing = true;
+    n = Collect(f);
+    CHECK(n.size() == 4);
+    CHECK(n[0].severity == Severity::Error && n[1].severity == Severity::Error);  // errors first
+    CHECK(n[0].id == "integration-logitech" && n[1].id == "pad-battery" && n[1].title == "DualSense battery is low (8%)");
+    CHECK(n[2].id == "windows-problems" && n[2].title == "2 devices have a Windows problem" && n[3].id == "sensors");
+    f.padCharging = true;  // charging: no battery notice
+    n = Collect(f);
+    CHECK(std::none_of(n.begin(), n.end(), [](const Notice& x) { return x.id == "pad-battery"; }));
+    f.padBattery = 50; f.padCharging = false;
+    n = Collect(f);
+    CHECK(std::none_of(n.begin(), n.end(), [](const Notice& x) { return x.id == "pad-battery"; }));
+    // Games: a busy port, a silent feed, a blocked game; a game that isn't running says nothing.
+    f = Facts();
+    f.games = {{"forza", "Forza", true, true, 5300, false, false}, {"bf1", "Battlefield 1", true, false, 0, false, true},
+               {"f1", "F1 24 / F1 25", false, false, 20777, true, false}, {"dcs", "DCS World", true, false, 0, true, false}};
+    n = Collect(f);
+    CHECK(n.size() == 3 && n[0].id == "port-forza" && n[0].arg == "Forza" && n[0].severity == Severity::Warning);
+    CHECK((n[1].id == "blocked-bf1" || n[1].id == "silent-dcs") && (n[2].id == "blocked-bf1" || n[2].id == "silent-dcs"));
+    WithGameKeys(&n, f.games);
+    CHECK(n[0].argKey == "forza");
+    // Dismissing: hidden while it lasts, forgotten once it's gone, shown again when it returns.
+    f = Facts();
+    f.windowsProblems = 1;
+    std::vector<std::string> dismissed = {"windows-problems", "gone-for-good"};
+    CHECK(Visible(Collect(f), &dismissed).empty() && dismissed.size() == 1);
+    f.windowsProblems = 0;
+    CHECK(Visible(Collect(f), &dismissed).empty() && dismissed.empty());
+    f.windowsProblems = 1;
+    CHECK(Visible(Collect(f), &dismissed).size() == 1);
 }
 
 static void TestMoreGames() {
@@ -2069,6 +2236,46 @@ static void TestOpenRgb() {
     CHECK(ctl && ctl->type == 6 && ctl->name == "Corsair Harpoon RGB" && ctl->vendor == "Corsair");
     CHECK(ctl->location == "HID: /dev/x" && ctl->zones.size() == 2 && ctl->zones[0].leds == 3 && ctl->zones[1].leds == 2);
     CHECK(ctl->leds == 5 && ctl->activeMode == 1);
+    CHECK(ctl->serial == "serial");
+    // Same product names must remain independent across DIMM slots and USB interfaces.
+    auto other = *ctl;
+    other.location = "HID: /dev/y";
+    CHECK(o::Identity(*ctl) != o::Identity(other));
+    other.location = ctl->location;
+    other.serial = "another serial";
+    CHECK(o::Identity(*ctl) != o::Identity(other));
+    const auto firstId = o::Identity(*ctl), secondId = o::Identity(other);
+    std::map<std::string, bool> choices{{ctl->name, false}, {firstId, true}};
+    CHECK(luma::app::lighting::Enabled(choices, firstId, ctl->name, false));
+    CHECK(!luma::app::lighting::Enabled(choices, secondId, other.name, true));
+    CHECK(firstId.find_first_of("=|\n") == std::string::npos);
+    // A connected native route wins. An unavailable one allows the broader backend,
+    // including modern Fury RAM and other chipsets the native helper cannot operate.
+    namespace lighting = luma::app::lighting;
+    lighting::NativeConnections native;
+    CHECK(!lighting::PreferNative(1, "HyperX Fury Memory", native));
+    native.memory = true;
+    CHECK(lighting::PreferNative(1, "HyperX Fury Memory", native));
+    CHECK(!lighting::PreferNative(1, "Corsair Dominator", native));
+    CHECK(!lighting::PreferNative(6, "HyperX Fury mouse", native));
+    native.aura = true;
+    CHECK(lighting::PreferNative(0, "ASUS motherboard", native));
+    CHECK(!lighting::PreferNative(2, "ASUS graphics card", native));
+    CHECK(!lighting::PreferNative(3, "Unknown vendor cooler", native));
+    native.dualsense = true;
+    CHECK(lighting::PreferNative(10, "Sony DualSense", native));
+    CHECK(!lighting::PreferNative(10, "Sony DualShock 4", native));
+    CHECK(lighting::SameLocation("HID: \\?\\HID#VID_1532#DEVICE", "\\?\\hid#vid_1532#device"));
+    CHECK(!lighting::SameLocation("HID: \\?\\HID#VID_1532#DEVICE_A", "\\?\\hid#vid_1532#device_b"));
+    CHECK(!lighting::SameLocation("USB: 1532:1234", "1532"));
+
+    CHECK(!o::ParseController(c.data(), c.size(), 3));
+    CHECK(!o::ParseController(nullptr, 0));
+    auto missingColors = c;
+    missingColors.resize(missingColors.size() - 4);
+    for (int i = 0; i < 4; ++i) missingColors[i] = static_cast<uint8_t>(missingColors.size() >> (8 * i));
+    CHECK(!o::ParseController(missingColors.data(), missingColors.size()));
+
     CHECK(ctl->activeModeData == o::Bytes(c.begin() + static_cast<long>(activeAt), c.begin() + static_cast<long>(activeEnd)));
     const o::Bytes um = o::UpdateMode(1, ctl->activeModeData);
     CHECK(um.size() == 8 + ctl->activeModeData.size() && um[0] == um.size() && um[4] == 1);
@@ -2348,6 +2555,25 @@ static void TestDeviceInventory() {
     CHECK(nodes[0].id == a.id && nodes[1].id == b.id && nodes[2].id == disk.id);
 }
 
+// The notification list's heading line and the bell's badge.
+static void TestNoticeSummary() {
+    using namespace luma::app::notify;
+    CHECK(Summary({}).empty() && Worst({}) == Severity::Info);
+    Facts f;
+    f.sensorsMissing = true;
+    f.windowsProblems = 2;
+    f.padConnected = true;
+    f.padBattery = 5;
+    f.games = {{"forza", "Forza", true, true, 5300, false, false}};
+    auto all = Collect(f);
+    CHECK(Worst(all) == Severity::Error);
+    CHECK(Summary(all) == "1 problem, 2 warnings, 1 note");
+    std::vector<std::string> dismissed = {"pad-battery"};
+    const auto shown = Visible(all, &dismissed);
+    CHECK(Worst(shown) == Severity::Warning && Summary(shown) == "2 warnings, 1 note");
+    CHECK(BadgeText(1) == "1" && BadgeText(9) == "9" && BadgeText(12) == "9+");
+}
+
 int main() {
     TestSceneDepth();
     TestDeskModels();
@@ -2396,6 +2622,8 @@ int main() {
     TestF1();
     TestMoreGames();
     TestInventoryKinds();
+    TestPadInput();
+    TestNotifications();
     TestFlightSim();
     TestScene3d();
     TestPcLayout();
@@ -2408,6 +2636,7 @@ int main() {
     TestHyperXRam();
     TestHwSensors();
     TestIpc();
+    TestNoticeSummary();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return EXIT_FAILURE;

@@ -25,6 +25,11 @@ and desk in 3D, live.
   actual lightbar color; drag and rotate it like the keyboard and mouse.
 - **DualSense Bluetooth:** wireless lighting handles Windows HID report sizes, initializes
   the controller lightbar on connection, and resumes after lighting control is handed back.
+- **Controller page:** a connected DualSense or DualShock 4 (USB or Bluetooth) shows its
+  buttons, sticks, triggers and motion live, its battery, and how steadily it reports. A
+  button mapping (off until you switch it on) makes buttons press keyboard keys or mouse
+  buttons, and can move the mouse with the right stick. DualShock 4 is untested on real
+  hardware.
 - **Monitor supports:** stands sit behind the screen instead of poking through it; vertical
   monitors and small desk panels have no stand.
 - **Detailed 3D setup:** sculpted keyboard keys with legends, the Azoth's screen and knob,
@@ -72,17 +77,47 @@ and desk in 3D, live.
 - **RAM** (HyperX / Kingston FURY RGB DDR4, experimental) follows along, and the dashboard
   shows fan speeds and CPU / board temperatures by itself: one click on the Devices page
   (Hardware access) sets it up, with the signed PawnIO driver included
-  ([third_party/pawnio](third_party/pawnio/README.md)). No LibreHardwareMonitor needed.
+  ([third_party/pawnio](third_party/pawnio/README.md)). AMD PIIX4 and Intel I801 chipsets are
+  supported; Intel lighting is experimental and needs physical hardware testing. Existing
+  installations need **Hardware access > Set up again** to install the Intel module. Modern
+  Fury controller families, DDR5 and other RAM brands use the broader OpenRGB connection.
+  No LibreHardwareMonitor needed.
 - **Windows Dynamic Lighting devices:** keyboards, mice, headsets, cases and strips of any
   brand with Windows 11's lighting standard (HID LampArray) in their firmware follow
   LumaBridge lamp by lamp, with no software from their maker.
-- **OpenRGB (only if you already use it):** off unless OpenRGB is on the PC; then what it
-  supports can follow LumaBridge too. LumaBridge never needs it.
+- **Broad RGB discovery:** Windows lighting devices and a local OpenRGB SDK server are
+  discovered automatically, even when their lighting control is off. **Devices** groups
+  fan/RGB controllers, individual memory modules, peripherals, coolers and graphics cards.
+  Installed RAM modules are read from firmware by slot, maker and part number, independently
+  of whether a lighting driver can control them.
+- **OpenRGB:** for the many RAM, GPU, cooler, peripheral and controller families outside
+  LumaBridge's native drivers, run OpenRGB and choose **SDK Server > Start Server**, then
+  enable **Integrations > OpenRGB > Lighting control**. Every RGB device its server exposes
+  can follow LumaBridge, without a LumaBridge brand/model whitelist. A working native
+  connection takes priority by default; failed/unavailable native RAM and peripheral
+  connections allow OpenRGB as a fallback. Each device has an independent saved switch,
+  including identical RAM/controller models; older name-based settings are retained.
+  Hot-plug changes and reconnections refresh automatically, and disabling control restores
+  the previous OpenRGB mode. Coverage depends on [OpenRGB's device support](https://openrgb.org/devices_pipeline.html)
+  and configuration; installing LumaBridge alone does not add those hardware drivers.
+- **NZXT Kraken lighting (experimental):** X53/X63/X73 pump ring, logo and attached NZXT RGB
+  accessories, and Z53/Z63/Z73 external RGB accessories, can follow LumaBridge directly.
+  Enable it on the cooler's device page. These native lighting writes are protocol-tested
+  but have not been verified on those physical models. Commands follow the documented
+  [liquidctl Kraken protocol](https://github.com/liquidctl/liquidctl/blob/main/liquidctl/driver/kraken3.py).
+  Disabling stops color writes; CAM can take over, otherwise the last color remains.
+  LCDs and pump/fan curves stay with CAM. Newer LCD models such as USB `1E71:300E` have
+  no supported RGB channel on that USB connection: RGB fans use their motherboard header
+  or a separate lighting controller. Their existing temperature/RPM readings still work.
 - **Games List:** every game on the PC; open one to set up its built-in lighting or choose
   what it shows without lighting, including its own color.
 - **Setup guide:** on first start, LumaBridge finds your RGB hardware and lighting software,
   asks you to confirm it and your fans, and sets up its connections to match.
 - **Integrations:** one-click setup per SDK, with live status.
+- **Notifications:** the bell at the top shows what needs your attention (a lighting
+  service that stopped, a busy game port, a low controller battery), most serious first,
+  each with a button that opens the right page. Dismiss one with its cross; dismissed
+  notices can be shown again, and come back by themselves if the problem returns.
 - **Calibration:** per-channel gains and gamma so Aura matches your other gear.
 - Starts with Windows if you want; the tray icon glows in the current color. Closing the
   window exits LumaBridge (minimize it to keep it running, or have closing keep it in the

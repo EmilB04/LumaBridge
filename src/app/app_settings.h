@@ -12,6 +12,7 @@
 #include "config.h"
 #include "device_lighting.h"
 #include "effects.h"
+#include "pad_mapping.h"
 
 namespace luma::app {
 
@@ -95,18 +96,22 @@ struct Prefs {
     // Light the ROG Azoth (by cable or its Omni receiver).
     bool azothKeyboard = true;
     // Light a Sony DualSense's lightbar, by USB or Bluetooth (experimental).
+    bool padInput = true;  // read a connected PlayStation controller (live view, battery, report timing)
+    pad::Mapping padMapping;  // its button mapping (keyboard / mouse), off until switched on
     bool dualsenseController = true;
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper.
     bool ramLighting = true;
+    // Experimental documented Kraken X3 pump / Z3 accessory lighting. LCDs stay with CAM.
+    bool nzxtLighting = false;
     // Light devices with Windows' lighting standard built in (HID LampArray), directly.
     bool lampArray = true;
-    // Per LampArray device (by name): switched on or off by the user; the rest follow
+    // Per LampArray device (by HID identity): switched on or off by the user; the rest follow
     // Controller::LampArrayDefaultOn.
     std::map<std::string, bool> lampArrayDevices;
     // Light the devices OpenRGB supports, through its SDK server (only if OpenRGB runs).
     bool openRgb = false;
     int openRgbPort = 6742;
-    // Per OpenRGB device (by name): switched on or off by the user; the rest follow
+    // Per OpenRGB device (by serial / location identity): switched on or off by the user; the rest follow
     // Controller::OpenRgbDefaultOn.
     std::map<std::string, bool> openRgbDevices;
     // Which memory slots hold a stick (bit 0 A1 .. bit 3 B2, from the CPU outward), set by hand

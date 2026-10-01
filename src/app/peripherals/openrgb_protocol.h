@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "color.h"
+#include "lighting_identity.h"
 
 namespace luma::app::openrgb {
 
@@ -115,7 +116,8 @@ struct Zone {
 
 struct Controller {
     int type = -1;
-    std::string name, vendor, description, location;
+    std::string name, vendor, description, location, serial;
+    std::string id;  // assigned on enumeration; used for settings and mode restoration
     std::vector<Zone> zones;
     uint32_t leds = 0;  // colors it takes in UpdateLEDs
     int activeMode = -1;
@@ -130,7 +132,7 @@ struct Reader {
     size_t n, at = 0;
     bool ok = true;
     bool Need(size_t k) {
-        if (!ok || at + k > n) ok = false;
+        if (!ok || at > n || k > n - at) ok = false;
         return ok;
     }
     uint16_t U16() {
@@ -170,9 +172,10 @@ inline void SkipMode(Reader* r) {
 
 // The data of RequestControllerData (protocol version `version`, 0-2), from its size field on.
 inline std::optional<Controller> ParseController(const uint8_t* p, size_t n, uint32_t version = kProtocolVersion) {
+    if (version > 2 || !p) return std::nullopt;
     detail::Reader r{p, n};
     const uint32_t size = r.U32();
-    if (!r.ok || size > n) return std::nullopt;
+    if (!r.ok || size < 4 || size > n) return std::nullopt;
     r.n = size;
     Controller c;
     c.type = static_cast<int>(r.U32());
@@ -180,7 +183,7 @@ inline std::optional<Controller> ParseController(const uint8_t* p, size_t n, uin
     if (version >= 1) c.vendor = r.Str();
     c.description = r.Str();
     r.Str();  // version
-    r.Str();  // serial
+    c.serial = r.Str();
     c.location = r.Str();
     const uint16_t modes = r.U16();
     c.activeMode = static_cast<int>(r.U32());
@@ -212,8 +215,13 @@ inline std::optional<Controller> ParseController(const uint8_t* p, size_t n, uin
         r.U32();
     }
     c.leds = r.U16();  // the colors that follow: one per LED
+    r.Skip(4ull * c.leds);
     if (!r.ok) return std::nullopt;
     return c;
+}
+
+inline std::string Identity(const Controller& c) {
+    return lighting::Identity({c.name, c.vendor, std::to_string(c.type), c.serial, c.location});
 }
 
 // UpdateMode data: u32 size (of all of it), i32 mode index, the mode.
