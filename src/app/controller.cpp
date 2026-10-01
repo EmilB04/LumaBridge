@@ -54,6 +54,10 @@ bool Controller::Init() {
     RescanLibrary();
     feeds_.SetForzaPort(prefs_.forzaPort);
     feeds_.SetF1Port(prefs_.f1Port);
+    feeds_.SetUdpPort(GameFeeds::kBeamNg, prefs_.beamngPort);
+    feeds_.SetUdpPort(GameFeeds::kDirt, prefs_.dirtPort);
+    feeds_.SetUdpPort(GameFeeds::kAms2, prefs_.ams2Port);
+    feeds_.SetUdpPort(GameFeeds::kXPlane, prefs_.xplanePort);
     feeds_.Start();
     monitor_.Start(prefs_.lhmPort);
     if (prefs_.logitechDevices) logitech_.Start(AppDirectory() + L"\\integrations\\LumaBridge_x64.dll");
@@ -228,6 +232,10 @@ void Controller::RefreshFeedSettings() {
     if (!rl.empty()) feeds_.SetRocketLeaguePort(RocketLeagueStatsPort(rl));
     feeds_.SetForzaPort(prefs_.forzaPort);
     feeds_.SetF1Port(prefs_.f1Port);
+    feeds_.SetUdpPort(GameFeeds::kBeamNg, prefs_.beamngPort);
+    feeds_.SetUdpPort(GameFeeds::kDirt, prefs_.dirtPort);
+    feeds_.SetUdpPort(GameFeeds::kAms2, prefs_.ams2Port);
+    feeds_.SetUdpPort(GameFeeds::kXPlane, prefs_.xplanePort);
 }
 
 void Controller::RescanLibrary() {
@@ -266,13 +274,19 @@ void Controller::RescanPresence() {
     presenceAt_ = GetTickCount64();
     presenceJob_ = std::async(std::launch::async, [] {
         Presence p;
+        p.inventory = inventory::ScanPresentDevices();
         p.azoth = UsbDevicePresent(azoth::kVendor, {azoth::Product(azoth::Link::Wired), azoth::Product(azoth::Link::Wireless)});
         p.dualsense = UsbDevicePresent(dualsense::kVendor, {dualsense::kProductStandard, dualsense::kProductEdge});
+        for (const auto& d : p.inventory.devices)
+            if (d.vid == dualsense::kVendor && (d.pid == dualsense::kProductStandard || d.pid == dualsense::kProductEdge))
+                p.dualsense = true;
         p.logitech = ScanLogitechDevices();
         p.ghubSleep = GHubTurnsOffOnInactivity();
         p.usb = UsbDevices();
         for (const auto& k : nzxt::FindByName()) p.krakens.emplace_back(k.vid, k.pid);
         p.scanned = true;
+        LUMA_INFO("hardware inventory: %d present device nodes; Windows error %lu",
+                  static_cast<int>(p.inventory.devices.size()), p.inventory.error);
         return p;
     });
 }
@@ -605,6 +619,11 @@ void Controller::UpdateFeeds(uint64_t now) {
             running.flightSim |= g.profile->feed == games::Feed::FlightSimConnect;
             running.dcs |= g.profile->feed == games::Feed::DcsExport;
             running.f1 |= g.profile->feed == games::Feed::F1Telemetry;
+            running.beamng |= g.profile->feed == games::Feed::BeamNgOutGauge;
+            running.dirt |= g.profile->feed == games::Feed::DirtRallyUdp;
+            running.ams2 |= g.profile->feed == games::Feed::Ams2Udp;
+            running.xplane |= g.profile->feed == games::Feed::XPlaneUdp;
+            running.elite |= g.profile->feed == games::Feed::EliteStatus;
         }
     feeds_.SetRunning(running);
     struct {
@@ -621,6 +640,11 @@ void Controller::UpdateFeeds(uint64_t now) {
         {feeds_.FlightSim(now), "SimConnect", "Microsoft Flight Simulator"},
         {feeds_.Dcs(now), "export script", "DCS World"},
         {feeds_.F1(now), "UDP telemetry", "F1"},
+        {feeds_.BeamNg(now), "OutGauge", "BeamNG.drive"},
+        {feeds_.Dirt(now), "UDP telemetry", "DiRT Rally"},
+        {feeds_.Ams2(now), "UDP telemetry", "Automobilista 2"},
+        {feeds_.XPlane(now), "UDP data output", "X-Plane"},
+        {feeds_.Elite(now), "Status.json", "Elite Dangerous"},
     };
     static_assert(sizeof(feeds) / sizeof(feeds[0]) == sizeof(feedActive_) / sizeof(feedActive_[0]), "one flag per feed");
     for (size_t i = 0; i < std::size(feeds); ++i) {

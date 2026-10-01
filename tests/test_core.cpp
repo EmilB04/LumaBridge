@@ -29,6 +29,12 @@
 #include "forza_lighting.h"
 #include "flight_sim_lighting.h"
 #include "dcs_lighting.h"
+#include "beamng_lighting.h"
+#include "device_inventory.h"
+#include "dirt_lighting.h"
+#include "ams2_lighting.h"
+#include "xplane_lighting.h"
+#include "elite_lighting.h"
 #include "scene3d.h"
 #include "controller_model.h"
 #include "scene_mesh.h"
@@ -52,6 +58,7 @@
 #include "setup_hardware.h"
 #include "setup_plan.h"
 #include "device_catalog.h"
+#include "device_inventory.h"
 #include "openrgb_protocol.h"
 #include "lamparray.h"
 #include "device_sleep.h"
@@ -1392,6 +1399,150 @@ static void TestF1() {
     CHECK(FindProfile("x.exe", "F1 25")->feed == Feed::F1Telemetry);
 }
 
+static void TestInventoryKinds() {
+    using namespace luma::app::inventory;
+    CHECK(KindName("Keyboard") == "Keyboard");
+    CHECK(KindName("DISPLAY") == "Graphics adapter");  // any case
+    CHECK(KindName("HIDClass") == "Input device (HID)");
+    CHECK(KindName("SomethingNew") == "SomethingNew");  // unknown: Windows' own (English) class name
+    CHECK(KindName("") == "Other device");
+}
+
+static void TestMoreGames() {
+    using namespace luma::app::games;
+    using luma::fx::Kind;
+    // BeamNG.drive: OutGauge, rpm at 16, showLights at 44.
+    {
+        BeamNgLighting b;
+        auto packet = [](float rpm, uint32_t show) {
+            std::vector<uint8_t> p(96, 0);
+            std::memcpy(&p[16], &rpm, 4);
+            std::memcpy(&p[44], &show, 4);
+            return p;
+        };
+        auto p = packet(1000, 0);
+        CHECK(!b.OnPacket(p.data(), 40, 1000));  // too short
+        CHECK(b.OnPacket(p.data(), p.size(), 1000) && b.Active(1000));
+        p = packet(6000, 0);
+        b.OnPacket(p.data(), p.size(), 1100);  // sets the redline
+        p = packet(2000, 0);
+        b.OnPacket(p.data(), p.size(), 1200);
+        CHECK((b.Current().kind == Kind::Static && b.Current().color1 == luma::Rgb{0, 90, 255}));
+        p = packet(5500, BeamNgLighting::kShift);
+        b.OnPacket(p.data(), p.size(), 1300);
+        CHECK(b.Current().kind == Kind::Strobe);
+        p = packet(3000, BeamNgLighting::kOil);
+        b.OnPacket(p.data(), p.size(), 1400);
+        CHECK(b.Current().kind == Kind::Breathing);
+        p = packet(0, 0);  // engine off
+        b.OnPacket(p.data(), p.size(), 1500);
+        CHECK(!b.Active(1500));
+        CHECK(!b.Active(1400 + BeamNgLighting::kStaleMs + 1));
+        CHECK(FindProfile("BeamNG.drive.x64.exe", "")->feed == Feed::BeamNgOutGauge);
+    }
+    // DiRT Rally: 64+ floats; engine rate at 148, max rpm 252, idle 256.
+    {
+        DirtLighting d;
+        auto packet = [](float rate, float maxRpm, float idle) {
+            std::vector<uint8_t> p(264, 0);
+            std::memcpy(&p[148], &rate, 4);
+            std::memcpy(&p[252], &maxRpm, 4);
+            std::memcpy(&p[256], &idle, 4);
+            return p;
+        };
+        auto p = packet(0, 800, 100);
+        CHECK(!d.OnPacket(p.data(), 100, 1000));
+        CHECK(d.OnPacket(p.data(), p.size(), 1000) && !d.Active(1000));  // in the menus
+        p = packet(200, 800, 100);
+        d.OnPacket(p.data(), p.size(), 2000);
+        CHECK((d.Active(2000) && d.Current().kind == Kind::Static && d.Current().color1 == luma::Rgb{0, 90, 255}));
+        p = packet(790, 800, 100);
+        d.OnPacket(p.data(), p.size(), 3000);
+        CHECK(d.Current().kind == Kind::Strobe);
+        CHECK(FindProfile("dirtrally2.exe", "")->feed == Feed::DirtRallyUdp);
+    }
+    // Automobilista 2 / Project CARS 2: type 0 packet, flags at 17, rpm 40, max rpm 42.
+    {
+        Ams2Lighting a;
+        auto packet = [](uint8_t flags, uint16_t rpm, uint16_t maxRpm, uint8_t type = 0) {
+            std::vector<uint8_t> p(559, 0);
+            p[10] = type;
+            p[17] = flags;
+            std::memcpy(&p[40], &rpm, 2);
+            std::memcpy(&p[42], &maxRpm, 2);
+            return p;
+        };
+        auto p = packet(2, 3000, 8000, 1);  // another packet type
+        CHECK(!a.OnPacket(p.data(), p.size(), 1000));
+        p = packet(0, 0, 8000);  // engine off
+        CHECK(a.OnPacket(p.data(), p.size(), 1000) && !a.Active(1000));
+        p = packet(Ams2Lighting::kEngineActive, 2000, 8000);
+        a.OnPacket(p.data(), p.size(), 2000);
+        CHECK((a.Active(2000) && a.Current().color1 == luma::Rgb{0, 90, 255}));
+        p = packet(Ams2Lighting::kEngineActive | Ams2Lighting::kLimiter, 7900, 8000);
+        a.OnPacket(p.data(), p.size(), 3000);
+        CHECK(a.Current().kind == Kind::Strobe);
+        p = packet(Ams2Lighting::kEngineActive | Ams2Lighting::kEngineWarning, 3000, 8000);
+        a.OnPacket(p.data(), p.size(), 4000);
+        CHECK(a.Current().kind == Kind::Breathing);
+        CHECK(FindProfile("ams2avx.exe", "")->feed == Feed::Ams2Udp);
+    }
+    // X-Plane: "DATA" + separator, 36-byte records.
+    {
+        XPlaneLighting x;
+        auto packet = [](float kias, float g) {
+            std::vector<uint8_t> p(5 + 72, 0);
+            std::memcpy(p.data(), "DATA", 4);
+            const int32_t rows[2] = {3, 4};
+            float v3[8] = {kias}, v4[8] = {0, 0, 0, 0, g};
+            std::memcpy(&p[5], &rows[0], 4);
+            std::memcpy(&p[9], v3, 32);
+            std::memcpy(&p[41], &rows[1], 4);
+            std::memcpy(&p[45], v4, 32);
+            return p;
+        };
+        std::vector<uint8_t> junk(80, 7);
+        CHECK(!x.OnPacket(junk.data(), junk.size(), 1000));
+        auto p = packet(0, 1);
+        CHECK(x.OnPacket(p.data(), p.size(), 1000) && x.Active(1000) && x.Current().kind == Kind::Breathing);
+        p = packet(120, 1);
+        x.OnPacket(p.data(), p.size(), 2000);
+        CHECK((x.Current().kind == Kind::Static && x.Current().color1 == luma::Rgb{0, 120, 255}));
+        p = packet(120, 3.25f);
+        x.OnPacket(p.data(), p.size(), 3000);
+        CHECK(x.Current().color1.r == 255 && x.Current().color1.g > 0 && x.Current().color1.g < 170);
+        p = packet(120, 5);
+        x.OnPacket(p.data(), p.size(), 4000);
+        CHECK(x.Current().kind == Kind::Strobe);
+        p = packet(120, -1);
+        x.OnPacket(p.data(), p.size(), 5000);
+        CHECK((x.Current().color1 == luma::Rgb{255, 0, 200}));
+        CHECK(!x.Active(5000 + XPlaneLighting::kStaleMs + 1));
+        CHECK(FindProfile("X-Plane.exe", "")->feed == Feed::XPlaneUdp);
+    }
+    // Elite Dangerous: Status.json flags.
+    {
+        EliteLighting e;
+        CHECK(!e.OnStatus("", 1000) && !e.Active());  // being rewritten
+        CHECK(!e.OnStatus(R"({"event":"Fileheader"})", 1000));
+        CHECK(e.OnStatus(R"({"timestamp":"2026-01-01T00:00:00Z","event":"Status","Flags":16842765})", 1000));  // normal space
+        CHECK(e.Active());
+        auto flags = [&](uint64_t f) {
+            e.OnStatus(std::string(R"({"event":"Status","Flags":)") + std::to_string(f) + "}", 2000);
+            return e.Current();
+        };
+        CHECK((flags(1ull << 24).color1 == luma::Rgb{255, 120, 0}));
+        CHECK((flags(EliteLighting::kSupercruise).color1 == luma::Rgb{0, 220, 255}));
+        CHECK((flags(EliteLighting::kHardpoints).color1 == luma::Rgb{255, 40, 0}));
+        CHECK(flags(EliteLighting::kLowFuel).kind == Kind::Breathing);
+        CHECK(flags(EliteLighting::kOverheating | EliteLighting::kLowFuel).kind == Kind::Strobe);  // heat wins
+        CHECK((flags(EliteLighting::kDocked).color1 == luma::Rgb{0, 70, 130}));
+        e.Reset();
+        CHECK(!e.Active());
+        CHECK(FindProfile("EliteDangerous64.exe", "")->feed == Feed::EliteStatus);
+    }
+}
+
 static void TestWarThunder() {
     using namespace luma::app::games;
     using luma::fx::Kind;
@@ -2163,6 +2314,40 @@ static void TestIpc() {
     CHECK(!ParseFrame(&f, sizeof f, &g));
 }
 
+static void TestDeviceInventory() {
+    using namespace luma::app::inventory;
+    CHECK(Classify("HIDClass") == Category::Input);
+    CHECK(Classify("XnaComposite") == Category::Input);
+    CHECK(Classify("Bluetooth") == Category::Bluetooth);
+    CHECK(Classify("AudioEndpoint") == Category::Audio);
+    CHECK(Classify("SCSIAdapter") == Category::Storage);
+    CHECK(Classify("DiskDrive") == Category::Storage);
+    CHECK(Classify("Display") == Category::Graphics);
+    CHECK(Classify("Monitor") == Category::Displays);
+    CHECK(Classify("Net") == Category::Network);
+    CHECK(Classify("Camera") == Category::Cameras);
+    CHECK(Classify("PrintQueue") == Category::Printers);
+    CHECK(Classify("USB") == Category::Usb);
+    CHECK(Classify("Firmware") == Category::System);
+    CHECK(Classify("SoftwareComponent") == Category::Software);
+    CHECK(Classify("") == Category::Other);
+    CHECK(Classify("UnknownClass") == Category::Other);
+    Device a;
+    a.name = "Gaming mouse"; a.id = "HID\\VID_046D&PID_C539\\ONE";
+    a.category = Category::Input; a.manufacturer = "Logitech"; a.className = "Mouse";
+    CHECK(Matches(a, "LOGITECH"));
+    CHECK(Matches(a, "VID_046d"));
+    CHECK(Matches(a, "controllers"));
+    CHECK(Matches(a, ""));
+    CHECK(!Matches(a, "camera"));
+    Device b = a; b.id = "HID\\VID_046D&PID_C539\\TWO";
+    Device disk; disk.name = "Disk"; disk.id = "DISK:1"; disk.category = Category::Storage;
+    std::vector<Device> nodes{disk, b, a};
+    Sort(nodes);
+    CHECK(nodes.size() == 3);  // equal names and VID/PID must never discard an instance
+    CHECK(nodes[0].id == a.id && nodes[1].id == b.id && nodes[2].id == disk.id);
+}
+
 int main() {
     TestSceneDepth();
     TestDeskModels();
@@ -2209,6 +2394,8 @@ int main() {
     TestLeague();
     TestForza();
     TestF1();
+    TestMoreGames();
+    TestInventoryKinds();
     TestFlightSim();
     TestScene3d();
     TestPcLayout();
@@ -2217,6 +2404,7 @@ int main() {
     TestPerf();
     TestDcs();
     TestDeviceCatalog();
+    TestDeviceInventory();
     TestHyperXRam();
     TestHwSensors();
     TestIpc();

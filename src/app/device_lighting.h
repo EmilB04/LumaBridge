@@ -173,6 +173,10 @@ inline Spot DefaultSpot(const std::string& item) {
     if (item == device::kRam) return Spot{0.62f, 0.30f};
     if (item == device::kKeyboard) return Spot{0.48f, 0.80f};
     if (item == device::kMouse) return Spot{0.82f, 0.78f};
+    if (item == "gpu") return Spot{0.80f, 0.12f};
+    if (item == "headset") return Spot{0.93f, 0.36f};
+    if (item == "controller") return Spot{0.92f, 0.58f};
+    if (item.rfind("other", 0) == 0) return Spot{0.74f, 0.30f + 0.11f * static_cast<float>(std::atoi(item.c_str() + 5))};
     return Spot{};
 }
 

@@ -35,6 +35,7 @@
 #include "hardware_helper.h"
 #include "nzxt_kraken.h"
 #include "device_catalog.h"
+#include "device_inventory.h"
 #include "gamesense_server.h"
 #include "ipc.h"
 #include "source_tracker.h"
@@ -163,6 +164,7 @@ public:
         bool scanned = false;  // the first scan has finished
         bool azoth = false;    // ROG Azoth, by cable or its Omni receiver
         bool dualsense = false;  // a DualSense controller, by USB or Bluetooth
+        inventory::Scan inventory;
         // Every USB device, as (vendor, product): for naming RGB brands (device_catalog.h).
         std::vector<std::pair<uint16_t, uint16_t>> usb;
         // Krakens found by their USB name (any product ID), and the AIO cooler found.
@@ -179,6 +181,7 @@ public:
         }
     };
     const Presence& presence() const { return presence_; }
+    bool presenceScanning() const { return presenceJob_.valid(); }
     // An NZXT Kraken's own readings (liquid temperature, pump and fan speeds), when one is plugged in.
     nzxt::Status kraken() const { return kraken_.status(); }
     nzxt::KrakenState krakenState() const { return kraken_.state(); }
@@ -273,7 +276,7 @@ private:
     uint64_t sensorsPushedAt_ = 0;
     std::string logitechNote_;
     void UpdateLogitech();
-    bool feedActive_[9] = {};
+    bool feedActive_[14] = {};
     std::future<std::vector<InstalledGame>> libraryJob_;
     Presence presence_;
     std::string presenceLogged_;  // what the log last said about NZXT devices

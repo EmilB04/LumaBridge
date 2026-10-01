@@ -16,7 +16,8 @@ enum class ProfileKind {
     NotAGame,   // a tool that looks like a game; ignored in Auto mode
 };
 
-enum class Feed { None, Cs2Gsi, RocketLeagueStats, WarThunderApi, Dota2Gsi, LeagueLiveClient, ForzaDataOut, FlightSimConnect, DcsExport, F1Telemetry };
+enum class Feed { None, Cs2Gsi, RocketLeagueStats, WarThunderApi, Dota2Gsi, LeagueLiveClient, ForzaDataOut, FlightSimConnect, DcsExport, F1Telemetry,
+            BeamNgOutGauge, DirtRallyUdp, Ams2Udp, XPlaneUdp, EliteStatus };
 
 struct GameProfile {
     const char* key;        // stable id ("cs2")
@@ -65,6 +66,26 @@ inline const GameProfile* Profiles(size_t* count) {
          Feed::F1Telemetry, "Built in: the game's UDP telemetry",
          "Rev lights from the shift lights: blue at low revs, then green, yellow and red as they climb, and a fast "
          "red flash once they're full. Switch on Telemetry in the game's settings (its page says how)."},
+        {"beamng", "BeamNG.drive", {"beamng.drive.x64.exe", "beamng.drive.exe"}, {"beamngdrive"}, ProfileKind::BuiltIn,
+         Feed::BeamNgOutGauge, "Built in: the game's OutGauge telemetry",
+         "Rev lights from the engine speed (blue, green, yellow, red, and a red flash at the limit), and an amber "
+         "pulse for the oil and battery warnings. Switch on OutGauge in the game's options (its page says how)."},
+        {"dirt", "DiRT Rally / DiRT Rally 2.0", {"dirtrally2.exe", "dirtrally.exe"}, {"dirtrally20", "dirtrally2", "dirtrally"},
+         ProfileKind::BuiltIn, Feed::DirtRallyUdp, "Built in: the game's UDP telemetry",
+         "Rev lights from the engine speed: blue at low revs, then green, yellow and red as it climbs. Switch on "
+         "the telemetry in the game's settings file (its page says how)."},
+        {"ams2", "Automobilista 2 / Project CARS 2", {"ams2avx.exe", "ams2.exe", "pcars2avx.exe"},
+         {"automobilista2", "projectcars2"}, ProfileKind::BuiltIn, Feed::Ams2Udp, "Built in: the game's UDP telemetry",
+         "Rev lights from the engine speed (blue, green, yellow, red), a red flash at the limiter and an amber "
+         "pulse for an engine warning. Switch on UDP in the game's options (its page says how)."},
+        {"xplane", "X-Plane", {"x-plane.exe"}, {"xplane", "xplane11", "xplane12"}, ProfileKind::BuiltIn,
+         Feed::XPlaneUdp, "Built in: the sim's UDP data output",
+         "Blue in flight, amber then red as the G-load climbs, magenta under negative G, a slow dim blue while "
+         "parked. Switch on the data output in the sim (its page says how)."},
+        {"elite", "Elite Dangerous", {"elitedangerous64.exe"}, {"elitedangerous"}, ProfileKind::BuiltIn,
+         Feed::EliteStatus, "Built in: the game's Status.json",
+         "Your ship's state: the cockpit's orange in normal space, cyan in supercruise, red with hardpoints out, "
+         "an FSD charge and jump, low fuel, danger, being interdicted and overheating. Nothing to set up."},
         {"msfs", "Microsoft Flight Simulator", {"flightsimulator.exe", "flightsimulator2024.exe"},
          {"microsoftflightsimulator", "microsoftflightsimulator2020", "microsoftflightsimulator2024"},
          ProfileKind::BuiltIn, Feed::FlightSimConnect, "Built in: SimConnect, the sim's own add-on interface",

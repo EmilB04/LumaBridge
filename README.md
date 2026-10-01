@@ -40,7 +40,8 @@ and desk in 3D, live.
   LibreHardwareMonitor if it runs.
 - **Auto mode:** games drive your lights. LumaBridge answers the game's lighting SDK as
   if that brand's software were installed, and follows the game that's currently active.
-  Counter-Strike 2, Rocket League, War Thunder, Dota 2, League of Legends, Forza,
+  Counter-Strike 2, Rocket League, War Thunder, Dota 2, League of Legends, Forza, F1,
+  BeamNG.drive, DiRT Rally, Automobilista 2 / Project CARS 2, X-Plane, Elite Dangerous,
   Microsoft Flight Simulator and DCS World light up through their own data feeds, and games
   without lighting can mirror the screen's colors ([docs/games.md](docs/games.md)).
 - **Manual mode:** effects (static, breathing, strobe, color cycle, and per-LED rainbow
@@ -48,15 +49,25 @@ and desk in 3D, live.
   rainbow and the same color wheel, hex input and swatches for both colors. Give any device
   its own lighting, brightness and direction, or hand it back to its own app.
 - **Lighting page preview:** your setup in 3D (click a lit part to edit it) or the flat 2D
-  view, whichever you prefer.
+  view, whichever you prefer. The 2D DualSense shows its white grips, touchpad, sticks,
+  D-pad and face buttons, with the live lighting on the touchpad light strips. Fans have
+  curved blades and diffuser rings; the board shows its socket, heatsinks, slots and RAM
+  latches. The mouse has a shaped shell and continuous light strip, the keyboard has key
+  legends and an OLED, and headsets, graphics cards and light bars have distinct housings.
 - **NZXT Kraken:** LumaBridge recognises Kraken AIOs (and Corsair and ASUS ROG ones) on USB
   and reads a Kraken's liquid temperature, pump and fan speeds, alongside NZXT CAM. They
   show on the dashboard, on Devices and in My setup, where the pump's screen shows the liquid
   temperature. NZXT CAM keeps the Kraken's lighting and screen.
-- **Devices:** only what your PC has, including the AIO cooler and the graphics card (with
-  its live readings, RGB or not); switch devices on or off, set up your fans (count, LEDs per
-  fan, test pattern) and which memory slots hold a stick. Other RGB brands are recognised
-  and named.
+- **Devices:** opens on **Lighting and readings**, with grouped lighting controls and live
+  readings. The header counts active lighting devices across all outputs, including
+  peripherals and RAM, rather than only Aura. The optional **All hardware** tab has a
+  searchable, categorized inventory of every device Windows reports as
+  present (USB, Bluetooth, PCI, storage, audio, network, monitors and system / software
+  devices), plus the motherboard and memory modules from firmware. Each Windows device
+  function keeps its own entry and ID; driver problems are shown without assuming RGB
+  support. The inventory refreshes in the background every minute or on Rescan. Under
+  **Lighting and readings**, grouped controls let you switch lights on or off, set up fans
+  (count, LEDs per fan, test pattern), choose memory slots and view cooler / GPU readings.
 - **Logitech devices** (mice, ...) follow along through G HUB's own LED SDK.
 - **RAM** (HyperX / Kingston FURY RGB DDR4, experimental) follows along, and the dashboard
   shows fan speeds and CPU / board temperatures by itself: one click on the Devices page

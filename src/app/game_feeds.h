@@ -11,6 +11,10 @@
 //                     in the game's settings).
 //   F1 24 / F1 25     the games' own UDP telemetry, to 127.0.0.1:f1Port (switched on in the
 //                     game's settings), reading only the Car Telemetry packet.
+//   BeamNG.drive      OutGauge UDP to 127.0.0.1:beamngPort; DiRT Rally (2.0) and Automobilista 2 /
+//                     Project CARS 2: their UDP telemetry; X-Plane: its UDP data output; all
+//                     only while their game runs.
+//   Elite Dangerous   its Status.json in Saved Games (always written by the game).
 //   Flight Simulator  SimConnect, the sim's own add-on interface (SimConnect.dll from Microsoft's
 //                     free Flight Simulator SDK, or next to LumaBridge.exe).
 //   DCS World         LumaBridge.lua, loaded from DCS's Export.lua, sends UDP to 127.0.0.1:49717.
@@ -26,9 +30,13 @@
 #include <thread>
 #include <vector>
 
+#include "ams2_lighting.h"
+#include "beamng_lighting.h"
 #include "cs2_lighting.h"
+#include "dirt_lighting.h"
 #include "dcs_lighting.h"
 #include "dota2_lighting.h"
+#include "elite_lighting.h"
 #include "f1_lighting.h"
 #include "flight_sim_lighting.h"
 #include "forza_lighting.h"
@@ -36,6 +44,7 @@
 #include "effects.h"
 #include "rocket_league_lighting.h"
 #include "war_thunder_lighting.h"
+#include "xplane_lighting.h"
 
 namespace luma::app {
 
@@ -53,10 +62,17 @@ public:
     int forzaPort() const { return forzaPort_; }
     void SetF1Port(int port) { f1Port_ = port; }
     int f1Port() const { return f1Port_; }
+    // The racing and flight games' UDP feeds, one generic receiver each (UdpLoop).
+    enum Udp { kBeamNg, kDirt, kAms2, kXPlane, kUdpCount };
+    void SetUdpPort(Udp u, int port) { udp_[u].port = port; }
+    int UdpPort(Udp u) const { return udp_[u].port; }
+    bool UdpSeen(Udp u) const { return udp_[u].seen; }
+    bool UdpPortBusy(Udp u) const { return udp_[u].busy; }
+    bool EliteSeen() const { return eliteSeen_; }
     // Which of the polled games are running (from the game detector).
     struct Running {
         bool rocketLeague = false, warThunder = false, league = false, forza = false, flightSim = false, dcs = false,
-             f1 = false;
+             f1 = false, beamng = false, dirt = false, ams2 = false, xplane = false, elite = false;
     };
     void SetRunning(const Running& r) {
         rlRunning_ = r.rocketLeague;
@@ -66,6 +82,11 @@ public:
         msfsRunning_ = r.flightSim;
         dcsRunning_ = r.dcs;
         f1Running_ = r.f1;
+        udp_[kBeamNg].running = r.beamng;
+        udp_[kDirt].running = r.dirt;
+        udp_[kAms2].running = r.ams2;
+        udp_[kXPlane].running = r.xplane;
+        eliteRunning_ = r.elite;
     }
 
     struct Feed {
@@ -81,6 +102,11 @@ public:
     Feed F1(uint64_t now);
     Feed FlightSim(uint64_t now);
     Feed Dcs(uint64_t now);
+    Feed BeamNg(uint64_t now);
+    Feed Dirt(uint64_t now);
+    Feed Ams2(uint64_t now);
+    Feed XPlane(uint64_t now);
+    Feed Elite(uint64_t now);
 
     bool Cs2Listening() const { return cs2Listen_ != INVALID_SOCKET; }
     bool Cs2Seen() const { return cs2Seen_; }            // CS2 has sent at least once
@@ -109,6 +135,8 @@ private:
     void F1Loop();
     void FlightSimLoop();
     void DcsLoop();
+    void UdpLoop(Udp u);
+    void EliteLoop();
     void RlHandle(std::string* buffer);
 
     std::atomic<bool> stop_{false};
@@ -123,6 +151,15 @@ private:
         f1Seen_{false}, f1Busy_{false};
     std::atomic<int> msfsDll_{-1};
 
+    struct UdpGame {
+        std::atomic<bool> running{false}, seen{false}, busy{false};
+        std::atomic<int> port{0};
+        std::thread thread;
+    };
+    UdpGame udp_[kUdpCount];
+    std::thread eliteThread_;
+    std::atomic<bool> eliteRunning_{false}, eliteSeen_{false};
+
     std::mutex mutex_;  // guards the engines
     games::Cs2Lighting cs2_;
     games::RocketLeagueLighting rl_;
@@ -134,6 +171,11 @@ private:
     games::F1Lighting f1_;
     games::FlightSimLighting msfs_;
     games::DcsLighting dcs_;
+    games::BeamNgLighting beamng_;
+    games::DirtLighting dirt_;
+    games::Ams2Lighting ams2_;
+    games::XPlaneLighting xplane_;
+    games::EliteLighting elite_;
 };
 
 // Setup helpers (Integrations page). `gameDir` is the game's install folder. They return an

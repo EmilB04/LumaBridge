@@ -59,6 +59,10 @@ struct UiState {
     // Devices: the device whose page is open ("" = the list): "aura:<Aura name>" or a
     // device::k* id (memory, mouse, keyboard).
     std::string deviceDetail;
+    bool devicesLanding = true;  // select Lighting and readings when opening Devices
+    int devicesTab = 0;          // 0 Lighting and readings, 1 All hardware
+    char deviceFilter[128] = "";
+    int deviceCategory = -1;  // all categories
     // Built-in game feed setup state (Integrations page), re-checked every couple of seconds.
     unsigned long long feedCheckAt = 0;
     bool cs2Installed = false, rlIniFound = false, rlEnabled = false, dotaInstalled = false;

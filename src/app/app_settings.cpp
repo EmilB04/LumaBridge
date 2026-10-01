@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
+#include <utility>
 
 #include "pc_layout.h"
 #include "display_layout.h"
@@ -227,6 +228,11 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (!v.empty()) p.logitechForce = v != L"0";
     v = Read(ini, L"Games", L"ForzaPort");
     if (!v.empty() && _wtoi(v.c_str()) > 0 && _wtoi(v.c_str()) < 65536) p.forzaPort = _wtoi(v.c_str());
+    for (auto [key, port] : {std::pair<const wchar_t*, int*>{L"BeamngPort", &p.beamngPort}, {L"DirtPort", &p.dirtPort},
+                             {L"Ams2Port", &p.ams2Port}, {L"XplanePort", &p.xplanePort}}) {
+        v = Read(ini, L"Games", key);
+        if (!v.empty() && _wtoi(v.c_str()) > 0 && _wtoi(v.c_str()) < 65536) *port = _wtoi(v.c_str());
+    }
     v = Read(ini, L"Games", L"F1Port");
     if (!v.empty() && _wtoi(v.c_str()) > 0 && _wtoi(v.c_str()) < 65536) p.f1Port = _wtoi(v.c_str());
     v = Read(ini, L"Dashboard", L"LhmPort");
@@ -237,6 +243,8 @@ Prefs LoadPrefs(const std::wstring& ini) {
     }
     std::vector<std::string> items{device::kBoard, device::kRam, device::kMouse, device::kKeyboard};
     for (int i = 0; i < 8; ++i) items.push_back(FanItem(i));
+    for (const char* item : {"gpu", "headset", "controller"}) items.push_back(item);
+    for (int i = 0; i < pc::kMaxOthers; ++i) items.push_back("other" + std::to_string(i));
     for (const char* item : pc::DeskItems()) items.push_back(item);
     for (const std::string& item : items) {
         Spot s;
@@ -321,6 +329,10 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"Dashboard", L"LhmPort", Num(p.lhmPort));
     WriteConfigValue(ini, L"Games", L"ForzaPort", Num(p.forzaPort));
     WriteConfigValue(ini, L"Games", L"F1Port", Num(p.f1Port));
+    WriteConfigValue(ini, L"Games", L"BeamngPort", Num(p.beamngPort));
+    WriteConfigValue(ini, L"Games", L"DirtPort", Num(p.dirtPort));
+    WriteConfigValue(ini, L"Games", L"Ams2Port", Num(p.ams2Port));
+    WriteConfigValue(ini, L"Games", L"XplanePort", Num(p.xplanePort));
     WriteConfigValue(ini, L"App", L"LogitechDevices", p.logitechDevices ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"LogitechKeepInGames", p.logitechForce ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"AzothKeyboard", p.azothKeyboard ? L"1" : L"0");

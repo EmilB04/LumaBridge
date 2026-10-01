@@ -70,6 +70,10 @@ struct Prefs {
     std::vector<std::string> dashboard = DefaultDashboard();
     int lhmPort = 8085;  // LibreHardwareMonitor's web server
     int forzaPort = 5300;  // where Forza's Data Out sends (set the same in the game)
+    int beamngPort = 4444;   // where BeamNG.drive's OutGauge sends
+    int dirtPort = 20777;    // DiRT Rally / DiRT Rally 2.0's telemetry
+    int ams2Port = 5606;     // Automobilista 2 / Project CARS 2's UDP
+    int xplanePort = 49003;  // X-Plane's data output
     int f1Port = 20777;    // where F1 24 / F1 25's telemetry sends (set the same in the game)
     // Light Logitech devices (G HUB) along with Aura.
     bool logitechDevices = true;

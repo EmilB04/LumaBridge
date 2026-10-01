@@ -108,11 +108,14 @@ void GameFeeds::Start() {
     f1Thread_ = std::thread(&GameFeeds::F1Loop, this);
     msfsThread_ = std::thread(&GameFeeds::FlightSimLoop, this);
     dcsThread_ = std::thread(&GameFeeds::DcsLoop, this);
+    for (int i = 0; i < kUdpCount; ++i) udp_[i].thread = std::thread(&GameFeeds::UdpLoop, this, static_cast<Udp>(i));
+    eliteThread_ = std::thread(&GameFeeds::EliteLoop, this);
 }
 
 void GameFeeds::Stop() {
     if (!cs2Thread_.joinable() && !rlThread_.joinable() && !wtThread_.joinable() && !leagueThread_.joinable() &&
-        !forzaThread_.joinable() && !f1Thread_.joinable() && !msfsThread_.joinable() && !dcsThread_.joinable())
+        !forzaThread_.joinable() && !f1Thread_.joinable() && !msfsThread_.joinable() && !dcsThread_.joinable() &&
+        !eliteThread_.joinable())
         return;
     stop_ = true;
     if (cs2Listen_ != INVALID_SOCKET) {
@@ -122,6 +125,9 @@ void GameFeeds::Stop() {
     for (std::thread* t :
          {&cs2Thread_, &rlThread_, &wtThread_, &leagueThread_, &forzaThread_, &f1Thread_, &msfsThread_, &dcsThread_})
         if (t->joinable()) t->join();
+    for (UdpGame& u : udp_)
+        if (u.thread.joinable()) u.thread.join();
+    if (eliteThread_.joinable()) eliteThread_.join();
     if (wsa_) WSACleanup();
     wsa_ = false;
 }
@@ -159,6 +165,32 @@ GameFeeds::Feed GameFeeds::Forza(uint64_t now) {
 GameFeeds::Feed GameFeeds::F1(uint64_t now) {
     std::lock_guard<std::mutex> lock(mutex_);
     return Feed{f1_.Active(now), f1_.Current()};
+}
+
+GameFeeds::Feed GameFeeds::BeamNg(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{beamng_.Active(now), beamng_.Current()};
+}
+
+GameFeeds::Feed GameFeeds::Dirt(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{dirt_.Active(now), dirt_.Current()};
+}
+
+GameFeeds::Feed GameFeeds::Ams2(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{ams2_.Active(now), ams2_.Current()};
+}
+
+GameFeeds::Feed GameFeeds::XPlane(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{xplane_.Active(now), xplane_.Current()};
+}
+
+GameFeeds::Feed GameFeeds::Elite(uint64_t now) {
+    (void)now;
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{elite_.Active(), elite_.Current()};
 }
 
 GameFeeds::Feed GameFeeds::FlightSim(uint64_t now) {
@@ -391,6 +423,97 @@ void GameFeeds::F1Loop() {
         }
     }
     if (s != INVALID_SOCKET) closesocket(s);
+}
+
+// ---- BeamNG.drive, DiRT Rally, Automobilista 2, X-Plane (UDP) --------------------------------
+
+void GameFeeds::UdpLoop(Udp u) {
+    static const char* const kNames[] = {"BeamNG.drive", "DiRT Rally", "Automobilista 2", "X-Plane"};
+    UdpGame& g = udp_[u];
+    SOCKET s = INVALID_SOCKET;
+    int boundPort = 0;
+    while (!stop_) {
+        if (!g.running || boundPort != g.port) {
+            if (s != INVALID_SOCKET) {
+                closesocket(s);
+                s = INVALID_SOCKET;
+                boundPort = 0;
+            }
+            if (!g.running) {
+                g.busy = false;
+                Nap(stop_, 1000);
+                continue;
+            }
+        }
+        if (s == INVALID_SOCKET) {
+            s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            BOOL exclusive = TRUE;
+            setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&exclusive), sizeof exclusive);
+            sockaddr_in a{};
+            a.sin_family = AF_INET;
+            a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            a.sin_port = htons(static_cast<u_short>(g.port.load()));
+            if (bind(s, reinterpret_cast<sockaddr*>(&a), sizeof a) != 0) {
+                if (!g.busy.exchange(true))
+                    LUMA_WARN("games: UDP port %d is taken (another telemetry app?) - %s lighting unavailable",
+                              g.port.load(), kNames[u]);
+                closesocket(s);
+                s = INVALID_SOCKET;
+                Nap(stop_, 3000);
+                continue;
+            }
+            g.busy = false;
+            boundPort = g.port;
+            DWORD timeout = 500;
+            setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof timeout);
+            LUMA_INFO("games: listening for %s's telemetry on 127.0.0.1:%d", kNames[u], boundPort);
+        }
+        uint8_t buf[1500];
+        const int n = recv(s, reinterpret_cast<char*>(buf), sizeof buf, 0);
+        if (n > 0) {
+            const size_t len = static_cast<size_t>(n);
+            const uint64_t now = GetTickCount64();
+            std::lock_guard<std::mutex> lock(mutex_);
+            bool ok = false;
+            switch (u) {
+            case kBeamNg: ok = beamng_.OnPacket(buf, len, now); break;
+            case kDirt: ok = dirt_.OnPacket(buf, len, now); break;
+            case kAms2: ok = ams2_.OnPacket(buf, len, now); break;
+            case kXPlane: ok = xplane_.OnPacket(buf, len, now); break;
+            default: break;
+            }
+            if (ok && !g.seen.exchange(true)) LUMA_INFO("games: %s is sending its telemetry", kNames[u]);
+        }
+    }
+    if (s != INVALID_SOCKET) closesocket(s);
+}
+
+// ---- Elite Dangerous (Status.json) -----------------------------------------------------------
+
+void GameFeeds::EliteLoop() {
+    std::wstring path;
+    PWSTR saved = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_SavedGames, 0, nullptr, &saved)) && saved) {
+        path = std::wstring(saved) + L"\\Frontier Developments\\Elite Dangerous\\Status.json";
+        CoTaskMemFree(saved);
+    }
+    while (!stop_) {
+        if (path.empty() || !eliteRunning_) {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                elite_.Reset();
+            }
+            Nap(stop_, 1000);
+            continue;
+        }
+        const std::string text = ReadText(path);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (elite_.OnStatus(text, GetTickCount64()) && !eliteSeen_.exchange(true))
+                LUMA_INFO("games: reading Elite Dangerous's Status.json");
+        }
+        Sleep(250);
+    }
 }
 
 // ---- Microsoft Flight Simulator (SimConnect) ------------------------------------------------
