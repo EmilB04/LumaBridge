@@ -25,12 +25,13 @@ and desk in 3D, live.
   actual lightbar color; drag and rotate it like the keyboard and mouse.
 - **DualSense Bluetooth:** wireless lighting handles Windows HID report sizes, initializes
   the controller lightbar on connection, and resumes after lighting control is handed back.
-- **Controller page:** a connected DualSense or DualShock 4 (USB or Bluetooth) shows as a
-  3D controller that follows it live: held buttons light up and sink, the sticks lean, the
-  triggers travel and fingers show on the touchpad. Drag to turn it. The lightbar shows its
-  current color, with its hex and RGB values. Raw stick, trigger and motion numbers, and
-  how steadily the controller reports, change many times a second, so each sits behind its
-  own switch (off by default). The battery is shown too. A button mapping (off until you
+- **Controller page:** a connected DualSense or DualShock 4 (USB or Bluetooth) shows every
+  input live in 2D: the controller from above with held buttons lit, both triggers as bars,
+  each stick's position, fingers on the touchpad, gyroscope and accelerometer, and every
+  button by name. A 3D view (drag to turn it) is one click away. The lightbar shows its
+  current color, with its hex and RGB values. The raw numbers, and how steadily the
+  controller reports, change many times a second, so each sits behind its own switch (off
+  by default). The battery is shown too. A button mapping (off until you
   switch it on) makes buttons press keyboard keys or mouse buttons, and can move the mouse
   with the right stick. DualShock 4 is untested on real hardware.
 - **Monitor supports:** stands sit behind the screen instead of poking through it; vertical
@@ -56,10 +57,14 @@ and desk in 3D, live.
   wave, gradient, comet and twinkle that run around each ARGB fan), presets, a customizable
   rainbow and the same color wheel, hex input and swatches for both colors. Give any device
   its own lighting, brightness and direction, or hand it back to its own app.
-- **Lighting page:** your saved manual color, color values and effect take priority. In Auto
-  mode, choosing "My manual color" between games shows that saved look with a "Switch to
-  Manual" button to use and edit it. Expand "Your setup" for a live 2D or 3D preview in either
-  mode; in Manual, click a lit part to edit its lighting. The 2D DualSense shows its white grips, touchpad, sticks,
+- **Lighting page:** Auto opens with a compact preview of your chosen between-games lighting
+  beside a visible 2D overview of your components, with brightness, idle choices and game
+  status close at hand. The preview follows manual color, rainbow, off or Armoury Crate;
+  manual color includes a "Switch to Manual" button. Manual shows the selected device's
+  color and brightness beside its live 2D or 3D setup preview, with color, effect and device
+  controls below. Manual's 2D view lets you drag devices into place, remembers their positions
+  and has a Reset layout button. Click a lit part to edit its lighting; smaller windows stack the cards
+  and use compact device selectors. The 2D DualSense shows its white grips, touchpad, sticks,
   D-pad and face buttons, with the live lighting on the touchpad light strips. Fans have
   curved blades and diffuser rings; the board shows its socket, heatsinks, slots and RAM
   latches. The mouse has a shaped shell and continuous light strip, the keyboard has key
@@ -121,7 +126,9 @@ and desk in 3D, live.
 - **Integrations:** one-click setup per SDK, with live status.
 - **Notifications:** the bell at the top shows what needs your attention (a lighting
   service that stopped, a busy game port, a low controller battery), most serious first,
-  each with a button that opens the right page. Dismiss one with its cross; dismissed
+  each with a button that opens the right page. When a vendor's own runtime (Razer Synapse's
+  Chroma, Alienware's AlienFX) sits where LumaBridge's would go, its notice can replace it
+  in one click (backed up first; Remove puts it back). Dismiss one with its cross; dismissed
   notices can be shown again, and come back by themselves if the problem returns.
 - **Calibration:** per-channel gains and gamma so Aura matches your other gear.
 - Starts with Windows if you want; the tray icon glows in the current color. Closing the

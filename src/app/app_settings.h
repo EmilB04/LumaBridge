@@ -100,6 +100,7 @@ struct Prefs {
     pad::Mapping padMapping;  // its button mapping (keyboard / mouse), off until switched on
     // The controller page's fast-changing numbers (raw readings, report timing): hidden until switched on.
     bool padShowValues = false, padShowTiming = false;
+    bool padView3d = false;  // the live view: 2D with every input (default), or the 3D model
     bool dualsenseController = true;
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper.
     bool ramLighting = true;

@@ -12,15 +12,16 @@ namespace luma::app::notify {
 
 enum class Severity { Info, Warning, Error };
 
-// Where "Open" goes.
-enum class Where { None, Lighting, Devices, DevicesHardware, DevicesController, Integrations, GamesList, Settings };
+// Where "Open" goes. ReplaceRuntime is an action instead: it replaces the vendor's runtime for
+// the integration in `arg` (as on the Integrations page), then opens that page for the result.
+enum class Where { None, Lighting, Devices, DevicesHardware, DevicesController, Integrations, GamesList, Settings, ReplaceRuntime };
 
 struct Notice {
     std::string id;  // stable: the same problem has the same id every time
     Severity severity = Severity::Info;
     std::string title, detail;
     Where where = Where::None;
-    std::string arg;  // Where::GamesList: the game's name, to open its page
+    std::string arg;  // Where::GamesList: the game's name, to open its page; ReplaceRuntime: the integration
     std::string argKey;  // ... and its profile key
     std::string action;  // button label, "" = "Open"
 };
@@ -28,6 +29,7 @@ struct Notice {
 struct IntegrationFact {
     std::string id, name, detail;
     bool problem = false;  // built in but not working
+    bool vendorPresent = false;  // the vendor's own runtime is installed where LumaBridge's would go
 };
 
 struct GameFact {
@@ -81,6 +83,12 @@ inline std::vector<Notice> Collect(const Facts& f) {
         if (i.problem)
             add("integration-" + i.id, Severity::Error, i.name + " needs attention",
                 i.detail.empty() ? "It is built in but not working." : i.detail, Where::Integrations);
+    for (const auto& i : f.integrations)
+        if (i.vendorPresent && !i.problem)
+            add("vendor-" + i.id, Severity::Info, i.name + ": vendor software present",
+                "Its maker's own runtime is installed, so games using it talk to that instead of LumaBridge. Replacing it "
+                "backs up the original (Remove on the Integrations page puts it back) and needs administrator approval.",
+                Where::ReplaceRuntime, "Replace vendor runtime")->arg = i.id;
     if (f.windowsProblems > 0)
         add("windows-problems", Severity::Warning,
             std::to_string(f.windowsProblems) + (f.windowsProblems == 1 ? " device has a Windows problem" : " devices have a Windows problem"),

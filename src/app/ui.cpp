@@ -1860,7 +1860,7 @@ void BrightnessCard(Controller& ctl, const Fonts& f, const std::string& device =
             ctl.config().auraCorrection.brightness = b / 100.0;
             ctl.Changed();
         }
-        Muted("Every device, in both Auto and Manual mode. Pick a device above to dim it on its own.");
+        Muted("Applies to every device, in Auto and Manual mode.");
     } else {
         const std::string title = std::string(device::Name(device)) + " brightness";
         CardTitle(f, title.c_str(), Icon::Lighting);
@@ -1871,13 +1871,12 @@ void BrightnessCard(Controller& ctl, const Fonts& f, const std::string& device =
             level = b / 100.f;
             ctl.Changed();
         }
-        Muted("Only this device, games included, on top of the overall brightness (%.0f%%, under All devices).",
+        Muted("For this device, games included. Overall brightness: %.0f%%.",
               ctl.config().auraCorrection.brightness * 100.0);
         ImGui::Dummy(ImVec2(0, 4 * S()));
         bool& rev = ctl.prefs().deviceLighting[device].reverse;
         if (DirectionRow("dev-dir", &rev)) ctl.Changed();
-        Muted("Which way moving effects run on this device, games included. Every device runs right unless "
-              "you change it.");
+        Muted("Which way moving effects run on this device.");
     }
     EndCard();
 }
@@ -1893,54 +1892,54 @@ void MainRainbowCard(Controller& ctl, const Fonts& f) {
     }
 }
 
-void SetupCard(Controller& ctl, UiState& ui, const Fonts& f, bool selectable);
 void EffectStrip(const fx::Params& fx, ImVec2 a, ImVec2 b, float rounding);
 bool IsRainbow(ManualEffect effect);
+void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable, bool overview = false);
 
-// Show the saved look, even when a game is currently driving the live lights.
-void ManualColorCard(Controller& ctl, UiState& ui, const Fonts& f) {
-    const Look look = MainLook(ctl.prefs());
-    const bool automatic = ctl.prefs().mode == Mode::Auto;
-    BeginCard("manual-summary");
-    CardTitle(f, "Your manual color", Icon::Palette);
-    auto savedSwatch = [](Rgb color, float size) {
-        const ImVec2 a = ImGui::GetCursorScreenPos();
-        const ImVec2 center(a.x + size / 2, a.y + size / 2);
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->AddCircleFilled(center, size / 2, Col(color), 32);
-        dl->AddCircle(center, size / 2, Hex(0xFFFFFF, 40), 32, S());
-        ImGui::Dummy(ImVec2(size, size));
-    };
-    const bool rainbow = IsRainbow(look.effect);
-    if (!rainbow) {
-        savedSwatch(look.color1, 56 * S());
-        ImGui::SameLine(0, 16 * S());
+void AutoIdlePreview(Controller& ctl, UiState& ui, const Fonts& f) {
+    const auto idle = ctl.prefs().idle;
+    const bool external = idle == IdleBehavior::ArmouryCrate;
+    fx::Params effect = ToParams(MainLook(ctl.prefs()));
+    if (idle == IdleBehavior::Rainbow) {
+        effect.kind = fx::Kind::RainbowWave;
+        effect.speed = 0.1;
+        effect.reverse = false;
+    } else if (idle == IdleBehavior::Off) {
+        effect = fx::Params{};
+        effect.color1 = Rgb{};
     }
-    ImGui::BeginGroup();
-    ImGui::PushFont(f.title);
-    ImGui::TextUnformatted(rainbow ? kEffects[static_cast<int>(look.effect)].name : ToHex(look.color1).c_str());
-    ImGui::PopFont();
-    if (rainbow) {
-        Muted("Your saved rainbow palette");
-    } else {
-        Muted("%s  -  RGB %u, %u, %u", kEffects[static_cast<int>(look.effect)].name,
-              unsigned(look.color1.r), unsigned(look.color1.g), unsigned(look.color1.b));
-    }
-    ImGui::EndGroup();
-    if (fx::UsesSecondColor(look.effect)) {
-        ImGui::Dummy(ImVec2(0, 4 * S()));
-        savedSwatch(look.color2, 24 * S());
-        ImGui::SameLine();
-        ImGui::Text("Second color: %s", ToHex(look.color2).c_str());
-    }
-    ImGui::Dummy(ImVec2(0, 6 * S()));
+    BeginCard("idle-preview");
+    CardTitle(f, "Between games", Icon::Palette);
+    const char* names[] = {"My manual color", "Rainbow", "Lights off", "Armoury Crate"};
+    Muted("%s", names[static_cast<int>(idle)]);
+    ImGui::Dummy(ImVec2(0, 8 * S()));
     const ImVec2 a = ImGui::GetCursorScreenPos();
-    const float w = ImGui::GetContentRegionAvail().x;
-    EffectStrip(ToParams(look), a, ImVec2(a.x + w, a.y + 24 * S()), 8 * S());
-    ImGui::Dummy(ImVec2(w, 24 * S()));
-    Muted(automatic ? "Used between games. Switch to Manual to use and edit it at any time."
-                    : "Edit your color and effect below. Devices with their own lighting keep their settings.");
-    if (automatic && PrimaryButton("Switch to Manual")) {
+    const float w = ImGui::GetContentRegionAvail().x, h = 104 * S();
+    const ImVec2 b(a.x + w, a.y + h);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (external) {
+        dl->AddRectFilled(a, b, Hex(kTrack), 12 * S());
+        const char* text = "Its own lighting";
+        const ImVec2 ts = ImGui::CalcTextSize(text);
+        dl->AddText(ImVec2(a.x + (w - ts.x) / 2, a.y + (h - ts.y) / 2), Hex(kMuted), text);
+    } else {
+        EffectStrip(effect, a, b, 12 * S());
+    }
+    dl->AddRect(a, b, Hex(kBorder), 12 * S());
+    ImGui::Dummy(ImVec2(w, h));
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    if (external) {
+        Muted("Armoury Crate chooses the color when LumaBridge hands back control.");
+    } else {
+        ImGui::PushFont(f.bold);
+        if (IsRainbow(effect.kind)) ImGui::TextUnformatted(kEffects[static_cast<int>(effect.kind)].name);
+        else ImGui::TextUnformatted(ToHex(effect.color1).c_str());
+        ImGui::PopFont();
+        if (!IsRainbow(effect.kind))
+            Muted("%s", idle == IdleBehavior::Off ? "Lights stay dark between games" : kEffects[static_cast<int>(effect.kind)].name);
+        if (fx::UsesSecondColor(effect.kind)) Muted("Second color: %s", ToHex(effect.color2).c_str());
+    }
+    if (idle == IdleBehavior::ManualColor && PrimaryButton("Switch to Manual", ImVec2(w, 0))) {
         ctl.prefs().mode = Mode::Manual;
         ui.lightTarget.clear();
         ui.colorSlot = 0;
@@ -1949,8 +1948,70 @@ void ManualColorCard(Controller& ctl, UiState& ui, const Fonts& f) {
     EndCard();
 }
 
-void AutoPage(Controller& ctl, UiState& ui, const Fonts& f) {
-    if (ctl.prefs().idle == IdleBehavior::ManualColor) ManualColorCard(ctl, ui, f);
+void AutoOverview(Controller& ctl, UiState& ui, const Fonts& f) {
+    const float width = ImGui::GetContentRegionAvail().x;
+    const bool side = width >= 760 * S();
+    if (ImGui::BeginTable("auto-overview", side ? 2 : 1, ImGuiTableFlags_SizingStretchProp)) {
+        if (side) {
+            ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthFixed, 280 * S());
+            ImGui::TableSetupColumn("Setup", ImGuiTableColumnFlags_WidthStretch);
+        }
+        ImGui::TableNextColumn();
+        AutoIdlePreview(ctl, ui, f);
+        if (side) BrightnessCard(ctl, f);
+        ImGui::TableNextColumn();
+        BeginCard("auto-setup");
+        CardTitle(f, "Your setup", Icon::Grid);
+        Muted("Live lighting across your components");
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+        SetupCanvas2d(ctl, ui, false, true);
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        if (!ctl.output().label.empty()) Muted("Now: %s", ctl.output().label.c_str());
+        EndCard();
+        if (!side) BrightnessCard(ctl, f);
+        ImGui::EndTable();
+    }
+}
+
+// The selected device's saved look stays visible above its editing controls.
+void ManualColorCard(Controller& ctl, UiState& ui, const Fonts& f) {
+    const Look look = ui.lightTarget.empty() ? MainLook(ctl.prefs()) : DeviceLook(ctl.prefs(), ui.lightTarget);
+    const bool native = !ui.lightTarget.empty() && DeviceNative(ctl.prefs(), ui.lightTarget);
+    BeginCard("manual-summary");
+    CardTitle(f, "Your manual lighting", Icon::Palette);
+    Muted("%s", ui.lightTarget.empty() ? "All devices" : device::Name(ui.lightTarget));
+    ImGui::Dummy(ImVec2(0, 8 * S()));
+    const ImVec2 a = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x, h = 104 * S();
+    const ImVec2 b(a.x + w, a.y + h);
+    if (native) {
+        ImGui::GetWindowDrawList()->AddRectFilled(a, b, Hex(kTrack), 12 * S());
+        const char* text = "Its own lighting";
+        const ImVec2 ts = ImGui::CalcTextSize(text);
+        ImGui::GetWindowDrawList()->AddText(ImVec2(a.x + (w - ts.x) / 2, a.y + (h - ts.y) / 2), Hex(kMuted), text);
+    } else {
+        EffectStrip(ToParams(look), a, b, 12 * S());
+    }
+    ImGui::GetWindowDrawList()->AddRect(a, b, Hex(kBorder), 12 * S());
+    ImGui::Dummy(ImVec2(w, h));
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    if (native) {
+        Muted("Choose a lighting source below to bring this device back under LumaBridge control.");
+    } else {
+        ImGui::PushFont(f.title);
+        ImGui::TextUnformatted(IsRainbow(look.effect) ? kEffects[static_cast<int>(look.effect)].name : ToHex(look.color1).c_str());
+        ImGui::PopFont();
+        if (!IsRainbow(look.effect)) {
+            Muted("%s", kEffects[static_cast<int>(look.effect)].name);
+            Muted("RGB %u, %u, %u", unsigned(look.color1.r), unsigned(look.color1.g), unsigned(look.color1.b));
+        }
+        if (fx::UsesSecondColor(look.effect)) Muted("Second color: %s", ToHex(look.color2).c_str());
+        Muted("Choose your color and effect below.");
+    }
+    EndCard();
+}
+
+void AutoGamesCard(Controller& ctl, const Fonts& f) {
     BeginCard("now");
     CardTitle(f, "Dynamic lighting", Icon::Game);
     Muted("Games drive your lights. When several are running, the one that changed color most recently wins.");
@@ -1961,9 +2022,7 @@ void AutoPage(Controller& ctl, UiState& ui, const Fonts& f) {
     if (running.empty() && others.empty()) {
         Pill("No game running", kMuted);
         ImGui::Dummy(ImVec2(0, 4 * S()));
-        Muted("Games from Steam, Epic, EA, Ubisoft, GOG, Xbox, Riot and the ones Windows knows about "
-              "show up here when they start. Those with Logitech, Razer, SteelSeries, Corsair or "
-              "Alienware lighting drive your lights; set them up on the Integrations page.");
+        Muted("Your games appear here when they start. Until then, your between-games lighting is used.");
     }
     const uint64_t now = GetTickCount64();
     int row = 0;
@@ -2030,8 +2089,14 @@ void AutoPage(Controller& ctl, UiState& ui, const Fonts& f) {
                  static_cast<unsigned long long>((now - s.lastChange) / 1000));
         gameRow(s.game, s.color, true, detail, "Dynamic lighting", kGreen);
     }
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    if (Toggle("Use screen colors for games without lighting", &ctl.prefs().screenForUnsupported)) ctl.Changed();
+    Muted("Uses the screen image. Choose exceptions on the Games List page.");
     EndCard();
+}
 
+void AutoPage(Controller& ctl, UiState& ui, const Fonts& f) {
+    AutoOverview(ctl, ui, f);
     BeginCard("idle");
     CardTitle(f, "When no game is running", Icon::Lighting);
     int idle = static_cast<int>(ctl.prefs().idle);
@@ -2049,16 +2114,10 @@ void AutoPage(Controller& ctl, UiState& ui, const Fonts& f) {
         "\"Armoury Crate hand-back\" on the Integrations page once to make this silent.",
     };
     Muted("%s", kIdleHelp[idle]);
-    ImGui::Dummy(ImVec2(0, 4 * S()));
-    if (Toggle("Games without dynamic lighting show the screen's colors", &ctl.prefs().screenForUnsupported))
-        ctl.Changed();
-    Muted("LumaBridge watches the screen image (never the game) and runs its colors around the fans. "
-          "Choose per game on the Games List page.");
     EndCard();
 
     if (ctl.prefs().idle == IdleBehavior::Rainbow) MainRainbowCard(ctl, f);
-    BrightnessCard(ctl, f);
-    SetupCard(ctl, ui, f, false);
+    AutoGamesCard(ctl, f);
 }
 
 // ---- Presets --------------------------------------------------------------------------
@@ -2383,41 +2442,10 @@ bool RainbowCard(Controller&, const Fonts& f, Look& p, bool showSpread) {
     return changed;
 }
 
-// Everything to edit a look: effect, presets, speed, and its colors or rainbow. Returns
+// Edit the color or palette first, then the effect, presets and speed. Returns
 // true when it changed.
 bool LookEditor(Controller& ctl, UiState& ui, const Fonts& f, Look& p) {
     bool changed = false;
-    BeginCard("effect");
-    CardTitle(f, "Effect", Icon::Lighting);
-    const float full = ImGui::GetContentRegionAvail().x;
-    if (EffectGrid(&p.effect, full)) {
-        const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
-        if (p.effect == ManualEffect::ColorCycle) p.speedHz = std::min(p.speedHz, 0.5f);
-        else if (e.maxSpeed > 0) p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
-        changed = true;
-    }
-    const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
-    Muted("%s", e.help);
-    ImGui::Dummy(ImVec2(0, 4 * S()));
-    ImGui::TextUnformatted("Presets");
-    changed |= PresetTiles(ctl, p);
-    ImGui::Dummy(ImVec2(0, 4 * S()));
-    if (p.effect == ManualEffect::ColorCycle) {
-        float seconds = 1.f / std::max(p.speedHz, 0.02f);
-        if (LabeledSlider("One full cycle every", &seconds, 2.f, 60.f, "%.0f seconds")) {
-            p.speedHz = 1.f / seconds;
-            changed = true;
-        }
-    } else if (e.maxSpeed > 0) {
-        p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
-        if (LabeledSlider("Speed", &p.speedHz, e.minSpeed, e.maxSpeed, e.speedFmt)) changed = true;
-    }
-    if (p.effect == ManualEffect::RainbowWave || p.effect == ManualEffect::Gradient || p.effect == ManualEffect::Comet) {
-        ImGui::Dummy(ImVec2(0, 2 * S()));
-        if (DirectionRow("look-dir", &p.reverse)) changed = true;
-    }
-    EndCard();
-
     if (IsRainbow(p.effect)) {
         changed |= RainbowCard(ctl, f, p, p.effect == ManualEffect::RainbowWave);
     } else {
@@ -2450,6 +2478,37 @@ bool LookEditor(Controller& ctl, UiState& ui, const Fonts& f, Look& p) {
         }
         EndCard();
     }
+
+    BeginCard("effect");
+    CardTitle(f, "Effect", Icon::Lighting);
+    const float full = ImGui::GetContentRegionAvail().x;
+    if (EffectGrid(&p.effect, full)) {
+        const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
+        if (p.effect == ManualEffect::ColorCycle) p.speedHz = std::min(p.speedHz, 0.5f);
+        else if (e.maxSpeed > 0) p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
+        changed = true;
+    }
+    const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
+    Muted("%s", e.help);
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    ImGui::TextUnformatted("Presets");
+    changed |= PresetTiles(ctl, p);
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    if (p.effect == ManualEffect::ColorCycle) {
+        float seconds = 1.f / std::max(p.speedHz, 0.02f);
+        if (LabeledSlider("One full cycle every", &seconds, 2.f, 60.f, "%.0f seconds")) {
+            p.speedHz = 1.f / seconds;
+            changed = true;
+        }
+    } else if (e.maxSpeed > 0) {
+        p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
+        if (LabeledSlider("Speed", &p.speedHz, e.minSpeed, e.maxSpeed, e.speedFmt)) changed = true;
+    }
+    if (p.effect == ManualEffect::RainbowWave || p.effect == ManualEffect::Gradient || p.effect == ManualEffect::Comet) {
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+        if (DirectionRow("look-dir", &p.reverse)) changed = true;
+    }
+    EndCard();
 
     return changed;
 }
@@ -3848,7 +3907,7 @@ struct SetupItem {
     ImVec2 size;
     int fan = -1;             // fans: which one
     std::string name;         // shown under it, else the device's name
-    enum class Look { Normal, Bar, Gpu, Headset, Controller } look = Look::Normal;
+    enum class Look { Normal, Bar, Gpu, Headset, Controller, Cooler } look = Look::Normal;
     int leds = 8;             // light bars
 };
 
@@ -4246,9 +4305,13 @@ void DrawHeadset(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& 
 }
 
 // DualSense from above: white grip shells around the dark center, with the game's color
-// confined to the two strips beside the touchpad. Buttons stay their physical colors.
-void DrawController(ImDrawList* dl, ImVec2 a, ImVec2 size, Rgb c, bool lit) {
+// confined to the two strips beside the touchpad. Buttons stay their physical colors, except
+// with `live` (the controller page): held buttons turn the accent color, the stick caps move
+// with the sticks, and fingers show on the touchpad.
+void DrawController(ImDrawList* dl, ImVec2 a, ImVec2 size, Rgb c, bool lit, const pad::State* live = nullptr) {
     const float w = size.x, h = size.y;
+    auto held = [&](int b) { return live && live->Down(b); };
+    auto axis = [](uint8_t v) { return std::clamp((static_cast<float>(v) - 128.f) / 127.f, -1.f, 1.f); };
     auto p = [&](float x, float y) { return ImVec2(a.x + x * w, a.y + y * h); };
     const float line = std::max(0.8f * S(), w * 0.006f);
     auto silhouette = [&] {
@@ -4265,8 +4328,9 @@ void DrawController(ImDrawList* dl, ImVec2 a, ImVec2 size, Rgb c, bool lit) {
     // The shoulder buttons sit behind the shell, visible along its top edge.
     for (int side = 0; side < 2; ++side) {
         const float x = side ? 0.75f : 0.10f;
-        dl->AddRectFilled(p(x, 0.04f), p(x + 0.15f, 0.17f), Hex(0x181C24), h * 0.045f);
-        dl->AddLine(p(x + 0.025f, 0.075f), p(x + 0.125f, 0.075f), Hex(0x4B5362), line);
+        const bool on = held(side ? pad::kR1 : pad::kL1);
+        dl->AddRectFilled(p(x, 0.04f), p(x + 0.15f, 0.17f), Hex(on ? kAccent : 0x181C24), h * 0.045f);
+        dl->AddLine(p(x + 0.025f, 0.075f), p(x + 0.125f, 0.075f), Hex(on ? 0xFFFFFF : 0x4B5362), line);
     }
     silhouette();
     dl->PathFillConcave(Hex(0xD3D7DE));
@@ -4291,8 +4355,17 @@ void DrawController(ImDrawList* dl, ImVec2 a, ImVec2 size, Rgb c, bool lit) {
     // The broad touchpad has a sloped lower edge, with long light strips on either side.
     const ImVec2 pad[] = {p(0.33f, 0.14f), p(0.67f, 0.14f), p(0.68f, 0.36f),
                           p(0.64f, 0.42f), p(0.36f, 0.42f), p(0.32f, 0.36f)};
-    dl->AddConvexPolyFilled(pad, 6, Hex(0x303640));
-    dl->AddPolyline(pad, 6, Hex(0x4B5360), ImDrawFlags_Closed, line);
+    const bool padDown = held(pad::kTouchpad);
+    dl->AddConvexPolyFilled(pad, 6, Hex(padDown ? 0x3D3878 : 0x303640));
+    dl->AddPolyline(pad, 6, Hex(padDown ? kAccentHover : 0x4B5360), ImDrawFlags_Closed, padDown ? 2 * line : line);
+    if (live)
+        for (int i = 0; i < 2; ++i) {
+            const pad::Touch& t = live->touch[i];
+            if (!t.down) continue;
+            const ImVec2 at = p(0.34f + 0.32f * std::clamp(t.x / 1919.f, 0.f, 1.f), 0.15f + 0.26f * std::clamp(t.y / 1079.f, 0.f, 1.f));
+            dl->AddCircleFilled(at, w * 0.022f, Hex(i ? kAccent2 : kAccent, 70), 20);
+            dl->AddCircleFilled(at, w * 0.011f, Hex(i ? kAccent2 : kAccent), 16);
+        }
     for (int side = 0; side < 2; ++side) {
         const float sign = side ? 1.f : -1.f;
         const ImVec2 strip[] = {p(0.5f + sign * 0.185f, 0.16f), p(0.5f + sign * 0.195f, 0.36f),
@@ -4304,13 +4377,19 @@ void DrawController(ImDrawList* dl, ImVec2 a, ImVec2 size, Rgb c, bool lit) {
         dl->AddPolyline(strip, 3, lit ? Col(c) : Hex(0x4C5564), ImDrawFlags_None, 1.8f * line);
     }
     // Raised analog sticks: a shaded socket, rubber cap and fine rim.
-    for (float x : {0.375f, 0.625f}) {
+    for (int side = 0; side < 2; ++side) {
+        const float x = side ? 0.625f : 0.375f;
         const ImVec2 center = p(x, 0.59f);
         dl->AddCircleFilled(center, w * 0.081f, Hex(0x080B10), 28);
-        dl->AddCircleFilled(p(x, 0.582f), w * 0.064f, Hex(0x353B46), 28);
-        dl->AddCircle(p(x, 0.582f), w * 0.064f, Hex(0x606978), 28, line);
-        dl->AddCircleFilled(p(x, 0.582f), w * 0.048f, Hex(0x252B35), 28);
-        dl->PathArcTo(p(x, 0.582f), w * 0.054f, 3.8f, 5.6f, 12);
+        // The cap follows the stick inside its socket.
+        const float sx = live ? axis(side ? live->rx : live->lx) * w * 0.022f : 0.f;
+        const float sy = live ? axis(side ? live->ry : live->ly) * w * 0.022f : 0.f;
+        const ImVec2 cap(center.x + sx, p(x, 0.582f).y + sy);
+        const bool click = held(side ? pad::kR3 : pad::kL3);
+        dl->AddCircleFilled(cap, w * 0.064f, Hex(click ? kAccent : 0x353B46), 28);
+        dl->AddCircle(cap, w * 0.064f, Hex(click ? kAccentHover : 0x606978), 28, line);
+        dl->AddCircleFilled(cap, w * 0.048f, Hex(click ? 0x6A5CE0 : 0x252B35), 28);
+        dl->PathArcTo(cap, w * 0.054f, 3.8f, 5.6f, 12);
         dl->PathStroke(Hex(0x48515E), ImDrawFlags_None, line * 0.7f);
     }
     // Four separate D-pad directions, rather than a single cross stamped on the shell.
@@ -4325,17 +4404,21 @@ void DrawController(ImDrawList* dl, ImVec2 a, ImVec2 size, Rgb c, bool lit) {
                      : direction == 1 ? ImVec2(dc.x - y, dc.y + x)
                      : direction == 2 ? ImVec2(dc.x - x, dc.y - y) : ImVec2(dc.x + y, dc.y - x);
         }
-        dl->AddConvexPolyFilled(shape, 6, Hex(0x343A45));
-        dl->AddPolyline(shape, 6, Hex(0x697281), ImDrawFlags_Closed, line * 0.7f);
+        static const int arms[4] = {pad::kUp, pad::kRight, pad::kDown, pad::kLeft};
+        const bool on = held(arms[direction]);
+        dl->AddConvexPolyFilled(shape, 6, Hex(on ? kAccent : 0x343A45));
+        dl->AddPolyline(shape, 6, Hex(on ? kAccentHover : 0x697281), ImDrawFlags_Closed, line * 0.7f);
     }
     // Face-button symbols remain neutral, like the transparent buttons on a DualSense.
     const ImVec2 buttons[] = {p(0.79f, 0.26f), p(0.855f, 0.36f), p(0.79f, 0.46f), p(0.725f, 0.36f)};
     const float radius = w * 0.041f, mark = radius * 0.43f;
     for (int i = 0; i < 4; ++i) {
         const ImVec2 center = buttons[i];
-        dl->AddCircleFilled(center, radius, Hex(0xADB5C2), 20);
-        dl->AddCircle(center, radius, Hex(0x8893A3), 20, line * 0.7f);
-        const ImU32 ink = Hex(0x4E596A);
+        static const int faces[4] = {pad::kTriangle, pad::kCircle, pad::kCross, pad::kSquare};
+        const bool on = held(faces[i]);
+        dl->AddCircleFilled(center, radius, Hex(on ? kAccent : 0xADB5C2), 20);
+        dl->AddCircle(center, radius, Hex(on ? kAccentHover : 0x8893A3), 20, line * 0.7f);
+        const ImU32 ink = Hex(on ? 0xFFFFFF : 0x4E596A);
         if (i == 0) {
             const ImVec2 tri[] = {ImVec2(center.x, center.y - mark), ImVec2(center.x + mark, center.y + mark),
                                   ImVec2(center.x - mark, center.y + mark)};
@@ -4347,36 +4430,39 @@ void DrawController(ImDrawList* dl, ImVec2 a, ImVec2 size, Rgb c, bool lit) {
         } else dl->AddRect(ImVec2(center.x - mark, center.y - mark), ImVec2(center.x + mark, center.y + mark), ink, 0, 0, line * 0.7f);
     }
     // Create / options buttons, speaker holes, center button and microphone mute button.
-    for (float x : {0.275f, 0.725f}) dl->AddRectFilled(p(x - 0.009f, 0.185f), p(x + 0.009f, 0.24f), Hex(0x6A7483), line);
+    for (int side = 0; side < 2; ++side) {
+        const float x = side ? 0.725f : 0.275f;
+        dl->AddRectFilled(p(x - 0.009f, 0.185f), p(x + 0.009f, 0.24f), Hex(held(side ? pad::kOptions : pad::kCreate) ? kAccent : 0x6A7483), line);
+    }
     for (int row = 0; row < 2; ++row)
         for (int i = 0; i < 5; ++i) dl->AddCircleFilled(p(0.46f + i * 0.02f, 0.46f + row * 0.025f), line * 0.45f, Hex(0x6B7481), 8);
-    dl->AddCircleFilled(p(0.5f, 0.59f), w * 0.018f, Hex(0x4C5564), 16);
-    dl->AddRectFilled(p(0.475f, 0.67f), p(0.525f, 0.69f), Hex(0x616A78), line);
+    dl->AddCircleFilled(p(0.5f, 0.59f), w * 0.018f, Hex(held(pad::kPs) ? kAccent : 0x4C5564), 16);
+    dl->AddRectFilled(p(0.475f, 0.67f), p(0.525f, 0.69f), Hex(held(pad::kMute) ? kAmber : 0x616A78), line);
 }
 
 // The canvas. `selectable`: clicking a device selects it for editing (Manual mode).
 // The memory slots drawn filled: as set by hand, else as the system scan says, else a guess.
 
-void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable) {
+void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable, bool overview) {
     Prefs& prefs = ctl.prefs();
     const float W = ImGui::GetContentRegionAvail().x;
-    const float H = std::clamp(W * 0.52f, 300 * S(), 480 * S());
+    float H = std::clamp(W * 0.52f, 300 * S(), 480 * S());
     const ImVec2 o = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(o, ImVec2(o.x + W, o.y + H), Hex(0x0B0E14), 12 * S());
-    for (float x = o.x + 20 * S(); x < o.x + W; x += 24 * S())  // dot grid
-        for (float y = o.y + 20 * S(); y < o.y + H; y += 24 * S()) dl->AddCircleFilled(ImVec2(x, y), 1 * S(), Hex(0x1C2230), 4);
 
     // What's there: the same things the 3D view shows (one model for both), flat.
     const view3d::Model model = view3d::Gather(ctl, ctl.monitor().Snapshot());
     const fx::FanLayout& layout = ctl.config().argbFans;
     std::vector<SetupItem> items;
-    if (model.fansRgb)
-        for (int i = 0; i < layout.Fans(); ++i) items.push_back({FanItem(i), device::kFans, ImVec2(84 * S(), 84 * S()), i, ""});
-    if (model.boardRgb || model.ramRgb || !ctl.devices().empty() || HasRgbRam(ctl, ctl.monitor().Snapshot()))
-        items.push_back({device::kBoard, device::kBoard, ImVec2(240 * S(), 180 * S()), -1, ""});
-    if (model.gpuRgb)
-        items.push_back({"gpu", device::kOther, ImVec2(148 * S(), 68 * S()), -1, model.gpuName, SetupItem::Look::Gpu, 10});
+    if (model.fansRgb || overview)
+        for (int i = 0; i < (model.fansRgb ? layout.Fans() : model.layout.Fans()); ++i)
+            items.push_back({FanItem(i), model.fansRgb ? device::kFans : nullptr, ImVec2(84 * S(), 84 * S()), i, ""});
+    if (model.boardRgb || model.ramRgb || !ctl.devices().empty() || HasRgbRam(ctl, ctl.monitor().Snapshot()) ||
+        (overview && !model.boardName.empty()))
+        items.push_back({device::kBoard, overview && !model.boardRgb ? nullptr : device::kBoard,
+                         ImVec2(240 * S(), 180 * S()), -1, ""});
+    if (model.gpuRgb || (overview && !model.gpuName.empty()))
+        items.push_back({"gpu", model.gpuRgb ? device::kOther : nullptr, ImVec2(148 * S(), 68 * S()), -1, model.gpuName, SetupItem::Look::Gpu, 10});
     // The board and memory as the system scan found them. The memory is drawn in the board's
     // slots (and selected by clicking the sticks); lit only when RAM lighting is on.
     const SetupHardware hw = DetectSetup(ctl.monitor().Snapshot().smbios);
@@ -4391,14 +4477,32 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable) {
     if (model.controller)
         items.push_back({"controller", model.controllerGear.device, ImVec2(132 * S(), 84 * S()), -1, model.controllerGear.name,
                          SetupItem::Look::Controller, 1});
+    if (overview && model.aio)
+        items.push_back({"cooler", nullptr, ImVec2(150 * S(), 70 * S()), -1, model.aio->name, SetupItem::Look::Cooler});
     for (size_t i = 0; i < model.others.size(); ++i)
         items.push_back({"other" + std::to_string(i), model.others[i].device, ImVec2(120 * S(), 26 * S()), -1, model.others[i].name,
                          SetupItem::Look::Bar, model.others[i].leds});
 
+    // Auto uses a fitted overview rather than saved drag positions, so every device stays visible.
+    const int columns = std::max(1, static_cast<int>(W / (160 * S())));
+    const float cellW = W / columns, cellH = 124 * S();
+    if (overview) {
+        H = std::max(350 * S(), std::max(1, (static_cast<int>(items.size()) + columns - 1) / columns) * cellH + 12 * S());
+        for (auto& it : items) {
+            const float fit = std::min({1.f, (cellW - 24 * S()) / it.size.x, (cellH - 40 * S()) / it.size.y});
+            it.size.x *= fit;
+            it.size.y *= fit;
+        }
+    }
+    dl->AddRectFilled(o, ImVec2(o.x + W, o.y + H), Hex(0x0B0E14), 12 * S());
+    if (!overview)
+        for (float x = o.x + 20 * S(); x < o.x + W; x += 24 * S())
+            for (float y = o.y + 20 * S(); y < o.y + H; y += 24 * S()) dl->AddCircleFilled(ImVec2(x, y), 1 * S(), Hex(0x1C2230), 4);
+
     // Live colors.
     const double t = ImGui::GetTime();
     std::vector<Rgb> fanLeds, boardLeds, mouseLeds(8);
-    const fx::Params* fanP = LiveParams(ctl, device::kFans);
+    const fx::Params* fanP = model.fansRgb ? LiveParams(ctl, device::kFans) : nullptr;
     if (fanP) {
         fx::RenderFans(*fanP, t, layout, &fanLeds);
         const double level = LiveLevel(ctl, device::kFans);
@@ -4406,7 +4510,7 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable) {
     } else {
         fanLeds.assign(static_cast<size_t>(layout.TotalLeds()), Rgb{50, 54, 64});
     }
-    const fx::Params* boardP = LiveParams(ctl, device::kBoard);
+    const fx::Params* boardP = model.boardRgb ? LiveParams(ctl, device::kBoard) : nullptr;
     const int nBoard = BoardLedCount(ctl);
     boardLeds.resize(static_cast<size_t>(nBoard));
     for (int i = 0; i < nBoard; ++i)
@@ -4427,16 +4531,21 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable) {
     };
 
     // The item being dragged goes on top.
-    std::stable_sort(items.begin(), items.end(), [&](const SetupItem& a, const SetupItem& b) {
-        return (a.item == ui.dragItem2d) < (b.item == ui.dragItem2d);
-    });
+    if (!overview)
+        std::stable_sort(items.begin(), items.end(), [&](const SetupItem& a, const SetupItem& b) {
+            return (a.item == ui.dragItem2d) < (b.item == ui.dragItem2d);
+        });
+    int index = 0;
     ImGui::PushID("setup");
     for (const SetupItem& it : items) {
-        const ImVec2 a = rectOf(it);
+        const int cell = index++;
+        const ImVec2 a = overview ? ImVec2(o.x + (cell % columns) * cellW + (cellW - it.size.x) / 2,
+                                         o.y + 8 * S() + (cell / columns) * cellH + (cellH - 36 * S() - it.size.y) / 2)
+                                 : rectOf(it);
         ImGui::SetCursorScreenPos(a);
         ImGui::InvisibleButton(it.item.c_str(), it.size);
         const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
-        if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3 * S())) {
+        if (!overview && active && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3 * S())) {
             ui.dragItem2d = it.item;
             Spot s = SetupSpot(prefs, it.item);
             // From the item's clamped place, so a drag never starts with a jump.
@@ -4447,11 +4556,11 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable) {
         // On the board, the memory sticks are their own device.
         ImVec2 ra, rb;
         RamArea(a, it.size, &ra, &rb);
-        const bool isBoard = it.device && it.device == std::string(device::kBoard);
+        const bool isBoard = it.item == device::kBoard;
         auto inRam = [&](ImVec2 m) { return isBoard && ramOn && m.x >= ra.x && m.x <= rb.x && m.y >= ra.y && m.y <= rb.y; };
         const char* target = inRam(ImGui::GetIO().MouseClickedPos[0]) ? device::kRam : it.device;  // nullptr: not lit, can't be edited
         if (ImGui::IsItemDeactivated()) {
-            if (ui.dragItem2d == it.item) {
+            if (!overview && ui.dragItem2d == it.item) {
                 ui.dragItem2d.clear();
                 ctl.Changed();  // save the layout
             } else if (selectable && target) {
@@ -4459,7 +4568,7 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable) {
             }
         }
         const bool hoverRam = hovered && inRam(ImGui::GetIO().MousePos);
-        if (hovered || active) ImGui::SetMouseCursor(active ? ImGuiMouseCursor_ResizeAll : ImGuiMouseCursor_Hand);
+        if (!overview && (hovered || active)) ImGui::SetMouseCursor(active ? ImGuiMouseCursor_ResizeAll : ImGuiMouseCursor_Hand);
 
         const ImVec2 b(a.x + it.size.x, a.y + it.size.y);
         auto isDev = [&](const char* id) { return it.device && std::strcmp(it.device, id) == 0; };
@@ -4467,7 +4576,21 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable) {
         else if (it.look == SetupItem::Look::Gpu) DrawGpu2d(dl, a, it.size, Leds2d(ctl, it.device, t, it.leds));
         else if (it.look == SetupItem::Look::Headset) DrawHeadset(dl, a, it.size, Leds2d(ctl, it.device, t, 2));
         else if (it.look == SetupItem::Look::Controller) DrawController(dl, a, it.size, Leds2d(ctl, it.device, t, 1)[0], it.device && LiveParams(ctl, it.device));
-        else if (isDev(device::kFans)) DrawFan(dl, a, it.size, fanLeds, it.fan, layout.LedsPerFan());
+        else if (it.look == SetupItem::Look::Cooler) {
+            const ImVec2 radiator(a.x, a.y + it.size.y * 0.1f);
+            const float side = it.size.y * 0.7f;
+            const std::vector<Rgb> dark(12, Rgb{50, 54, 64});
+            DrawFan(dl, radiator, ImVec2(side, side), dark, 0, 12);
+            DrawFan(dl, ImVec2(radiator.x + side + 2 * S(), radiator.y), ImVec2(side, side), dark, 0, 12);
+            const ImVec2 pump(a.x + it.size.x - side * 0.35f, a.y + it.size.y * 0.65f);
+            dl->AddBezierCubic(ImVec2(radiator.x + side, radiator.y + side),
+                               ImVec2(radiator.x + side, a.y + it.size.y), ImVec2(pump.x, a.y + it.size.y),
+                               pump, Hex(0x697384), 3 * S());
+            dl->AddCircleFilled(pump, side * 0.35f, Hex(0x353C4B), 24);
+            dl->AddCircleFilled(pump, side * 0.27f, Hex(kTrack), 24);
+            dl->AddCircle(pump, side * 0.35f, Hex(0x697384), 24, S());
+        }
+        else if (it.fan >= 0) DrawFan(dl, a, it.size, fanLeds, it.fan, layout.LedsPerFan());
         else if (it.item == device::kBoard)
             DrawBoard(dl, a, it.size, boardLeds, hw, slots, ramOn, LiveParams(ctl, device::kRam), t, LiveLevel(ctl, device::kRam));
         else if (it.item == device::kMouse) {
@@ -4498,12 +4621,14 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable) {
             if (ramSelected || hoverRam)
                 dl->AddRect(ImVec2(ra.x - 5 * S(), ra.y - 4 * S()), ImVec2(rb.x + 5 * S(), rb.y + 4 * S()),
                             Hex(ramSelected ? kAccentHover : kBorder), 6 * S(), 0, (ramSelected ? 2.f : 1.2f) * S());
-            const char* name = hw.ramName.empty() ? device::Name(device::kRam) : hw.ramName.c_str();
-            const ImVec2 ns = ImGui::CalcTextSize(name);
-            const ImVec2 np((ra.x + rb.x) / 2 - ns.x / 2, rb.y + 6 * S());
-            dl->AddText(np, Hex(ramSelected ? kText : kMuted), name);
-            if (own(device::kRam))
-                dl->AddCircleFilled(ImVec2(np.x + ns.x + 7 * S(), np.y + ns.y / 2), 3 * S(), Hex(kAccentHover), 12);
+            if (!overview) {
+                const char* name = hw.ramName.empty() ? device::Name(device::kRam) : hw.ramName.c_str();
+                const ImVec2 ns = ImGui::CalcTextSize(name);
+                const ImVec2 np((ra.x + rb.x) / 2 - ns.x / 2, rb.y + 6 * S());
+                dl->AddText(np, Hex(ramSelected ? kText : kMuted), name);
+                if (own(device::kRam))
+                    dl->AddCircleFilled(ImVec2(np.x + ns.x + 7 * S(), np.y + ns.y / 2), 3 * S(), Hex(kAccentHover), 12);
+            }
         }
         // The name under it; fans are numbered.
         char label[96];
@@ -4511,9 +4636,27 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable) {
         else if (!it.name.empty()) snprintf(label, sizeof label, "%s", it.name.c_str());
         else if (isBoard && !hw.boardName.empty()) snprintf(label, sizeof label, "%s", hw.boardName.c_str());
         else snprintf(label, sizeof label, "%s", it.device ? device::Name(it.device) : "");
+        if (overview) {
+            if (hovered) ImGui::SetTooltip("%s%s%s", label, isBoard && !hw.ramName.empty() ? "\n" : "",
+                                          isBoard ? hw.ramName.c_str() : "");
+            if (isBoard) snprintf(label, sizeof label, "%s", hw.ramName.empty() ? "Motherboard" : "Motherboard + RAM");
+            std::string clipped = label;
+            if (ImGui::CalcTextSize(clipped.c_str()).x > cellW - 20 * S()) {
+                while (!clipped.empty() && ImGui::CalcTextSize((clipped + "...").c_str()).x > cellW - 20 * S()) {
+                    // Remove a complete UTF-8 character before appending the ellipsis.
+                    size_t last = clipped.size() - 1;
+                    while (last > 0 && (static_cast<unsigned char>(clipped[last]) & 0xC0) == 0x80) --last;
+                    clipped.erase(last);
+                }
+                clipped += "...";
+            }
+            snprintf(label, sizeof label, "%s", clipped.c_str());
+        }
         const ImVec2 ts = ImGui::CalcTextSize(label);
-        dl->AddText(ImVec2(a.x + it.size.x / 2 - ts.x / 2, b.y + 3 * S()), Hex(selected ? kText : kMuted), label);
-        if (it.device && own(it.device)) dl->AddCircleFilled(ImVec2(a.x + it.size.x / 2 + ts.x / 2 + 7 * S(), b.y + 3 * S() + ts.y / 2), 3 * S(),
+        dl->AddText(ImVec2(a.x + it.size.x / 2 - ts.x / 2,
+                          overview ? o.y + 8 * S() + (cell / columns) * cellH + cellH - 30 * S() : b.y + 3 * S()),
+                    Hex(selected ? kText : kMuted), label);
+        if (!overview && it.device && own(it.device)) dl->AddCircleFilled(ImVec2(a.x + it.size.x / 2 + ts.x / 2 + 7 * S(), b.y + 3 * S() + ts.y / 2), 3 * S(),
                                      Hex(kAccentHover), 12);
     }
     ImGui::PopID();
@@ -4537,47 +4680,47 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
     SetupView(ctl, ui, selectable ? view3d::Mode::Lighting : view3d::Mode::Preview, h);
 }
 
-void SetupCard(Controller& ctl, UiState& ui, const Fonts& f, bool selectable) {
-    BeginCard("setup");
-    ImGui::PushFont(f.bold);
-    const bool expanded = ImGui::CollapsingHeader("Your setup");
-    ImGui::PopFont();
-    if (!expanded) {
-        Muted("Expand to preview your devices in 2D or 3D.");
-        EndCard();
-        return;
-    }
-    int view = ctl.prefs().lighting3d ? 1 : 0;
-    const char* views[] = {"2D", "3D"};
-    if (Segmented("view2d3d", &view, views, 2, 120 * S())) {
-        ctl.prefs().lighting3d = view == 1;
-        ctl.Changed();
-    }
-    const bool flat = !ctl.prefs().lighting3d;
-    Muted(flat && selectable ? "Your lit devices, flat. Drag them where you like; click one to give it its own lighting (a dot "
-                 "next to the name means it has its own)."
-          : selectable ? "Everything LumaBridge found, with its live lighting. Click a lit part to give it its own "
-                         "lighting; grey parts have no RGB LumaBridge can control."
-                       : "Everything LumaBridge found, with its live lighting. Games light them all alike.");
-    ImGui::Dummy(ImVec2(0, 4 * S()));
-    SetupCanvas(ctl, ui, selectable);
-    if (flat) {
-        if (Btn("Reset layout")) {  // the 2D places only (the desk's are My setup's)
+void ManualOverview(Controller& ctl, UiState& ui, const Fonts& f) {
+    const bool side = ImGui::GetContentRegionAvail().x >= 760 * S();
+    if (ImGui::BeginTable("manual-overview", side ? 2 : 1, ImGuiTableFlags_SizingStretchProp)) {
+        if (side) {
+            ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthFixed, 280 * S());
+            ImGui::TableSetupColumn("Setup", ImGuiTableColumnFlags_WidthStretch);
+        }
+        const bool native = !ui.lightTarget.empty() && DeviceNative(ctl.prefs(), ui.lightTarget);
+        ImGui::TableNextColumn();
+        ManualColorCard(ctl, ui, f);
+        if (side && !native) BrightnessCard(ctl, f, ui.lightTarget);
+        ImGui::TableNextColumn();
+        BeginCard("manual-setup");
+        const ImVec2 top = ImGui::GetCursorPos();
+        CardTitle(f, "Your setup", Icon::Grid);
+        const ImVec2 below = ImGui::GetCursorPos();
+        ImGui::SetCursorPos(ImVec2(ImGui::GetContentRegionMax().x - 120 * S(), top.y - 4 * S()));
+        int view = ctl.prefs().lighting3d ? 1 : 0;
+        const char* views[] = {"2D", "3D"};
+        if (Segmented("view2d3d", &view, views, 2, 120 * S())) {
+            ctl.prefs().lighting3d = view == 1;
+            ctl.Changed();
+        }
+        ImGui::SetCursorPos(below);
+        Muted(ctl.prefs().lighting3d ? "Click a lit component to edit its lighting."
+                                    : "Drag devices to arrange your setup. Click a lit component to edit its lighting.");
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+        if (ctl.prefs().lighting3d) SetupCanvas(ctl, ui, true);
+        else SetupCanvas2d(ctl, ui, true);
+        if (ctl.prefs().lighting3d) {
+            if (SmallBtn("Reset view")) ui.lightView.camSet = false;
+        } else if (SmallBtn("Reset layout")) {
             auto& spots = ctl.prefs().setupSpots;
             for (auto it = spots.begin(); it != spots.end();)
                 it = it->first.rfind("desk:", 0) == 0 ? std::next(it) : spots.erase(it);
             ctl.Changed();
         }
-        if (selectable) {
-            ImGui::SameLine();
-            Muted("The memory sits in the motherboard's slots: click the sticks to select it.");
-        }
-    } else {
-        if (Btn("Reset view")) (selectable ? ui.lightView : ui.guideView).camSet = false;
-        ImGui::SameLine();
-        Muted("Move things around and correct the fans on the My setup page.");
+        EndCard();
+        if (!side && !native) BrightnessCard(ctl, f, ui.lightTarget);
+        ImGui::EndTable();
     }
-    EndCard();
 }
 
 // ---- My setup: the PC and the desk in 3D --------------------------------------------------
@@ -4876,11 +5019,9 @@ void NativeNote(const std::string& id) {
         Muted("%s lights it again. LumaBridge leaves it alone, games included.", NativeApp(id));
 }
 
-// Lighting > Manual: the saved color and editing controls first, then the optional preview.
+// Lighting > Manual: the selected color and setup side by side, with editing controls below.
 void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
     Prefs& p = ctl.prefs();
-    ManualColorCard(ctl, ui, f);
-
     // Which lighting to edit: everything, or one device.
     std::vector<std::string> ids{""};
     std::vector<const char*> labels{"All devices"};
@@ -4892,7 +5033,20 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
     for (size_t i = 0; i < ids.size(); ++i)
         if (ids[i] == ui.lightTarget) sel = static_cast<int>(i);
     ui.lightTarget = ids[static_cast<size_t>(sel)];  // a device that was turned off: back to all
-    if (Segmented("target", &sel, labels.data(), static_cast<int>(labels.size()), ImGui::GetContentRegionAvail().x))
+    ManualOverview(ctl, ui, f);
+    // A click in the preview can select another device in this frame.
+    for (size_t i = 0; i < ids.size(); ++i)
+        if (ids[i] == ui.lightTarget) sel = static_cast<int>(i);
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted("Lighting to edit");
+    ImGui::PopFont();
+    float targetWidth = 0;
+    for (const char* label : labels) targetWidth = std::max(targetWidth, ImGui::CalcTextSize(label).x + 28 * S());
+    if (targetWidth * labels.size() > ImGui::GetContentRegionAvail().x) {
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::Combo("##target", &sel, labels.data(), static_cast<int>(labels.size())))
+            ui.lightTarget = ids[static_cast<size_t>(sel)];
+    } else if (Segmented("target", &sel, labels.data(), static_cast<int>(labels.size()), ImGui::GetContentRegionAvail().x))
         ui.lightTarget = ids[static_cast<size_t>(sel)];
     ImGui::Dummy(ImVec2(0, 6 * S()));
 
@@ -4910,7 +5064,14 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
         int mode = d.native ? 2 : d.own ? 1 : 0;
         const std::string back = std::string("Back to ") + NativeApp(ui.lightTarget);
         const char* modes[] = {"Same as all devices", "Its own lighting", back.c_str()};
-        if (Segmented("own", &mode, modes, 3, std::min(620 * S(), ImGui::GetContentRegionAvail().x))) {
+        bool modeChanged;
+        if (ImGui::GetContentRegionAvail().x < 640 * S()) {
+            ImGui::SetNextItemWidth(-1);
+            modeChanged = ImGui::Combo("##own", &mode, modes, 3);
+        } else {
+            modeChanged = Segmented("own", &mode, modes, 3, std::min(620 * S(), ImGui::GetContentRegionAvail().x));
+        }
+        if (modeChanged) {
             if (mode == 1 && !d.own && d.look == Look{}) d.look = MainLook(p);  // start from what it shows now
             if (mode != 2) d.own = mode == 1;
             SetNative(ctl, ui.lightTarget, mode == 2);
@@ -4933,8 +5094,6 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
         EndCard();
         if (d.own && !d.native && LookEditor(ctl, ui, f, d.look)) ctl.Changed();
     }
-    if (ui.lightTarget.empty() || !DeviceNative(p, ui.lightTarget)) BrightnessCard(ctl, f, ui.lightTarget);
-    SetupCard(ctl, ui, f, true);
 }
 
 void FansCard(Controller& ctl, const Fonts& f) {
@@ -5205,6 +5364,196 @@ void PadModelView(const pad::State& st, Rgb lightbar, bool lit, float height) {
     dl->PopClipRect();
 }
 
+// The controller's state a few times a second, for numbers: at the screen's rate they change
+// too quickly to read. The drawings use the live state.
+const pad::State& SlowState(const pad::State& now) {
+    static pad::State held;
+    static double heldAt = -1;
+    const double t = ImGui::GetTime();
+    if (t - heldAt > 0.2 || heldAt < 0) {
+        held = now;
+        heldAt = t;
+    }
+    return held;
+}
+
+// A box with a small title, for one group of inputs under the 2D controller.
+void InputPanel(ImDrawList* dl, ImVec2 a, ImVec2 size, const char* title) {
+    dl->AddRectFilled(a, ImVec2(a.x + size.x, a.y + size.y), Hex(0x10141B), 10 * S());
+    dl->AddRect(a, ImVec2(a.x + size.x, a.y + size.y), Hex(kBorder, 200), 10 * S());
+    dl->AddText(ImVec2(a.x + 12 * S(), a.y + 9 * S()), Hex(kMuted), title);
+}
+
+// Text centered on `x`.
+void CenteredText(ImDrawList* dl, float x, float y, ImU32 col, const char* text) {
+    dl->AddText(ImVec2(x - ImGui::CalcTextSize(text).x / 2, y), col, text);
+}
+
+// A trigger as a vertical bar that fills from the bottom as it's squeezed.
+void TriggerBar(ImDrawList* dl, ImVec2 a, ImVec2 size, uint8_t value, const char* label, int number) {
+    const ImVec2 b(a.x + size.x, a.y + size.y);
+    const float r = size.x / 2;
+    CenteredText(dl, a.x + size.x / 2, a.y - ImGui::GetTextLineHeight() - 6 * S(), Hex(value > 0 ? kText : kMuted), label);
+    dl->AddRectFilled(a, b, Hex(kTrack), r);
+    const float fill = size.y * value / 255.f;
+    if (fill > 1) dl->AddRectFilled(ImVec2(a.x, b.y - fill), b, Hex(kAccent), r);
+    dl->AddRect(a, b, Hex(kBorder), r);
+    if (number >= 0) {
+        char text[8];
+        snprintf(text, sizeof text, "%d", number);
+        CenteredText(dl, a.x + size.x / 2, b.y + 6 * S(), Hex(kText), text);
+    }
+}
+
+// A stick: its round travel with crosshairs, and a dot where it is (clicked: a lit ring).
+void StickPanel(ImDrawList* dl, ImVec2 a, ImVec2 size, const char* title, uint8_t x, uint8_t y, bool click,
+                const pad::State* numbers, bool right) {
+    InputPanel(dl, a, size, title);
+    const float top = a.y + 30 * S(), bottom = a.y + size.y - (numbers ? 30 * S() : 12 * S());
+    const float r = std::max(10.f, std::min(size.x - 24 * S(), bottom - top) / 2);
+    const ImVec2 c(a.x + size.x / 2, (top + bottom) / 2);
+    dl->AddCircleFilled(c, r, Hex(0x0A0D12), 40);
+    dl->AddCircle(c, r, Hex(click ? kAccentHover : kBorder), 40, click ? 2.5f * S() : 1.f * S());
+    dl->AddCircle(c, r * 0.5f, Hex(kBorder, 110), 32);
+    dl->AddLine(ImVec2(c.x - r, c.y), ImVec2(c.x + r, c.y), Hex(kBorder, 140));
+    dl->AddLine(ImVec2(c.x, c.y - r), ImVec2(c.x, c.y + r), Hex(kBorder, 140));
+    auto axis = [](uint8_t v) { return std::clamp((static_cast<float>(v) - 128.f) / 127.f, -1.f, 1.f); };
+    const ImVec2 d(c.x + axis(x) * (r - 6 * S()), c.y + axis(y) * (r - 6 * S()));
+    dl->AddLine(c, d, Hex(kAccent, 140), 2 * S());
+    dl->AddCircleFilled(d, 7 * S(), Hex(click ? kAccentHover : kAccent), 20);
+    dl->AddCircle(d, 7 * S(), Hex(0xFFFFFF, 90), 20, 1.f * S());
+    if (click) dl->AddText(ImVec2(a.x + size.x - 30 * S(), a.y + 9 * S()), Hex(kAccentHover), right ? "R3" : "L3");
+    if (numbers) {
+        char text[32];
+        const int nx = right ? numbers->rx : numbers->lx, ny = right ? numbers->ry : numbers->ly;
+        snprintf(text, sizeof text, "X %d   Y %d", nx - 128, ny - 128);
+        CenteredText(dl, c.x, a.y + size.y - 24 * S(), Hex(kText), text);
+    }
+}
+
+// The touchpad, to scale, with each finger where it touches (and lit edges while clicked).
+void TouchPanel(ImDrawList* dl, ImVec2 a, ImVec2 size, const pad::State& st, const pad::State* numbers) {
+    InputPanel(dl, a, size, "Touchpad");
+    const float top = a.y + 30 * S(), bottom = a.y + size.y - (numbers ? 30 * S() : 12 * S());
+    float w = size.x - 24 * S(), h = w * 1080.f / 1920.f;
+    if (h > bottom - top) {
+        h = bottom - top;
+        w = h * 1920.f / 1080.f;
+    }
+    const ImVec2 p0(a.x + (size.x - w) / 2, (top + bottom - h) / 2), p1(p0.x + w, p0.y + h);
+    const bool clicked = st.Down(pad::kTouchpad);
+    dl->AddRectFilled(p0, p1, Hex(clicked ? 0x2C2860 : 0x262B35), 6 * S());
+    dl->AddRect(p0, p1, Hex(clicked ? kAccentHover : kBorder), 6 * S(), 0, clicked ? 2.f * S() : 1.f * S());
+    for (int i = 0; i < 2; ++i) {
+        const pad::Touch& t = st.touch[i];
+        if (!t.down) continue;
+        const ImVec2 at(p0.x + w * std::clamp(t.x / 1919.f, 0.f, 1.f), p0.y + h * std::clamp(t.y / 1079.f, 0.f, 1.f));
+        const unsigned col = i ? kAccent2 : kAccent;
+        dl->AddCircleFilled(at, 11 * S(), Hex(col, 60), 24);
+        dl->AddCircleFilled(at, 6 * S(), Hex(col), 20);
+        CenteredText(dl, at.x, at.y - 26 * S(), Hex(col), i ? "2" : "1");
+    }
+    if (numbers) {
+        std::string text;
+        for (int i = 0; i < 2; ++i) {
+            if (!numbers->touch[i].down) continue;
+            if (!text.empty()) text += "    ";
+            text += std::to_string(i + 1) + ": " + std::to_string(numbers->touch[i].x) + ", " + std::to_string(numbers->touch[i].y);
+        }
+        CenteredText(dl, a.x + size.x / 2, a.y + size.y - 24 * S(), Hex(text.empty() ? kMuted : kText),
+                     text.empty() ? "No finger" : text.c_str());
+    }
+}
+
+// Gyroscope and accelerometer: one bar per axis, growing either way from the middle.
+void MotionPanel(ImDrawList* dl, ImVec2 a, ImVec2 size, const pad::State& st, const pad::State* numbers) {
+    InputPanel(dl, a, size, "Motion");
+    static const char* names[6] = {"Gyro X", "Gyro Y", "Gyro Z", "Accel X", "Accel Y", "Accel Z"};
+    const float top = a.y + 32 * S(), rowH = (size.y - 32 * S() - 10 * S()) / 6;
+    const float labelW = 64 * S(), numberW = numbers ? 56 * S() : 0;
+    const float x0 = a.x + 12 * S() + labelW, x1 = a.x + size.x - 12 * S() - numberW;
+    for (int i = 0; i < 6; ++i) {
+        const float y = top + rowH * i, mid = y + rowH / 2;
+        const int value = i < 3 ? st.gyro[i] : st.accel[i - 3];
+        const float range = i < 3 ? 8000.f : 10000.f;  // raw units; about 1.2 g for the accelerometer
+        dl->AddText(ImVec2(a.x + 12 * S(), mid - ImGui::GetTextLineHeight() / 2), Hex(kMuted), names[i]);
+        const float bh = std::min(8 * S(), rowH * 0.5f), cx = (x0 + x1) / 2;
+        dl->AddRectFilled(ImVec2(x0, mid - bh / 2), ImVec2(x1, mid + bh / 2), Hex(kTrack), bh / 2);
+        const float fill = std::clamp(value / range, -1.f, 1.f) * (x1 - x0) / 2;
+        if (std::fabs(fill) > 0.5f)
+            dl->AddRectFilled(ImVec2(std::min(cx, cx + fill), mid - bh / 2), ImVec2(std::max(cx, cx + fill), mid + bh / 2),
+                              Hex(i < 3 ? kAccent : kAccent2), bh / 2);
+        dl->AddLine(ImVec2(cx, mid - bh), ImVec2(cx, mid + bh), Hex(kMuted, 120));
+        if (numbers) {
+            char text[16];
+            snprintf(text, sizeof text, "%d", i < 3 ? numbers->gyro[i] : numbers->accel[i - 3]);
+            dl->AddText(ImVec2(a.x + size.x - 12 * S() - ImGui::CalcTextSize(text).x, mid - ImGui::GetTextLineHeight() / 2),
+                        Hex(kText), text);
+        }
+    }
+}
+
+// Every button as a chip, lit while held.
+void ButtonChips(const pad::State& st) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float W = ImGui::GetContentRegionAvail().x, gap = 6 * S(), h = ImGui::GetTextLineHeight() + 8 * S();
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    float x = 0, y = 0;
+    for (int b = 0; b < pad::kButtonCount; ++b) {
+        if (b == pad::kL2 || b == pad::kR2) continue;  // the trigger bars show them
+        if (b == pad::kMute && st.model == pad::Model::DualShock4) continue;
+        const char* name = pad::ButtonName(st.model, b);
+        const float w = ImGui::CalcTextSize(name).x + 20 * S();
+        if (x > 0 && x + w > W) {
+            x = 0;
+            y += h + gap;
+        }
+        const bool on = st.Down(b);
+        const ImVec2 a(o.x + x, o.y + y), c(a.x + w, a.y + h);
+        dl->AddRectFilled(a, c, Hex(on ? kAccent : 0x10141B), h / 2);
+        dl->AddRect(a, c, Hex(on ? kAccentHover : kBorder), h / 2);
+        dl->AddText(ImVec2(a.x + 10 * S(), a.y + 4 * S()), Hex(on ? 0xFFFFFF : kMuted), name);
+        x += w + gap;
+    }
+    ImGui::Dummy(ImVec2(W, y + h));
+}
+
+// Every input at once: the controller from above with what's held lit, the triggers either
+// side, then the sticks, touchpad and motion in their own boxes, and every button by name.
+// `numbers`: also the raw values (a few times a second).
+void PadView2d(const pad::State& st, Rgb lightbar, bool lit, bool numbers) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float W = ImGui::GetContentRegionAvail().x;
+    const pad::State* slow = numbers ? &SlowState(st) : nullptr;
+
+    // The controller with its triggers either side.
+    const float cw = std::min(W - 170 * S(), 540 * S()), ch = cw * 84.f / 132.f;
+    const float stageH = ch + 2 * 34 * S();
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    dl->AddRectFilledMultiColor(o, ImVec2(o.x + W, o.y + stageH), Hex(0x141A26), Hex(0x141A26), Hex(0x0B0E14), Hex(0x0B0E14));
+    const ImVec2 ca(o.x + (W - cw) / 2, o.y + 34 * S());
+    DrawController(dl, ca, ImVec2(cw, ch), lightbar, lit, &st);
+    const ImVec2 bar(18 * S(), ch * 0.72f);
+    const float barY = ca.y + ch * 0.1f;
+    TriggerBar(dl, ImVec2(ca.x - 54 * S() - bar.x, barY), bar, st.l2, "L2", slow ? slow->l2 : -1);
+    TriggerBar(dl, ImVec2(ca.x + cw + 54 * S(), barY), bar, st.r2, "R2", slow ? slow->r2 : -1);
+    ImGui::Dummy(ImVec2(W, stageH));
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+
+    // Sticks, touchpad and motion: four across, or two by two when narrow.
+    const int cols = W >= 760 * S() ? 4 : 2, rows = 4 / cols;
+    const float gap = 10 * S(), pw = (W - gap * (cols - 1)) / cols, ph = 190 * S();
+    const ImVec2 g = ImGui::GetCursorScreenPos();
+    auto cell = [&](int i) { return ImVec2(g.x + (i % cols) * (pw + gap), g.y + (i / cols) * (ph + gap)); };
+    StickPanel(dl, cell(0), ImVec2(pw, ph), "Left stick", st.lx, st.ly, st.Down(pad::kL3), slow, false);
+    StickPanel(dl, cell(1), ImVec2(pw, ph), "Right stick", st.rx, st.ry, st.Down(pad::kR3), slow, true);
+    TouchPanel(dl, cell(2), ImVec2(pw, ph), st, slow);
+    MotionPanel(dl, cell(3), ImVec2(pw, ph), st, slow);
+    ImGui::Dummy(ImVec2(W, rows * ph + (rows - 1) * gap));
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    ButtonChips(st);
+}
+
 // The lightbar's color: a lit swatch, its hex and RGB values (refreshed a few times a second so
 // a moving effect stays readable), and whether LumaBridge is lighting it.
 void LightbarRow(Controller& ctl, Rgb c, bool lit) {
@@ -5282,7 +5631,7 @@ void PadLiveCard(Controller& ctl, const Fonts& f, const PadInput::Snapshot& snap
         return;
     }
     const pad::State& st = snap.state;
-    Muted("%s by %s. Press, push and squeeze: the model follows.%s", pad::ModelName(st.model),
+    Muted("%s by %s. Press, push and squeeze: the view follows.%s", pad::ModelName(st.model),
           snap.bluetooth ? "Bluetooth" : "USB cable", st.model == pad::Model::DualShock4 ? " (Drawn as a DualSense.)" : "");
     if (snap.bluetooth && snap.reports > 60 && st.battery < 0)
         Muted("Only the short Bluetooth report is arriving, so there is no battery or motion data. Reconnect the controller.");
@@ -5291,18 +5640,36 @@ void PadLiveCard(Controller& ctl, const Fonts& f, const PadInput::Snapshot& snap
     const Rgb color = view3d::Leds(ctl, device::kController, ImGui::GetTime(), 1)[0];
     const bool lit = ctl.prefs().dualsenseController && ctl.dualsense().state() == DualSenseOutput::State::Active &&
                      LiveParams(ctl, device::kController) != nullptr;
-    PadModelView(st, color, lit, 320 * S());
-    ImGui::Dummy(ImVec2(0, 6 * S()));
-    LightbarRow(ctl, lit ? color : Rgb{50, 54, 64}, lit);
-
-    ImGui::Dummy(ImVec2(0, 6 * S()));
+    // The numbers switch, with the 2D / 3D choice across from it. 2D shows every input at
+    // once; 3D is the model alone.
+    const float lineEnd = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
     bool values = ctl.prefs().padShowValues;
-    if (Toggle("Show live readings", &values)) {
+    if (Toggle("Show numbers", &values)) {
         ctl.prefs().padShowValues = values;
         ctl.Changed();
     }
-    if (values) PadReadings(st);
-    else Muted("Stick, trigger and motion numbers. Off by default: they change many times a second.");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Stick, trigger, touch and motion values, a few times a second.\n"
+                          "Off by default: they change many times a second.");
+    ImGui::SameLine(lineEnd - 140 * S());
+    int view = ctl.prefs().padView3d ? 1 : 0;
+    const char* views[] = {"2D", "3D"};
+    if (Segmented("pad-view", &view, views, 2, 140 * S())) {
+        ctl.prefs().padView3d = view == 1;
+        ctl.Changed();
+    }
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    if (view == 1) {
+        PadModelView(st, color, lit, 320 * S());
+        if (values) {
+            ImGui::Dummy(ImVec2(0, 6 * S()));
+            PadReadings(st);
+        }
+    } else {
+        PadView2d(st, color, lit, values);
+    }
+    ImGui::Dummy(ImVec2(0, 8 * S()));
+    LightbarRow(ctl, lit ? color : Rgb{50, 54, 64}, lit);
     EndCard();
 }
 
@@ -8379,7 +8746,9 @@ std::vector<notify::Notice> CollectNotices(Controller& ctl, Integrations& in, Ui
     for (const auto& d : ctl.presence().inventory.devices) f.windowsProblems += d.problem ? 1 : 0;
     EnsureIntegrations(ctl, in, ui);
     for (const auto& it : in.list())
-        f.integrations.push_back({it.id, it.name, it.detail, it.state == IntegrationState::Problem});
+        // GameSense's Conflict means SteelSeries GG isn't answering, not a runtime to replace.
+        f.integrations.push_back({it.id, it.name, it.detail, it.state == IntegrationState::Problem,
+                                  it.state == IntegrationState::Conflict && it.id != "gamesense"});
     const PadInput::Snapshot pad = ctl.pad().Get();
     f.padConnected = pad.connected;
     f.padBattery = pad.state.battery;
@@ -8420,9 +8789,10 @@ void OpenNotice(UiState& ui, const notify::Notice& n) {
     ui.openKey = n.argKey;
 }
 
-// Takes a pending "Open" from a notice: the page and whatever it opens on. Runs before the page
-// is drawn, and keeps the page's own "just arrived" resets from undoing it.
-void ApplyOpen(UiState& ui) {
+// Takes a pending "Open" from a notice: the page and whatever it opens on (or, for a vendor
+// runtime, replaces it and opens Integrations for the result). Runs before the page is drawn,
+// and keeps the page's own "just arrived" resets from undoing it.
+void ApplyOpen(UiState& ui, Integrations& in) {
     if (!ui.openPending) return;
     ui.openPending = false;
     using W = notify::Where;
@@ -8444,6 +8814,10 @@ void ApplyOpen(UiState& ui) {
         ui.devicesTab = 0;
         break;
     case W::Integrations: ui.page = Page::Integrations; ui.integrationsLoaded = false; break;
+    case W::ReplaceRuntime:
+        if (!in.Busy()) in.Install(ui.openArg, L"", true);  // the same as the page's "Replace vendor runtime"
+        ui.page = Page::Integrations;
+        break;
     case W::GamesList:
         ui.page = Page::GamesList;
         OpenGame(ui, ui.openArg, ui.openKey.empty() ? nullptr : ui.openKey.c_str());
@@ -8603,25 +8977,36 @@ void NotificationBell(UiState& ui, const Fonts& f, const std::vector<notify::Not
     }
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const bool open = ImGui::IsPopupOpen("notices");
-    dl->AddRectFilled(a, ImVec2(a.x + size, a.y + size), Hex(open ? kAccent : hovered ? kCardHover : kTrack), size / 2);
-    dl->AddRect(a, ImVec2(a.x + size, a.y + size), Hex(open ? kAccentHover : kBorder, 160), size / 2);
-    // A bell: a dome, a flared lip and a clapper.
+    const bool active = ImGui::IsItemActive();
+    const ImVec2 b(a.x + size, a.y + size);
+    const float rounding = 12 * S();
+    dl->AddRectFilled(ImVec2(a.x, a.y + 2 * S()), ImVec2(b.x, b.y + 2 * S()), Hex(0x000000, 35), rounding);
+    dl->AddRectFilled(a, b, Hex(hovered || open ? kCardHover : kTrack), rounding);
+    if (open || active) dl->AddRectFilled(a, b, Hex(kAccent, active ? 50 : 32), rounding);
+    dl->AddRect(a, b, Hex(open || hovered ? kAccentHover : kBorder, open ? 220 : hovered ? 160 : 210),
+                rounding, 0, S());
+    // A light outline keeps the bell consistent with the other header icons.
     const ImVec2 c(a.x + size / 2, a.y + size / 2);
-    const float r = size * 0.22f;
-    const ImU32 ink = Hex(open ? 0xFFFFFF : hovered ? kText : kMuted);
-    dl->PathArcTo(ImVec2(c.x, c.y - r * 0.15f), r, 3.14159f, 6.2831853f, 16);
-    dl->PathLineTo(ImVec2(c.x + r, c.y + r * 0.75f));
-    dl->PathLineTo(ImVec2(c.x - r, c.y + r * 0.75f));
-    dl->PathFillConvex(ink);
-    dl->AddRectFilled(ImVec2(c.x - r * 1.25f, c.y + r * 0.7f), ImVec2(c.x + r * 1.25f, c.y + r * 0.95f), ink, r * 0.12f);
-    dl->AddCircleFilled(ImVec2(c.x, c.y + r * 1.3f), r * 0.28f, ink, 10);
+    const float r = size * 0.20f, stroke = 1.7f * S();
+    const ImU32 ink = Hex(open ? kAccentHover : hovered || !shown.empty() ? kText : kMuted);
+    dl->AddLine(ImVec2(c.x, c.y - r * 1.25f), ImVec2(c.x, c.y - r), ink, stroke);
+    dl->PathLineTo(ImVec2(c.x - r * 1.1f, c.y + r * 0.65f));
+    dl->PathBezierCubicCurveTo(ImVec2(c.x - r * 0.75f, c.y + r * 0.35f),
+                              ImVec2(c.x - r * 0.78f, c.y + r * 0.05f), ImVec2(c.x - r * 0.78f, c.y - r * 0.20f));
+    dl->PathBezierCubicCurveTo(ImVec2(c.x - r * 0.78f, c.y - r * 1.25f),
+                              ImVec2(c.x + r * 0.78f, c.y - r * 1.25f), ImVec2(c.x + r * 0.78f, c.y - r * 0.20f));
+    dl->PathBezierCubicCurveTo(ImVec2(c.x + r * 0.78f, c.y + r * 0.05f),
+                              ImVec2(c.x + r * 0.75f, c.y + r * 0.35f), ImVec2(c.x + r * 1.1f, c.y + r * 0.65f));
+    dl->PathStroke(ink, ImDrawFlags_Closed, stroke);
+    dl->PathArcTo(ImVec2(c.x, c.y + r * 0.82f), r * 0.28f, 0, 3.1415927f, 12);
+    dl->PathStroke(ink, ImDrawFlags_None, stroke);
     if (!shown.empty()) {
         // The count in a pill colored by the most serious notice, cut out of the bell's edge.
         const std::string count = notify::BadgeText(shown.size());
         ImGui::PushFont(f.caption);
         const ImVec2 ts = ImGui::CalcTextSize(count.c_str());
-        const float bh = 17 * S(), bw = std::max(bh, ts.x + 9 * S());
-        const ImVec2 b0(a.x + size - bw + 5 * S(), a.y - 3 * S()), b1(b0.x + bw, b0.y + bh);
+        const float bh = 16 * S(), bw = std::max(bh, ts.x + 8 * S());
+        const ImVec2 b0(b.x - bw + S(), a.y - 2 * S()), b1(b0.x + bw, b0.y + bh);
         const float ring = 2 * S();
         dl->AddRectFilled(ImVec2(b0.x - ring, b0.y - ring), ImVec2(b1.x + ring, b1.y + ring), Hex(kBg), bh / 2 + ring);
         dl->AddRectFilled(b0, b1, Hex(SeverityColor(notify::Worst(shown))), bh / 2);
@@ -8752,7 +9137,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
         Splash(ui, f);
         return;
     }
-    ApplyOpen(ui);  // "Open" on a notification
+    ApplyOpen(ui, integrations);  // "Open" (or an action) on a notification
     const std::vector<notify::Notice> notices = CollectNotices(ctl, integrations, ui, ctl.monitor().Snapshot());
     // Icon-only below 760: the sidebar's full width plus the main content couldn't both fit.
     // Its width eases towards that target instead of jumping; the content (labels or icons

@@ -2606,6 +2606,17 @@ static void TestNoticeSummary() {
     const auto shown = Visible(all, &dismissed);
     CHECK(Worst(shown) == Severity::Warning && Summary(shown) == "2 warnings, 1 note");
     CHECK(BadgeText(1) == "1" && BadgeText(9) == "9" && BadgeText(12) == "9+");
+
+    // A vendor's runtime where LumaBridge's would go: a note whose action replaces it.
+    Facts v;
+    v.integrations = {{"chroma", "Razer Chroma", "Razer Synapse's Chroma runtime is installed", false, true},
+                      {"lightfx", "Alienware AlienFX", "", false, false}};
+    auto vn = Collect(v);
+    CHECK(vn.size() == 1 && vn[0].id == "vendor-chroma" && vn[0].severity == Severity::Info);
+    CHECK(vn[0].where == Where::ReplaceRuntime && vn[0].arg == "chroma" && vn[0].action == "Replace vendor runtime");
+    v.integrations[0].problem = true;  // broken as well: only the problem is reported
+    vn = Collect(v);
+    CHECK(vn.size() == 1 && vn[0].id == "integration-chroma");
 }
 
 int main() {
