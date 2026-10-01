@@ -50,4 +50,15 @@ inline bool SameLocation(std::string description, std::string path) {
         std::transform(text->begin(), text->end(), text->begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return description.find(path) != std::string::npos;
 }
+
+// An SDK connection covers all Logitech gear; a direct HID++ connection covers one
+// known product. Do not disable other devices' fallback connections by brand alone.
+inline bool LogitechCovered(bool sdk, std::string directName, std::string name) {
+    if (sdk) return true;
+    if (directName.empty()) return false;
+    for (auto* value : {&directName, &name})
+        std::transform(value->begin(), value->end(), value->begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return name == directName;
+}
 }  // namespace luma::app::lighting

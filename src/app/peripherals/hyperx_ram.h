@@ -42,6 +42,11 @@ inline uint8_t SlotBase(int slot) {
     return kBase[slot];
 }
 
+// Whether an SPD that answered holds a stick we can light. `type` is its byte 2, or -1 when
+// unread. That byte is the memory type only while the SPD shows its first page, and another
+// tool can leave it on the second (it then reads 0), so only DDR3 / DDR5 are ruled out.
+inline bool IsStick(bool answers, int type) { return answers && type != 0x0B && type != 0x12; }
+
 struct Write {
     uint8_t reg, value;
 };

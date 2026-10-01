@@ -191,6 +191,7 @@ public:
     // Finds the controller and the sticks (read only).
     void Start() {
         status_ = helper::RamStatus::Starting;
+        sticks_ = 0;
         // The signed modules expose the same transfer API. Each validates the chipset
         // before loading, so Intel machines can use the same RGB-only register allow-list.
         const auto amd = smbus_.Load(L"SmbusPIIX4.bin");
@@ -214,8 +215,18 @@ public:
         const bool controller = Answers(ram::kController);
         for (int slot = 0; slot < ram::kSlots; ++slot) {
             const uint8_t spd = static_cast<uint8_t>(ram::kSpdFirst + slot);
-            int type = 0;
-            if (Answers(spd) && ReadByteData(spd, 2, &type) && type == 0x0C) sticks_ |= 1 << slot;  // DDR4
+            int type = -1;
+            const bool answers = Answers(spd);
+            const bool read = answers && ReadByteData(spd, 2, &type);
+            if (ram::IsStick(answers, type)) sticks_ |= 1 << slot;
+            Log("RAM: SPD 0x%02X %s, type byte %d%s", spd, answers ? "answers" : "silent", type, read ? "" : " (unread)");
+        }
+        // The SMBIOS says these are Kingston sticks and their controller answers, but no SPD
+        // does (some boards keep the SPD on another bus): the controller covers every slot, so
+        // light all four (the registers of an empty slot are only written, never read back).
+        if (controller && !sticks_) {
+            sticks_ = (1 << ram::kSlots) - 1;
+            Log("RAM: no SPD answered - assuming all %d slots", ram::kSlots);
         }
         lock_.Unlock();
         Log("RAM: controller at 0x27 %s, DDR4 sticks 0x%X", controller ? "answers" : "doesn't answer", sticks_);
@@ -230,6 +241,8 @@ public:
         if (status_ != helper::RamStatus::Ready && status_ != helper::RamStatus::Active &&
             status_ != helper::RamStatus::BusBusy)
             return;
+        // The bus was busy while looking for the sticks: nothing to light yet (main retries Start).
+        if (status_ == helper::RamStatus::BusBusy && !sticks_) return;
         release_ = static_cast<helper::RamRelease>(sh->ramRelease);
         if (!sh->ramOwn) {
             LetGo();
@@ -553,7 +566,7 @@ int wmain() {
         s->status = helper::Status::Running;
     }
 
-    uint64_t nextSensors = 0, appBeat = s->appBeat, appBeatAt = GetTickCount64();
+    uint64_t nextSensors = 0, nextRamRetry = 0, appBeat = s->appBeat, appBeatAt = GetTickCount64();
     helper::RamStatus lastRam = helper::RamStatus::Off;
     while (true) {
         Sleep(30);
@@ -573,7 +586,12 @@ int wmain() {
         }
         if (s->status != helper::Status::Running) continue;
 
-        if (s->ramWanted && ram.status() == helper::RamStatus::Off) ram.Start();
+        // Another tool (NZXT CAM, Armoury Crate) can hold the SMBus when we first look; try again.
+        const bool retryRam = ram.status() == helper::RamStatus::BusBusy && !ram.sticks() && now >= nextRamRetry;
+        if (s->ramWanted && (ram.status() == helper::RamStatus::Off || retryRam)) {
+            nextRamRetry = now + 5000;
+            ram.Start();
+        }
         ram.Update(s, now);
         s->ram = ram.status();
         s->sticks = ram.sticks();

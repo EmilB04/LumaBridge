@@ -159,6 +159,22 @@ Game lighting needs the app running. The DLLs inside games never load ASUS's Aur
 themselves by default, because a crash in it would take the game down with it
 (`[Aura] DirectFromGames=1` allows it).
 
+## Lighting without vendor software
+
+- **Logitech:** supported mice use direct HID++ when G HUB is absent or its SDK cannot
+  initialize. The G502 X Plus supports per-LED lighting; other compatible mice use one
+  color. G HUB is still needed for Logitech's SDK output to other devices.
+- **ASUS:** Azoth and supported motherboard/ARGB controllers use direct HID/USB.
+  If the optional Aura SDK backend cannot connect, it falls back to direct USB.
+- **Other devices:** enable Windows Dynamic Lighting devices for firmware with HID
+  LampArray support, or enable OpenRGB in Integrations and run its SDK server. These
+  connections do not require the manufacturer's app, but device support varies.
+- **Existing direct outputs:** supported RAM, DualSense and Kraken lighting do not need
+  their manufacturer's application. RAM requires LumaBridge's Hardware access setup.
+
+Firmware updates, vendor profiles, macros, LCD content and pump/fan configuration
+are not replaced by these lighting connections. See [peripherals](docs/peripherals.md).
+
 ## Status
 
 Pre-release. Everything compiles for x64 and x86 (mingw-w64 cross-build, and MSVC in CI),

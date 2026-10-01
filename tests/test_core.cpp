@@ -2302,6 +2302,12 @@ static void TestOpenRgb() {
     CHECK(lighting::SameLocation("HID: \\?\\HID#VID_1532#DEVICE", "\\?\\hid#vid_1532#device"));
     CHECK(!lighting::SameLocation("HID: \\?\\HID#VID_1532#DEVICE_A", "\\?\\hid#vid_1532#device_b"));
     CHECK(!lighting::SameLocation("USB: 1532:1234", "1532"));
+    // With no G HUB, one directly controlled mouse must not suppress another
+    // Logitech keyboard's LampArray/OpenRGB fallback. Failed discovery covers nothing.
+    CHECK(lighting::LogitechCovered(false, "G502 X PLUS", "g502 x plus"));
+    CHECK(!lighting::LogitechCovered(false, "G502 X PLUS", "G915 Keyboard"));
+    CHECK(!lighting::LogitechCovered(false, "", "G502 X PLUS"));
+    CHECK(lighting::LogitechCovered(true, "", "G915 Keyboard"));
 
     CHECK(!o::ParseController(c.data(), c.size(), 3));
     CHECK(!o::ParseController(nullptr, 0));
@@ -2514,6 +2520,10 @@ static void TestHyperXRam() {
     CHECK(rainbow[2].value == 0x07 && rainbow[3].value == 0xD0 && rainbow.back().value == 0x03);
     for (const auto& x : rainbow) CHECK(IsAllowed(x.reg));
     CHECK(Frame(0, colors).size() == 3);  // no sticks: nothing but the update / apply
+    // Stick detection: DDR4 (0x0C) and an SPD left on its second page (reads 0) count; silent
+    // slots, DDR3 and DDR5 don't.
+    CHECK(IsStick(true, 0x0C) && IsStick(true, 0) && IsStick(true, -1));
+    CHECK(!IsStick(false, -1) && !IsStick(true, 0x0B) && !IsStick(true, 0x12));
 }
 
 static void TestHwSensors() {

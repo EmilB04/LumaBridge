@@ -1,5 +1,6 @@
 // Logitech devices (G502 X Plus, ...) through Logitech's own LED SDK: LumaBridge loads
-// G HUB's SDK DLL in its own process and sets the color; G HUB does the device I/O and
+// G HUB's SDK DLL when available; supported mice also work directly over HID++ without it.
+// G HUB does the device I/O for other devices and
 // takes its profile back when LumaBridge lets go (LogiLedShutdown). Nothing goes into a game.
 //
 // Logitech devices show one color: the effect's first LED, animated. A mouse LumaBridge
@@ -56,6 +57,11 @@ public:
     // Whether the mouse shows the whole effect right now (its own effect or LED by LED),
     // not one color through G HUB.
     bool mouseEffect() const { return mouseEffect_; }
+    bool sdkActive() const { return sdkActive_; }
+    // Retained during hand-back so a LIGHTSYNC game keeps control without oscillation.
+    bool sdkAvailable() const { return sdkAvailable_; }
+    // The directly controlled product, so fallbacks remain available to other Logitech gear.
+    std::string directName() const;
     std::wstring dllPath() const;
 
 private:
@@ -66,6 +72,8 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<State> state_{State::Off};
     std::atomic<bool> mouseEffect_{false};
+    std::atomic<bool> sdkActive_{false};
+    std::atomic<bool> sdkAvailable_{false};
     std::atomic<bool> asleep_{false};
     std::atomic<bool> inStep_{false};
     mutable std::mutex mutex_;
@@ -74,6 +82,7 @@ private:
     bool own_ = false;
     uint64_t effectSince_ = 0;
     std::wstring dll_;
+    std::string directName_;
 };
 
 }  // namespace luma::app

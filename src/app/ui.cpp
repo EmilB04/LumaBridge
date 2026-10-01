@@ -1046,7 +1046,8 @@ void WDevices(DashCtx& c) {
         ImGui::TextUnformatted(LogitechName(c.ctl).c_str());
         ++listed;
         ImGui::SameLine();
-        Muted("%s", active ? "via G HUB" : "G HUB has them");
+        Muted("%s", active ? (c.ctl.logitech().sdkActive() ? "via G HUB / direct HID++" : "via direct HID++")
+                            : "Their own lighting");
     }
     if (c.ctl.prefs().ramLighting && HasRgbRam(c.ctl, c.snap)) {
         using R = HardwareHelper::RamState;
@@ -5174,10 +5175,14 @@ DeviceStatus LogitechStatus(Controller& ctl) {
     if (ctl.logitechAsleep() && lg.state() == LogitechOutput::State::Active)
         return {"Asleep - not used for a while", kMuted, "It lights up again when you use it."};
     switch (lg.state()) {
-    case S_::Active: return {lg.mouseEffect() ? "Following LumaBridge, every LED" : "Following LumaBridge", kGreen};
-    case S_::NoGHub: return {"G HUB not found", kRed};
-    case S_::Waiting: return {"Waiting for G HUB", kAmber};
-    default: return {"G HUB has them", kMuted, ctl.logitechNote()};
+    case S_::Active: return {lg.mouseEffect() ? "Following LumaBridge, every LED" : "Following LumaBridge", kGreen,
+                            lg.sdkActive() ? "G HUB connected; supported mice use direct HID++."
+                                           : "Direct HID++ control; G HUB is not required."};
+    case S_::NoGHub: return {"No supported direct device found", kAmber,
+                           "G HUB is unavailable. Enable Windows lighting or OpenRGB for other supported devices."};
+    case S_::Waiting: return {"Looking for a lighting connection", kAmber,
+                             "Trying direct HID++ and G HUB. Windows lighting or OpenRGB can control other supported devices."};
+    default: return {"Their own lighting", kMuted, ctl.logitechNote()};
     }
 }
 
@@ -5238,7 +5243,7 @@ void LogitechCard(Controller& ctl, const Fonts& f) {
     const auto& lg = ctl.logitech();
     BeginCard("logitech");
     CardTitle(f, "Settings", Icon::Gear);
-    Muted("Your Logitech RGB gear shows LumaBridge's lighting through Logitech's own LED SDK in G HUB "
+    Muted("Supported Logitech mice work directly over HID++ without G HUB. Other Logitech RGB gear uses the LED SDK in G HUB "
           "(nothing goes into a game), as one color: the first LED of the effect. A mouse LumaBridge knows LED by "
           "LED (the G502 X Plus so far) shows the whole effect instead, and runs breathing, color cycle and the "
           "rainbow wave itself.");
@@ -6436,7 +6441,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
     }
     if (id == device::kMouse) {
         if (!DeviceHeader(ui, f, Icon::Mouse, LogitechName(ctl), LogitechStatus(ctl), false,
-                          LogitechKinds(ctl) + ", through G HUB"))
+                          LogitechKinds(ctl) + (ctl.logitech().sdkActive() ? ", through G HUB" : ", direct HID++ when supported")))
             return;
         LogitechCard(ctl, f);
         DeviceLightingCard(ctl, ui, f, device::kMouse);
@@ -6661,7 +6666,7 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
                             Icon::Memory, DeviceStatus("Detected", kGreen, "Module information from motherboard firmware")});
         }
         if (HasLogitechRgb(ctl))
-            rows.push_back({device::kMouse, LogitechName(ctl), LogitechKinds(ctl) + ", through G HUB", Icon::Mouse,
+            rows.push_back({device::kMouse, LogitechName(ctl), LogitechKinds(ctl) + (ctl.logitech().sdkActive() ? ", through G HUB" : ", direct HID++ when supported"), Icon::Mouse,
                             LogitechStatus(ctl)});
         // Shown whenever switched on, found or not: otherwise a device that fails to be found has
         // no row to click for why (the exact diagnostic a "not found" state exists to answer).

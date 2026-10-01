@@ -116,7 +116,7 @@ bool Controller::LampArrayDefaultOn(const LampArrayDevice& d) const {
             if (d.pid == pid && auraStatus().connected) return false;
     }
     if (d.vid == hidpp::kVendor && prefs_.logitechDevices &&
-        (logitech_.state() == LogitechOutput::State::Active || logitech_.state() == LogitechOutput::State::Released)) return false;
+        lighting::LogitechCovered(logitech_.sdkAvailable(), logitech_.directName(), d.name)) return false;
     return true;
 }
 
@@ -135,8 +135,7 @@ void Controller::SetOpenRgbEnabled(bool on) {
 bool Controller::OpenRgbDefaultOn(const OpenRgbDevice& d) const {
     const lighting::NativeConnections available{
         auraStatus().connected,
-        prefs_.logitechDevices && (logitech_.state() == LogitechOutput::State::Active ||
-                                  logitech_.state() == LogitechOutput::State::Released),
+        prefs_.logitechDevices && lighting::LogitechCovered(logitech_.sdkAvailable(), logitech_.directName(), d.name),
         prefs_.azothKeyboard && (azoth_.state() == AzothOutput::State::Active ||
                                 azoth_.state() == AzothOutput::State::Released),
         prefs_.ramLighting && hardware_.sticks() > 0 &&
@@ -217,12 +216,12 @@ void Controller::UpdateLogitech() {
                       output_.game);
         return;  // kept with LumaBridge even while a game lights Logitech gear
     }
-    if (own)
+    if (own && logitech_.sdkAvailable())
         if (auto s = tracker_.Active(); s && s->sdk == "Logitech LIGHTSYNC") {
             own = false;  // the game already lights Logitech gear itself (through the proxy)
             logitechNote_ = s->game + " lights them itself";
         }
-    if (own && !tracker_.Active())
+    if (own && logitech_.sdkAvailable() && !tracker_.Active())
         for (const GameStatus& g : games_)
             if (g.profile && g.profile->kind == games::ProfileKind::VendorSdk &&
                 std::string(g.profile->how).find("Logitech") != std::string::npos) {

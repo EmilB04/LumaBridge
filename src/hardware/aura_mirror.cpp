@@ -276,7 +276,7 @@ void AuraMirror::Run() {
     std::unique_ptr<LightingBackend> backend;
     if (cfg_.auraUseSdk) backend = std::make_unique<AuraBridge>();
     else backend = std::make_unique<aurausb::UsbAura>();
-    LightingBackend& aura = *backend;
+    bool usingSdk = cfg_.auraUseSdk;
     LUMA_INFO("Aura mirror: using %s", cfg_.auraUseSdk ? "the ASUS Aura SDK" : "the Aura USB controller directly");
     uint64_t nextConnectAt = 0;
     uint64_t lastPushAt = 0;
@@ -291,9 +291,9 @@ void AuraMirror::Run() {
 
     auto publish = [&] {
         std::lock_guard<std::mutex> lock(settingsMutex_);
-        status_.connected = aura.IsConnected();
+        status_.connected = backend->IsConnected();
         status_.routedToApp = app != nullptr;
-        status_.devices = aura.Devices();
+        status_.devices = backend->Devices();
     };
 
     while (!stop_) {
@@ -320,7 +320,7 @@ void AuraMirror::Run() {
             if (!wasRouted) {
                 LUMA_INFO("Aura mirror: LumaBridge app is running, routing %s frames to it",
                           source_.c_str());
-                if (aura.IsConnected()) aura.Disconnect(true);
+                if (backend->IsConnected()) backend->Disconnect(true);
                 havePushed = false;
                 wasRouted = true;
                 publish();
@@ -369,13 +369,22 @@ void AuraMirror::Run() {
             settingsVersion = settingsVersion_;
             cc = correction_;
         }
-        if (rescan && aura.IsConnected()) {
-            aura.Disconnect(false);
+        if (rescan && backend->IsConnected()) {
+            backend->Disconnect(false);
             nextConnectAt = 0;
         }
 
-        if (!aura.IsConnected() && now >= nextConnectAt) {
-            if (aura.Connect()) {
+        if (!backend->IsConnected() && now >= nextConnectAt) {
+            bool connected = backend->Connect();
+            if (!connected && usingSdk) {
+                // An explicitly selected SDK must not strand users without ASUS's runtime.
+                backend->Disconnect(false);
+                backend = std::make_unique<aurausb::UsbAura>();
+                usingSdk = false;
+                LUMA_INFO("Aura mirror: SDK unavailable - falling back to direct USB control");
+                connected = backend->Connect();
+            }
+            if (connected) {
                 havePushed = false;
                 appliedSettings = ~0ull;
             } else {
@@ -384,16 +393,16 @@ void AuraMirror::Run() {
             publish();
         }
 
-        if (aura.IsConnected() && settingsVersion != appliedSettings) {
+        if (backend->IsConnected() && settingsVersion != appliedSettings) {
             std::lock_guard<std::mutex> lock(settingsMutex_);
-            const auto& devs = aura.Devices();
-            for (size_t i = 0; i < devs.size(); ++i) aura.SetSelected(i, DeviceAllowed(devs[i]));
+            const auto& devs = backend->Devices();
+            for (size_t i = 0; i < devs.size(); ++i) backend->SetSelected(i, DeviceAllowed(devs[i]));
             appliedSettings = settingsVersion;
             havePushed = false;  // calibration or device set changed: repaint
         }
 
         if (pattern.active) {
-            if (aura.IsConnected() &&
+            if (backend->IsConnected() &&
                 (!havePushed || pattern.version != lastPattern || animating || now - lastPushAt >= kHardwareRefreshMs)) {
                 if (havePushed && now - lastPushAt < framePeriodMs) {
                     Sleep(static_cast<DWORD>(framePeriodMs - (now - lastPushAt)));
@@ -404,7 +413,7 @@ void AuraMirror::Run() {
                 const uint64_t at = GetTickCount64();
                 const double t = fx::Seconds(pattern.params, at, pattern.startedAt);
                 const double tb = fx::Seconds(pattern.board, at, pattern.startedAt);
-                const auto& devs = aura.Devices();
+                const auto& devs = backend->Devices();
                 frames.resize(devs.size());
                 for (size_t i = 0; i < devs.size(); ++i) {
                     auto& f = frames[i];
@@ -416,7 +425,7 @@ void AuraMirror::Run() {
                     const double level = pattern.fanTest ? 1.0 : fans ? pattern.fansLevel : pattern.boardLevel;
                     for (auto& c : f) c = ApplyCorrection(cc, level < 1.0 ? Scale(c, level) : c);
                 }
-                if (aura.SetFrames(frames)) {
+                if (backend->SetFrames(frames)) {
                     havePushed = true;
                     lastPattern = pattern.version;
                     lastPushed = ~0u;  // a later single color always repaints
@@ -424,7 +433,7 @@ void AuraMirror::Run() {
                 } else {
                     LUMA_WARN("Aura mirror: push failed, reconnecting in %llu ms",
                               static_cast<unsigned long long>(kReconnectDelayMs));
-                    aura.Disconnect(false);
+                    backend->Disconnect(false);
                     nextConnectAt = GetTickCount64() + kReconnectDelayMs;
                     publish();
                 }
@@ -434,20 +443,20 @@ void AuraMirror::Run() {
         }
 
         const uint32_t out = ToAuraColor(ApplyCorrection(cc, color));
-        if (aura.IsConnected() && (!havePushed || out != lastPushed || now - lastPushAt >= kHardwareRefreshMs)) {
+        if (backend->IsConnected() && (!havePushed || out != lastPushed || now - lastPushAt >= kHardwareRefreshMs)) {
             // Rate limit: coalesce bursts of game calls into one frame per period.
             if (havePushed && now - lastPushAt < framePeriodMs) {
                 Sleep(static_cast<DWORD>(framePeriodMs - (now - lastPushAt)));
                 continue;  // re-evaluate with the freshest state
             }
-            if (aura.SetAll(out)) {
+            if (backend->SetAll(out)) {
                 havePushed = true;
                 lastPushed = out;
                 lastPushAt = GetTickCount64();
             } else {
                 LUMA_WARN("Aura mirror: push failed, reconnecting in %llu ms",
                           static_cast<unsigned long long>(kReconnectDelayMs));
-                aura.Disconnect(false);
+                backend->Disconnect(false);
                 nextConnectAt = GetTickCount64() + kReconnectDelayMs;
                 publish();
             }
@@ -460,7 +469,7 @@ void AuraMirror::Run() {
 
     if (wasRouted && app)
         SendToApp(app, ipc::MakeFrame(ipc::FrameKind::Release, pid, 0, 0, 0, source_.c_str()));
-    aura.Disconnect(cfg_.releaseControlOnShutdown);
+    backend->Disconnect(cfg_.releaseControlOnShutdown);
     publish();
     CoUninitialize();
 }

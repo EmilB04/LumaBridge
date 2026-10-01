@@ -2,9 +2,23 @@
 
 ## Logitech (G502 X Plus and other Logitech RGB gear)
 
+**Without G HUB:** LumaBridge tries direct HID++ lighting even when Logitech's LED SDK
+is missing or cannot initialize. The G502 X Plus keeps its per-LED effects and game
+lighting; other mice exposing the supported RGB effects protocol can follow as one
+color when a fixed-color effect is available. Only one directly reachable mouse is
+controlled by this output. Unsupported Logitech keyboards and other devices can use
+the Windows HID LampArray connection, if their firmware provides it, or the optional
+OpenRGB connection. OpenRGB must be running with its SDK server enabled.
+
+G HUB remains optional for supported direct mice and required for the SDK output to
+other Logitech gear. LumaBridge retries SDK initialization while running. A game only
+gets exclusive Logitech lighting when the SDK connection is active; without it,
+LumaBridge keeps drawing its game lighting directly. With no vendor app to take over,
+releasing direct control stops writes and can leave the last color on the device.
+
 LumaBridge loads G HUB's own LED SDK DLL (`LGHUB\sdks\sdk_legacy_led_x64.dll`, found
 through the machine-wide `ServerBinary` registration and never LumaBridge's own proxy) in
-the app's process. It calls `LogiLedInitWithName("LumaBridge")`,
+the app's process when available. It calls `LogiLedInitWithName("LumaBridge")`,
 `LogiLedSetTargetDevice(all)` and `LogiLedSetLighting(r%, g%, b%)`, and G HUB does the
 device I/O. `LogiLedShutdown` hands the devices back to G HUB's profile. That happens
 whenever LumaBridge isn't controlling the lights, or a game lights Logitech gear itself.

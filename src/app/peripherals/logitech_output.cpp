@@ -133,8 +133,11 @@ private:
             device_ = dev;
             feature_ = r[4];
             name_.clear();
-            if (Send(hidpp::Request(dev, 0x00, 0, {hidpp::kFeatureName >> 8, hidpp::kFeatureName & 0xFF}), &r) && r[4])
-                name_ = ReadName(dev, r[4]);
+            if (Send(hidpp::Request(dev, 0x00, 0, {hidpp::kFeatureName >> 8, hidpp::kFeatureName & 0xFF}), &r) && r[4]) {
+                const uint8_t nameFeature = r[4];
+                name_ = ReadName(dev, nameFeature);
+                if (Send(hidpp::Request(dev, nameFeature, 2, {}), &r) && r[4] != 3) continue;
+            }
             layout_ = hidpp::Layout{};
             for (uint8_t e = 0; e < 16; ++e) {
                 if (!Send(hidpp::Request(dev, feature_, 0, {0x00, e}), &r)) break;
@@ -154,6 +157,7 @@ private:
                 }
                 layout_.strip.assign(hidpp::kG502XPlusStrip.begin(), hidpp::kG502XPlusStrip.end());
             }
+            if (!layout_.Has(hidpp::Kind::Fixed) && !layout_.perKey() && !layout_.colorWave) continue;
             LUMA_INFO("Logitech %s: its own effects over HID++ (device %u, fixed %d, breathing %d, cycle %d, wave %s, "
                       "every LED %s)",
                       name_.c_str(), dev, layout_.fixed, layout_.breathing, layout_.cycle, layout_.colorWave ? "yes" : "no",
@@ -279,12 +283,16 @@ std::wstring LogitechOutput::dllPath() const {
     return dll_;
 }
 
+std::string LogitechOutput::directName() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return directName_;
+}
+
 void LogitechOutput::Run() {
-    if (!real::Load(L"", proxyPath_) || !real::LogiLedSetLighting) {
-        LUMA_INFO("Logitech devices: G HUB's LED SDK not found - Logitech lighting unavailable");
+    bool sdkLoaded = real::Load(L"", proxyPath_) && real::LogiLedSetLighting;
+    if (!sdkLoaded) {
+        LUMA_INFO("Logitech devices: G HUB's LED SDK not found - trying direct HID++ control");
         state_ = State::NoGHub;
-        while (!stop_) Sleep(200);
-        return;
     }
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -322,6 +330,9 @@ void LogitechOutput::Run() {
                 inited = false;
                 LUMA_INFO("Logitech devices: handed back to G HUB");
             }
+            sdkActive_ = false;
+            mouse.Close();
+            nextMouseFind = 0;
             onMouse.reset();
             perKeyOn = false;
             mouseEffect_ = false;
@@ -329,7 +340,7 @@ void LogitechOutput::Run() {
             continue;
         }
         // Asleep: nothing goes out, so the mouse can sleep (the dark frame went out before).
-        if (asleep_) {
+        if (asleep_ && (inited || mouse.open())) {
             if (!wasAsleep) LUMA_INFO("Logitech devices: not used for a while - asleep, nothing sent until they're used");
             wasAsleep = true;
             mouseEffect_ = false;
@@ -347,19 +358,27 @@ void LogitechOutput::Run() {
             lastFrame.clear();
             last[0] = last[1] = last[2] = -1;
         }
-        if (!inited) {
-            if (now < nextInitTry) continue;
-            inited = real::LogiLedInitWithName ? real::LogiLedInitWithName("LumaBridge")
-                                               : (real::LogiLedInit && real::LogiLedInit());
+        if (!inited && now >= nextInitTry) {
+            // Retry discovery too: G HUB can be installed or started while the app runs.
+            if (!sdkLoaded) sdkLoaded = real::Load(L"", proxyPath_) && real::LogiLedSetLighting;
+            inited = sdkLoaded && (real::LogiLedInitWithName ? real::LogiLedInitWithName("LumaBridge")
+                                               : (real::LogiLedInit && real::LogiLedInit()));
             if (!inited) {
-                state_ = State::Waiting;  // G HUB not running (yet)
-                mouseEffect_ = false;
                 nextInitTry = now + 5000;
-                continue;
+            } else {
+                sdkActive_ = true;
+                sdkAvailable_ = true;
+                if (real::LogiLedSetTargetDevice) real::LogiLedSetTargetDevice(kDeviceTypeAll);
+                LUMA_INFO("Logitech devices: controlling them through G HUB");
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    dll_ = real::LoadedPath();
+                }
+                // G HUB may have replaced the direct effect as it connected.
+                onMouse.reset();
+                perKeyOn = false;
+                last[0] = last[1] = last[2] = -1;
             }
-            if (real::LogiLedSetTargetDevice) real::LogiLedSetTargetDevice(kDeviceTypeAll);
-            LUMA_INFO("Logitech devices: controlling them through G HUB");
-            last[0] = last[1] = last[2] = -1;
         }
 
         // A Logitech mouse LumaBridge can reach directly (HID++) shows the effect itself: the
@@ -369,10 +388,17 @@ void LogitechOutput::Run() {
         if (!mouse.open() && now >= nextMouseFind) {
             nextMouseFind = now + 30000;
             if (!mouse.Find()) LUMA_INFO("Logitech devices: no mouse to light directly found (HID++)");
+            std::lock_guard<std::mutex> lock(mutex_);
+            directName_ = mouse.open() ? mouse.name() : "";
         }
         auto lostMouse = [&](const char* what) {
-            LUMA_WARN("Logitech %s: %s - back to one color through G HUB", mouse.name().c_str(), what);
+            LUMA_WARN("Logitech %s: %s - %s", mouse.name().c_str(), what,
+                      inited ? "back to one color through G HUB" : "retrying direct control");
             mouse.Close();
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                directName_.clear();
+            }
             nextMouseFind = now + (now - wokeAt < 15000 ? 2000 : 30000);  // just woken: it's reconnecting
             onMouse.reset();
             perKeyOn = false;
@@ -446,12 +472,34 @@ void LogitechOutput::Run() {
             last[0] = last[1] = last[2] = -1;
         }
         const int p[3] = {Percent(c.r), Percent(c.g), Percent(c.b)};
+        if (!inited) {
+            // Mice without a known LED map can still follow games and effects as one color.
+            if (mouse.open() && mouse.layout().Has(hidpp::Kind::Fixed)) {
+                if (p[0] != last[0] || p[1] != last[1] || p[2] != last[2] || now - lastSent > 2000) {
+                    hidpp::Effect fixed;
+                    fixed.color = c;
+                    if (!mouse.Set(fixed)) {
+                        lostMouse("the mouse stopped taking its fixed color");
+                        state_ = sdkLoaded ? State::Waiting : State::NoGHub;
+                        continue;
+                    }
+                    std::copy(std::begin(p), std::end(p), last);
+                    lastSent = now;
+                }
+                state_ = State::Active;
+            } else {
+                state_ = sdkLoaded ? State::Waiting : State::NoGHub;
+            }
+            continue;
+        }
         // Send changes right away, and the same color again every 2 s (G HUB may have been
         // restarted or had another program in between).
         if (p[0] != last[0] || p[1] != last[1] || p[2] != last[2] || now - lastSent > 2000) {
             if (!real::LogiLedSetLighting(p[0], p[1], p[2])) {
                 real::LogiLedShutdown();
                 inited = false;
+                sdkActive_ = false;
+                sdkAvailable_ = false;
                 nextInitTry = now + 5000;
                 state_ = State::Waiting;
                 continue;
@@ -464,6 +512,10 @@ void LogitechOutput::Run() {
         state_ = State::Active;
     }
     if (inited) real::LogiLedShutdown();
+    sdkActive_ = false;
+    sdkAvailable_ = false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    directName_.clear();
 }
 
 }  // namespace luma::app
