@@ -35,7 +35,7 @@ $TaskPath = '\LumaBridge\'
 $TaskName = 'Hardware helper'
 # Bumped whenever the task or the helper changes; LumaBridge asks to set it up again when
 # the recorded version is older (kHelperTaskVersion in src/app/integrations.h).
-$TaskVersion = 3
+$TaskVersion = 4
 $VersionKey = 'HKLM:\SOFTWARE\LumaBridge'
 $InstallDir = Join-Path $env:ProgramFiles 'LumaBridge'
 $Modules = 'SmbusPIIX4.bin', 'SmbusI801.bin', 'LpcIO.bin', 'AMDFamily17.bin', 'IntelMSR.bin'
@@ -103,10 +103,30 @@ if ($installed -and $installed -ge [version] '2.0') {
 }
 
 # 2. The helper and its modules, where only administrators can change them.
-Get-Process -Name 'LumaBridge-Helper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Remove-OldRamHelper
-New-Item -ItemType Directory -Force $InstallDir | Out-Null
-Copy-Item -Path $helper -Destination (Join-Path $InstallDir 'LumaBridge-Helper.exe') -Force
+# The running app starts the helper again within seconds of it stopping, which would hold
+# its file open while it's replaced: switch the task off until the copy is done (the
+# registration below turns it back on).
+$existing = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($existing) { Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null }
+try {
+    Get-Process -Name 'LumaBridge-Helper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Wait-Process -Name 'LumaBridge-Helper' -Timeout 15 -ErrorAction SilentlyContinue
+    Remove-OldRamHelper
+    New-Item -ItemType Directory -Force $InstallDir | Out-Null
+    # The file can stay locked a moment after the process ends.
+    for ($try = 1; $try -le 10; ++$try) {
+        try {
+            Copy-Item -Path $helper -Destination (Join-Path $InstallDir 'LumaBridge-Helper.exe') -Force -ErrorAction Stop
+            break
+        } catch {
+            if ($try -eq 10) { throw }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+} catch {
+    if ($existing) { Enable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null }
+    throw
+}
 foreach ($m in $Modules) { Copy-Item -Path (Join-Path $pawnDir "modules\$m") -Destination (Join-Path $InstallDir $m) -Force }
 Copy-Item -Path (Join-Path $pawnDir 'modules\COPYING') -Destination (Join-Path $InstallDir 'PawnIO-modules-COPYING.txt') -Force
 
