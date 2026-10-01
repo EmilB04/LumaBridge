@@ -1894,8 +1894,63 @@ void MainRainbowCard(Controller& ctl, const Fonts& f) {
 }
 
 void SetupCard(Controller& ctl, UiState& ui, const Fonts& f, bool selectable);
+void EffectStrip(const fx::Params& fx, ImVec2 a, ImVec2 b, float rounding);
+bool IsRainbow(ManualEffect effect);
+
+// Show the saved look, even when a game is currently driving the live lights.
+void ManualColorCard(Controller& ctl, UiState& ui, const Fonts& f) {
+    const Look look = MainLook(ctl.prefs());
+    const bool automatic = ctl.prefs().mode == Mode::Auto;
+    BeginCard("manual-summary");
+    CardTitle(f, "Your manual color", Icon::Palette);
+    auto savedSwatch = [](Rgb color, float size) {
+        const ImVec2 a = ImGui::GetCursorScreenPos();
+        const ImVec2 center(a.x + size / 2, a.y + size / 2);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddCircleFilled(center, size / 2, Col(color), 32);
+        dl->AddCircle(center, size / 2, Hex(0xFFFFFF, 40), 32, S());
+        ImGui::Dummy(ImVec2(size, size));
+    };
+    const bool rainbow = IsRainbow(look.effect);
+    if (!rainbow) {
+        savedSwatch(look.color1, 56 * S());
+        ImGui::SameLine(0, 16 * S());
+    }
+    ImGui::BeginGroup();
+    ImGui::PushFont(f.title);
+    ImGui::TextUnformatted(rainbow ? kEffects[static_cast<int>(look.effect)].name : ToHex(look.color1).c_str());
+    ImGui::PopFont();
+    if (rainbow) {
+        Muted("Your saved rainbow palette");
+    } else {
+        Muted("%s  -  RGB %u, %u, %u", kEffects[static_cast<int>(look.effect)].name,
+              unsigned(look.color1.r), unsigned(look.color1.g), unsigned(look.color1.b));
+    }
+    ImGui::EndGroup();
+    if (fx::UsesSecondColor(look.effect)) {
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        savedSwatch(look.color2, 24 * S());
+        ImGui::SameLine();
+        ImGui::Text("Second color: %s", ToHex(look.color2).c_str());
+    }
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    const ImVec2 a = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x;
+    EffectStrip(ToParams(look), a, ImVec2(a.x + w, a.y + 24 * S()), 8 * S());
+    ImGui::Dummy(ImVec2(w, 24 * S()));
+    Muted(automatic ? "Used between games. Switch to Manual to use and edit it at any time."
+                    : "Edit your color and effect below. Devices with their own lighting keep their settings.");
+    if (automatic && PrimaryButton("Switch to Manual")) {
+        ctl.prefs().mode = Mode::Manual;
+        ui.lightTarget.clear();
+        ui.colorSlot = 0;
+        ctl.Changed();
+    }
+    EndCard();
+}
 
 void AutoPage(Controller& ctl, UiState& ui, const Fonts& f) {
+    if (ctl.prefs().idle == IdleBehavior::ManualColor) ManualColorCard(ctl, ui, f);
     BeginCard("now");
     CardTitle(f, "Dynamic lighting", Icon::Game);
     Muted("Games drive your lights. When several are running, the one that changed color most recently wins.");
@@ -2002,8 +2057,8 @@ void AutoPage(Controller& ctl, UiState& ui, const Fonts& f) {
     EndCard();
 
     if (ctl.prefs().idle == IdleBehavior::Rainbow) MainRainbowCard(ctl, f);
-    SetupCard(ctl, ui, f, false);
     BrightnessCard(ctl, f);
+    SetupCard(ctl, ui, f, false);
 }
 
 // ---- Presets --------------------------------------------------------------------------
@@ -3438,6 +3493,34 @@ void TurnItem(Controller& ctl, const std::string& item, float degrees) {
     ctl.Changed();
 }
 
+// Draws rendered 3D items with Dear ImGui, far to near: the fallback when the depth-tested
+// renderer isn't available.
+void PaintItems(ImDrawList* dl, const std::vector<s3d::DrawItem>& items) {
+    for (const auto& it : items) {
+        if (it.kind == s3d::DrawItem::Polygon) {
+            // Dear ImGui's anti-aliased fill wants the corners clockwise on screen.
+            ImVec2 pts[s3d::kMaxCorners];
+            float area = 0;
+            for (int i = 0; i < it.n; ++i) {
+                const int j = (i + 1) % it.n;
+                area += it.xy[i * 2] * it.xy[j * 2 + 1] - it.xy[j * 2] * it.xy[i * 2 + 1];
+            }
+            for (int i = 0; i < it.n; ++i) {
+                const int k = area >= 0 ? i : it.n - 1 - i;
+                pts[i] = ImVec2(it.xy[k * 2], it.xy[k * 2 + 1]);
+            }
+            dl->AddConvexPolyFilled(pts, it.n, it.color);
+        } else if (it.kind == s3d::DrawItem::GlowDot) {
+            const float r = std::max(1.f, it.radius);
+            const int alpha = static_cast<int>(it.color >> 24);
+            dl->AddCircleFilled(ImVec2(it.xy[0], it.xy[1]), r, s3d::WithAlpha(it.color, alpha / 3), 12);
+            dl->AddCircleFilled(ImVec2(it.xy[0], it.xy[1]), r * 0.45f, s3d::WithAlpha(it.color, alpha), 10);
+        } else {
+            dl->AddLine(ImVec2(it.xy[0], it.xy[1]), ImVec2(it.xy[2], it.xy[3]), it.color, it.width * S());
+        }
+    }
+}
+
 // The whole setup in 3D. Lighting: click a lit part to edit its lighting. MySetup: drag
 // things on the desk, click fan slots while editing, see the air move. Preview: just look.
 // Drag empty space (or with the right button) to turn the view; the wheel zooms.
@@ -3619,29 +3702,7 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     dl->PushClipRect(a, ImVec2(a.x + W, a.y + Hh), true);
     const uintptr_t sceneImage = scene_gpu::Image(static_cast<int>(mode), items, vp, S());
     if (sceneImage) dl->AddImage(static_cast<ImTextureID>(sceneImage), a, ImVec2(a.x + W, a.y + Hh));
-    else for (const auto& it : items) {
-        if (it.kind == s3d::DrawItem::Polygon) {
-            // Dear ImGui's anti-aliased fill wants the corners clockwise on screen.
-            ImVec2 pts[s3d::kMaxCorners];
-            float area = 0;
-            for (int i = 0; i < it.n; ++i) {
-                const int j = (i + 1) % it.n;
-                area += it.xy[i * 2] * it.xy[j * 2 + 1] - it.xy[j * 2] * it.xy[i * 2 + 1];
-            }
-            for (int i = 0; i < it.n; ++i) {
-                const int k = area >= 0 ? i : it.n - 1 - i;
-                pts[i] = ImVec2(it.xy[k * 2], it.xy[k * 2 + 1]);
-            }
-            dl->AddConvexPolyFilled(pts, it.n, it.color);
-        } else if (it.kind == s3d::DrawItem::GlowDot) {
-            const float r = std::max(1.f, it.radius);
-            const int alpha = static_cast<int>(it.color >> 24);
-            dl->AddCircleFilled(ImVec2(it.xy[0], it.xy[1]), r, s3d::WithAlpha(it.color, alpha / 3), 12);
-            dl->AddCircleFilled(ImVec2(it.xy[0], it.xy[1]), r * 0.45f, s3d::WithAlpha(it.color, alpha), 10);
-        } else {
-            dl->AddLine(ImVec2(it.xy[0], it.xy[1]), ImVec2(it.xy[2], it.xy[3]), it.color, it.width * S());
-        }
-    }
+    else PaintItems(dl, items);
     // Text on surfaces (the pump's screen), where the surface faces the camera.
     for (const SurfaceText& st : texts) {
         const s3d::V3 eye = v.cam.Eye();
@@ -4465,10 +4526,10 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable) {
     ImGui::Dummy(ImVec2(W, 6 * S()));
 }
 
-// The setup in 3D (or 2D, on the Lighting page if chosen), on the Lighting page and in the
+// The setup in 3D or 2D, on the Lighting page and in the
 // setup guide. `selectable`: clicking a lit part selects it for editing (Manual mode).
 void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
-    if (selectable && !ctl.prefs().lighting3d) {
+    if (!ctl.prefs().lighting3d) {
         SetupCanvas2d(ctl, ui, selectable);
         return;
     }
@@ -4478,22 +4539,22 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
 
 void SetupCard(Controller& ctl, UiState& ui, const Fonts& f, bool selectable) {
     BeginCard("setup");
-    const ImVec2 top = ImGui::GetCursorPos();
-    CardTitle(f, "Your setup", Icon::Grid);
-    const bool flat = selectable && !ctl.prefs().lighting3d;
-    if (selectable) {  // 2D or 3D, on the title's line at the right
-        const ImVec2 below = ImGui::GetCursorPos();
-        const float w = 120 * S();
-        ImGui::SetCursorPos(ImVec2(std::max(top.x, ImGui::GetContentRegionMax().x - w), top.y - 4 * S()));
-        int view = ctl.prefs().lighting3d ? 1 : 0;
-        const char* views[] = {"2D", "3D"};
-        if (Segmented("view2d3d", &view, views, 2, w)) {
-            ctl.prefs().lighting3d = view == 1;
-            ctl.Changed();
-        }
-        ImGui::SetCursorPos(below);
+    ImGui::PushFont(f.bold);
+    const bool expanded = ImGui::CollapsingHeader("Your setup");
+    ImGui::PopFont();
+    if (!expanded) {
+        Muted("Expand to preview your devices in 2D or 3D.");
+        EndCard();
+        return;
     }
-    Muted(flat ? "Your lit devices, flat. Drag them where you like; click one to give it its own lighting (a dot "
+    int view = ctl.prefs().lighting3d ? 1 : 0;
+    const char* views[] = {"2D", "3D"};
+    if (Segmented("view2d3d", &view, views, 2, 120 * S())) {
+        ctl.prefs().lighting3d = view == 1;
+        ctl.Changed();
+    }
+    const bool flat = !ctl.prefs().lighting3d;
+    Muted(flat && selectable ? "Your lit devices, flat. Drag them where you like; click one to give it its own lighting (a dot "
                  "next to the name means it has its own)."
           : selectable ? "Everything LumaBridge found, with its live lighting. Click a lit part to give it its own "
                          "lighting; grey parts have no RGB LumaBridge can control."
@@ -4507,8 +4568,10 @@ void SetupCard(Controller& ctl, UiState& ui, const Fonts& f, bool selectable) {
                 it = it->first.rfind("desk:", 0) == 0 ? std::next(it) : spots.erase(it);
             ctl.Changed();
         }
-        ImGui::SameLine();
-        Muted("The memory sits in the motherboard's slots: click the sticks to select it.");
+        if (selectable) {
+            ImGui::SameLine();
+            Muted("The memory sits in the motherboard's slots: click the sticks to select it.");
+        }
     } else {
         if (Btn("Reset view")) (selectable ? ui.lightView : ui.guideView).camSet = false;
         ImGui::SameLine();
@@ -4813,10 +4876,10 @@ void NativeNote(const std::string& id) {
         Muted("%s lights it again. LumaBridge leaves it alone, games included.", NativeApp(id));
 }
 
-// Lighting > Manual: your setup on top, then the lighting of everything or one device.
+// Lighting > Manual: the saved color and editing controls first, then the optional preview.
 void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
     Prefs& p = ctl.prefs();
-    SetupCard(ctl, ui, f, true);
+    ManualColorCard(ctl, ui, f);
 
     // Which lighting to edit: everything, or one device.
     std::vector<std::string> ids{""};
@@ -4871,6 +4934,7 @@ void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
         if (d.own && !d.native && LookEditor(ctl, ui, f, d.look)) ctl.Changed();
     }
     if (ui.lightTarget.empty() || !DeviceNative(p, ui.lightTarget)) BrightnessCard(ctl, f, ui.lightTarget);
+    SetupCard(ctl, ui, f, true);
 }
 
 void FansCard(Controller& ctl, const Fonts& f) {
@@ -5094,31 +5158,111 @@ void AzothCard(Controller& ctl, const Fonts& f) {
 
 // ---- Game controller: live view, battery, report timing and button mapping -----------------
 
-// A small label chip, lit while its button is held.
-void PadChip(ImDrawList* dl, ImVec2 c, float w, float h, const char* label, bool on) {
-    const ImVec2 a(c.x - w / 2, c.y - h / 2), b(c.x + w / 2, c.y + h / 2);
-    dl->AddRectFilled(a, b, Hex(on ? kAccent : kCardHover), h / 2);
-    dl->AddRect(a, b, Hex(on ? kAccentHover : kBorder), h / 2);
-    const ImVec2 ts = ImGui::CalcTextSize(label);
-    dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), Hex(on ? 0xFFFFFF : kMuted), label);
+// The controller in 3D, live: held buttons light up and sink, the sticks lean, the triggers
+// travel and fingers show on the touchpad, with the lightbar in its current color. Drag to
+// turn it, scroll to zoom, double-click to put it back.
+void PadModelView(const pad::State& st, Rgb lightbar, bool lit, float height) {
+    static s3d::Camera cam;
+    static bool camSet = false;
+    auto reset = [] {
+        cam = {};
+        cam.target = {0, 2.f, 0.2f};
+        cam.yaw = 0.3f;  // a little from the side, so the triggers show
+        cam.pitch = 0.95f;
+        cam.distance = 23.f;
+    };
+    if (!camSet) {
+        reset();
+        camSet = true;
+    }
+    const float W = ImGui::GetContentRegionAvail().x;
+    const ImVec2 a = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilledMultiColor(a, ImVec2(a.x + W, a.y + height), Hex(0x141A26), Hex(0x141A26), Hex(0x07090D), Hex(0x07090D));
+    ImGui::InvisibleButton("pad-model", ImVec2(W, height));
+    ImGuiIO& io = ImGui::GetIO();
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+        if (io.MouseWheel != 0) cam.distance = std::clamp(cam.distance * std::pow(0.9f, io.MouseWheel), 14.f, 60.f);
+        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) reset();
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    }
+    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0)) {
+        cam.yaw -= io.MouseDelta.x * 0.01f;
+        cam.pitch = std::clamp(cam.pitch + io.MouseDelta.y * 0.01f, 0.1f, 1.5f);
+    }
+
+    s3d::Scene sc;
+    controller3d::Build(sc, 0, view3d::C(lightbar), lit, &st, s3d::Rgba(0x7C, 0x6C, 0xFF));
+    const s3d::Viewport vp{a.x, a.y, W, height};
+    const auto items = s3d::Render(sc, cam, vp);
+    dl->PushClipRect(a, ImVec2(a.x + W, a.y + height), true);
+    const uintptr_t image = scene_gpu::Image(3, items, vp, S());
+    if (image) dl->AddImage(static_cast<ImTextureID>(image), a, ImVec2(a.x + W, a.y + height));
+    else PaintItems(dl, items);
+    const char* hint = "Drag to turn, scroll to zoom, double-click to reset";
+    dl->AddText(ImVec2(a.x + 12 * S(), a.y + height - ImGui::GetTextLineHeight() - 10 * S()), Hex(kMuted, 170), hint);
+    dl->PopClipRect();
 }
 
-void PadStick(ImDrawList* dl, ImVec2 c, float r, uint8_t x, uint8_t y, bool pressed) {
-    dl->AddCircleFilled(c, r, Hex(kTrack), 32);
-    dl->AddCircle(c, r, Hex(pressed ? kAccentHover : kBorder), 32, pressed ? 2.f * S() : 1.2f * S());
-    dl->AddLine(ImVec2(c.x - r, c.y), ImVec2(c.x + r, c.y), Hex(kBorder, 120));
-    dl->AddLine(ImVec2(c.x, c.y - r), ImVec2(c.x, c.y + r), Hex(kBorder, 120));
-    const ImVec2 d(c.x + (x - 128) / 127.f * r * 0.8f, c.y + (y - 128) / 127.f * r * 0.8f);
-    dl->AddCircleFilled(d, r * 0.28f, Hex(pressed ? kAccentHover : kAccent), 20);
+// The lightbar's color: a lit swatch, its hex and RGB values (refreshed a few times a second so
+// a moving effect stays readable), and whether LumaBridge is lighting it.
+void LightbarRow(Controller& ctl, Rgb c, bool lit) {
+    static Rgb shown{};
+    static double shownAt = -1;
+    const double now = ImGui::GetTime();
+    if (now - shownAt > 0.25 || shownAt < 0) {
+        shown = c;
+        shownAt = now;
+    }
+    const float sw = 30 * S();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 cc(p.x + sw / 2, p.y + sw / 2);
+    if (lit)
+        for (int i = 3; i >= 1; --i) dl->AddCircleFilled(cc, sw / 2 + i * 3 * S(), IM_COL32(c.r, c.g, c.b, 18 + (3 - i) * 14), 32);
+    dl->AddCircleFilled(cc, sw / 2, IM_COL32(c.r, c.g, c.b, 255), 32);
+    dl->AddCircle(cc, sw / 2, IM_COL32(255, 255, 255, 50), 32, 1.f * S());
+    ImGui::Dummy(ImVec2(sw + 12 * S(), sw));
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    ImGui::TextUnformatted("Lightbar");
+    ImGui::PushStyleColor(ImGuiCol_Text, V4(kMuted));
+    if (lit) ImGui::Text("#%02X%02X%02X   Red %d, green %d, blue %d", shown.r, shown.g, shown.b, shown.r, shown.g, shown.b);
+    else if (!ctl.prefs().dualsenseController) ImGui::TextUnformatted("Lightbar control is off (Settings, below)");
+    else ImGui::TextUnformatted("Not lit by LumaBridge right now");
+    ImGui::PopStyleColor();
+    ImGui::EndGroup();
 }
 
-void PadBar(ImDrawList* dl, ImVec2 a, ImVec2 size, float fill, const char* label, uint8_t raw) {
-    dl->AddRectFilled(a, ImVec2(a.x + size.x, a.y + size.y), Hex(kTrack), size.y / 2);
-    if (fill > 0.01f)
-        dl->AddRectFilled(a, ImVec2(a.x + size.x * fill, a.y + size.y), Hex(kAccent), size.y / 2);
-    char text[24];
-    snprintf(text, sizeof text, "%s %d", label, raw);
-    dl->AddText(ImVec2(a.x, a.y + size.y + 2 * S()), Hex(kMuted), text);
+// Raw readings, a few times a second: they change too quickly to read at the screen's rate.
+void PadReadings(const pad::State& now) {
+    static pad::State st;
+    static double shownAt = -1;
+    const double t = ImGui::GetTime();
+    if (t - shownAt > 0.2 || shownAt < 0) {
+        st = now;
+        shownAt = t;
+    }
+    auto stick = [](uint8_t v) { return static_cast<int>(v) - 128; };
+    if (ImGui::BeginTable("pad-readings", 2, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("What", ImGuiTableColumnFlags_WidthFixed, 130 * S());
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        auto row = [](const char* what, const char* fmt, auto... args) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            Muted("%s", what);
+            ImGui::TableNextColumn();
+            ImGui::Text(fmt, args...);
+        };
+        row("Left stick", "%d, %d", stick(st.lx), stick(st.ly));
+        row("Right stick", "%d, %d", stick(st.rx), stick(st.ry));
+        row("Triggers", "L2 %d   R2 %d  (of 255)", st.l2, st.r2);
+        row("Touches", "%d", (st.touch[0].down ? 1 : 0) + (st.touch[1].down ? 1 : 0));
+        row("Gyroscope", "%d, %d, %d", st.gyro[0], st.gyro[1], st.gyro[2]);
+        row("Accelerometer", "%d, %d, %d", st.accel[0], st.accel[1], st.accel[2]);
+        ImGui::EndTable();
+    }
 }
 
 void PadLiveCard(Controller& ctl, const Fonts& f, const PadInput::Snapshot& snap) {
@@ -5138,67 +5282,27 @@ void PadLiveCard(Controller& ctl, const Fonts& f, const PadInput::Snapshot& snap
         return;
     }
     const pad::State& st = snap.state;
-    Muted("%s by %s. Press things on it: they light up here.", pad::ModelName(st.model), snap.bluetooth ? "Bluetooth" : "USB cable");
+    Muted("%s by %s. Press, push and squeeze: the model follows.%s", pad::ModelName(st.model),
+          snap.bluetooth ? "Bluetooth" : "USB cable", st.model == pad::Model::DualShock4 ? " (Drawn as a DualSense.)" : "");
     if (snap.bluetooth && snap.reports > 60 && st.battery < 0)
         Muted("Only the short Bluetooth report is arriving, so there is no battery or motion data. Reconnect the controller.");
     ImGui::Dummy(ImVec2(0, 4 * S()));
 
-    const float W = std::min(ImGui::GetContentRegionAvail().x, 620 * S()), H = 250 * S();
-    const ImVec2 o = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(o, ImVec2(o.x + W, o.y + H), Hex(kBg), 12 * S());
-    auto at = [&](float fx, float fy) { return ImVec2(o.x + W * fx, o.y + H * fy); };
-    const float chipH = 20 * S();
+    const Rgb color = view3d::Leds(ctl, device::kController, ImGui::GetTime(), 1)[0];
+    const bool lit = ctl.prefs().dualsenseController && ctl.dualsense().state() == DualSenseOutput::State::Active &&
+                     LiveParams(ctl, device::kController) != nullptr;
+    PadModelView(st, color, lit, 320 * S());
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    LightbarRow(ctl, lit ? color : Rgb{50, 54, 64}, lit);
 
-    // Triggers and shoulder buttons.
-    PadBar(dl, at(0.04f, 0.05f), ImVec2(W * 0.24f, 10 * S()), st.l2 / 255.f, "L2", st.l2);
-    PadBar(dl, at(0.72f, 0.05f), ImVec2(W * 0.24f, 10 * S()), st.r2 / 255.f, "R2", st.r2);
-    PadChip(dl, at(0.16f, 0.25f), W * 0.2f, chipH, "L1", st.Down(pad::kL1));
-    PadChip(dl, at(0.84f, 0.25f), W * 0.2f, chipH, "R1", st.Down(pad::kR1));
-
-    // D-pad (left) and face buttons (right).
-    const ImVec2 dc = at(0.16f, 0.52f), fc = at(0.84f, 0.52f);
-    const float arm = 24 * S(), key = 16 * S();
-    auto cell = [&](ImVec2 c, bool on) {
-        dl->AddRectFilled(ImVec2(c.x - key / 2, c.y - key / 2), ImVec2(c.x + key / 2, c.y + key / 2), Hex(on ? kAccent : kCardHover), 4 * S());
-    };
-    cell(ImVec2(dc.x, dc.y - arm), st.Down(pad::kUp));
-    cell(ImVec2(dc.x, dc.y + arm), st.Down(pad::kDown));
-    cell(ImVec2(dc.x - arm, dc.y), st.Down(pad::kLeft));
-    cell(ImVec2(dc.x + arm, dc.y), st.Down(pad::kRight));
-    auto face = [&](ImVec2 c, bool on, const char* label) {
-        dl->AddCircleFilled(c, key * 0.75f, Hex(on ? kAccent : kCardHover), 20);
-        dl->AddCircle(c, key * 0.75f, Hex(on ? kAccentHover : kBorder), 20);
-        const ImVec2 ts = ImGui::CalcTextSize(label);
-        dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), Hex(on ? 0xFFFFFF : kMuted), label);
-    };
-    face(ImVec2(fc.x, fc.y - arm), st.Down(pad::kTriangle), "T");
-    face(ImVec2(fc.x, fc.y + arm), st.Down(pad::kCross), "X");
-    face(ImVec2(fc.x - arm, fc.y), st.Down(pad::kSquare), "S");
-    face(ImVec2(fc.x + arm, fc.y), st.Down(pad::kCircle), "O");
-
-    // Touchpad with the fingers on it, and the small buttons around it.
-    const ImVec2 ta = at(0.34f, 0.12f), tb = at(0.66f, 0.40f);
-    dl->AddRectFilled(ta, tb, Hex(kTrack), 8 * S());
-    dl->AddRect(ta, tb, Hex(st.Down(pad::kTouchpad) ? kAccentHover : kBorder), 8 * S(), 0, st.Down(pad::kTouchpad) ? 2.f * S() : 1.f * S());
-    for (int i = 0; i < 2; ++i)
-        if (st.touch[i].down)
-            dl->AddCircleFilled(ImVec2(ta.x + (tb.x - ta.x) * std::min(1.f, st.touch[i].x / 1919.f),
-                                       ta.y + (tb.y - ta.y) * std::min(1.f, st.touch[i].y / 1079.f)),
-                                7 * S(), Hex(i ? kAccent2 : kAccent), 16);
-    PadChip(dl, at(0.27f, 0.20f), W * 0.12f, chipH, pad::ButtonName(st.model, pad::kCreate), st.Down(pad::kCreate));
-    PadChip(dl, at(0.73f, 0.20f), W * 0.12f, chipH, "Options", st.Down(pad::kOptions));
-    PadChip(dl, at(0.50f, 0.50f), W * 0.10f, chipH, "PS", st.Down(pad::kPs));
-    if (st.model == pad::Model::DualSense) PadChip(dl, at(0.50f, 0.60f), W * 0.10f, chipH, "Mute", st.Down(pad::kMute));
-
-    // Sticks.
-    const float r = std::min(W * 0.11f, 38 * S());
-    PadStick(dl, at(0.34f, 0.80f), r, st.lx, st.ly, st.Down(pad::kL3));
-    PadStick(dl, at(0.66f, 0.80f), r, st.rx, st.ry, st.Down(pad::kR3));
-    ImGui::Dummy(ImVec2(W, H));
-    Muted("Left stick %d, %d   Right stick %d, %d   Touches: %d", st.lx, st.ly, st.rx, st.ry,
-          (st.touch[0].down ? 1 : 0) + (st.touch[1].down ? 1 : 0));
-    Muted("Gyroscope %d, %d, %d   Accelerometer %d, %d, %d", st.gyro[0], st.gyro[1], st.gyro[2], st.accel[0], st.accel[1], st.accel[2]);
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    bool values = ctl.prefs().padShowValues;
+    if (Toggle("Show live readings", &values)) {
+        ctl.prefs().padShowValues = values;
+        ctl.Changed();
+    }
+    if (values) PadReadings(st);
+    else Muted("Stick, trigger and motion numbers. Off by default: they change many times a second.");
     EndCard();
 }
 
@@ -5231,23 +5335,45 @@ void PadBatteryCard(const Fonts& f, const PadInput::Snapshot& snap) {
     EndCard();
 }
 
-void PadTimingCard(const Fonts& f, const PadInput::Snapshot& snap) {
+void PadTimingCard(Controller& ctl, const Fonts& f, const PadInput::Snapshot& snap) {
     BeginCard("pad-timing");
     CardTitle(f, "Report timing", Icon::Gauge);
+    Muted("How often the controller sends its state, and how even that is. Lower and steadier is better. Bluetooth is "
+          "slower than a cable. This is the controller's own timing, not the delay inside a game.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    bool show = ctl.prefs().padShowTiming;
+    if (Toggle("Show live timing", &show)) {
+        ctl.prefs().padShowTiming = show;
+        ctl.Changed();
+    }
+    if (!show) {
+        Muted("Off by default: the numbers and graph change many times a second.");
+        EndCard();
+        return;
+    }
     if (!snap.connected) {
         Muted("Connect the controller to see how steadily it reports.");
         EndCard();
         return;
     }
-    Muted("How often the controller sends its state, and how even that is. Lower and steadier is better. Bluetooth is "
-          "slower than a cable. This is the controller's own timing, not the delay inside a game.");
+    // The numbers twice a second, so they can be read; the graph stays live.
+    static PadInput::Snapshot held;
+    static double heldAt = -1;
+    const double now = ImGui::GetTime();
+    if (now - heldAt > 0.5 || heldAt < 0) {
+        held = snap;
+        heldAt = now;
+    }
+    auto ms = [](double v) {
+        char text[24];
+        snprintf(text, sizeof text, "%.1f ms", v);
+        return std::string(text);
+    };
     ImGui::Dummy(ImVec2(0, 2 * S()));
-    PillFlow({{std::to_string(static_cast<int>(snap.rateHz + 0.5)) + " reports a second", kAccent},
-              {"Average " + std::to_string(snap.averageMs).substr(0, std::to_string(snap.averageMs).find('.') + 2) + " ms", kMuted},
-              {"Slowest " + std::to_string(snap.maxMs).substr(0, std::to_string(snap.maxMs).find('.') + 2) + " ms",
-               snap.maxMs > 30 ? kAmber : kMuted},
-              {"Jitter " + std::to_string(snap.jitterMs).substr(0, std::to_string(snap.jitterMs).find('.') + 2) + " ms",
-               snap.jitterMs > 5 ? kAmber : kMuted}});
+    PillFlow({{std::to_string(static_cast<int>(held.rateHz + 0.5)) + " reports a second", kAccent},
+              {"Average " + ms(held.averageMs), kMuted},
+              {"Slowest " + ms(held.maxMs), held.maxMs > 30 ? kAmber : kMuted},
+              {"Jitter " + ms(held.jitterMs), held.jitterMs > 5 ? kAmber : kMuted}});
     ImGui::Dummy(ImVec2(0, 4 * S()));
     // Graph of the last intervals, scaled to at least 20 ms.
     const ImVec2 a = ImGui::GetCursorScreenPos();
@@ -5964,7 +6090,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
             return;
         PadLiveCard(ctl, f, pad);
         PadBatteryCard(f, pad);
-        PadTimingCard(f, pad);
+        PadTimingCard(ctl, f, pad);
         PadMappingCard(ctl, f, pad);
         DualSenseCard(ctl, f);
         DeviceLightingCard(ctl, ui, f, device::kController);

@@ -98,6 +98,8 @@ struct Prefs {
     // Light a Sony DualSense's lightbar, by USB or Bluetooth (experimental).
     bool padInput = true;  // read a connected PlayStation controller (live view, battery, report timing)
     pad::Mapping padMapping;  // its button mapping (keyboard / mouse), off until switched on
+    // The controller page's fast-changing numbers (raw readings, report timing): hidden until switched on.
+    bool padShowValues = false, padShowTiming = false;
     bool dualsenseController = true;
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper.
     bool ramLighting = true;

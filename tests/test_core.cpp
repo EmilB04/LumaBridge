@@ -1269,6 +1269,40 @@ static void TestControllerModel() {
     luma::app::controller3d::Build(off, 24, Rgba(40, 40, 40), false);
     CHECK(off.glows.empty());
     for (const Face& f : off.faces) CHECK(!(f.flags & kEmissive));
+
+    // Live (the controller page): held parts take the press color, the trigger travels down,
+    // a finger shows on the touchpad. At rest it looks like the desk model.
+    namespace gp = luma::app::pad;
+    const uint32_t press = Rgba(124, 108, 255);
+    auto count = [&](const Scene& s, uint32_t color) {
+        int n = 0;
+        for (const Face& f : s.faces) n += f.color == color ? 1 : 0;
+        return n;
+    };
+    auto lowest = [](const Scene& s) {  // of the parts behind the body: the triggers
+        float y = 1e9f;
+        for (const Face& f : s.faces)
+            for (int i = 0; i < f.n; ++i)
+                if (f.p[static_cast<size_t>(i)].z < -4.5f) y = std::min(y, f.p[static_cast<size_t>(i)].y);
+        return y;
+    };
+    gp::State st;
+    Scene rest;
+    luma::app::controller3d::Build(rest, 1, Rgba(0, 150, 255), true, &st, press);
+    Scene desk;
+    luma::app::controller3d::Build(desk, 1, Rgba(0, 150, 255), true);
+    CHECK(count(rest, press) == 0 && rest.faces.size() == desk.faces.size());
+    st.buttons = gp::Bit(gp::kCross);
+    Scene cross;
+    luma::app::controller3d::Build(cross, 1, Rgba(0, 150, 255), true, &st, press);
+    CHECK(count(cross, press) > 0);
+    st.buttons = 0;
+    st.l2 = 255;
+    st.touch[0] = {true, 960, 540};
+    Scene squeezed;
+    luma::app::controller3d::Build(squeezed, 1, Rgba(0, 150, 255), true, &st, press);
+    CHECK(lowest(squeezed) < lowest(rest) - 0.1f);
+    CHECK(squeezed.glows.size() == rest.glows.size() + 1);
 }
 
 static void TestFlightSim() {

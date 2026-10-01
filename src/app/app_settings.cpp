@@ -188,6 +188,10 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (!v.empty()) p.dualsenseController = v != L"0";
     v = Read(ini, L"Controller", L"Input");
     if (!v.empty()) p.padInput = v != L"0";
+    v = Read(ini, L"Controller", L"ShowValues");
+    if (!v.empty()) p.padShowValues = v != L"0";
+    v = Read(ini, L"Controller", L"ShowTiming");
+    if (!v.empty()) p.padShowTiming = v != L"0";
     v = Read(ini, L"Controller", L"MapEnabled");
     if (!v.empty()) p.padMapping.enabled = v != L"0";
     v = Read(ini, L"Controller", L"MapMouseStick");
@@ -353,6 +357,8 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"AzothKeyboard", p.azothKeyboard ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"DualsenseController", p.dualsenseController ? L"1" : L"0");
     WriteConfigValue(ini, L"Controller", L"Input", p.padInput ? L"1" : L"0");
+    WriteConfigValue(ini, L"Controller", L"ShowValues", p.padShowValues ? L"1" : L"0");
+    WriteConfigValue(ini, L"Controller", L"ShowTiming", p.padShowTiming ? L"1" : L"0");
     WriteConfigValue(ini, L"Controller", L"MapEnabled", p.padMapping.enabled ? L"1" : L"0");
     WriteConfigValue(ini, L"Controller", L"MapMouseStick", p.padMapping.rightStickMouse ? L"1" : L"0");
     WriteConfigValue(ini, L"Controller", L"MouseSpeed", Num(p.padMapping.mouseSpeed));

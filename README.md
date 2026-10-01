@@ -25,11 +25,14 @@ and desk in 3D, live.
   actual lightbar color; drag and rotate it like the keyboard and mouse.
 - **DualSense Bluetooth:** wireless lighting handles Windows HID report sizes, initializes
   the controller lightbar on connection, and resumes after lighting control is handed back.
-- **Controller page:** a connected DualSense or DualShock 4 (USB or Bluetooth) shows its
-  buttons, sticks, triggers and motion live, its battery, and how steadily it reports. A
-  button mapping (off until you switch it on) makes buttons press keyboard keys or mouse
-  buttons, and can move the mouse with the right stick. DualShock 4 is untested on real
-  hardware.
+- **Controller page:** a connected DualSense or DualShock 4 (USB or Bluetooth) shows as a
+  3D controller that follows it live: held buttons light up and sink, the sticks lean, the
+  triggers travel and fingers show on the touchpad. Drag to turn it. The lightbar shows its
+  current color, with its hex and RGB values. Raw stick, trigger and motion numbers, and
+  how steadily the controller reports, change many times a second, so each sits behind its
+  own switch (off by default). The battery is shown too. A button mapping (off until you
+  switch it on) makes buttons press keyboard keys or mouse buttons, and can move the mouse
+  with the right stick. DualShock 4 is untested on real hardware.
 - **Monitor supports:** stands sit behind the screen instead of poking through it; vertical
   monitors and small desk panels have no stand.
 - **Detailed 3D setup:** sculpted keyboard keys with legends, the Azoth's screen and knob,
@@ -53,8 +56,10 @@ and desk in 3D, live.
   wave, gradient, comet and twinkle that run around each ARGB fan), presets, a customizable
   rainbow and the same color wheel, hex input and swatches for both colors. Give any device
   its own lighting, brightness and direction, or hand it back to its own app.
-- **Lighting page preview:** your setup in 3D (click a lit part to edit it) or the flat 2D
-  view, whichever you prefer. The 2D DualSense shows its white grips, touchpad, sticks,
+- **Lighting page:** your saved manual color, color values and effect take priority. In Auto
+  mode, choosing "My manual color" between games shows that saved look with a "Switch to
+  Manual" button to use and edit it. Expand "Your setup" for a live 2D or 3D preview in either
+  mode; in Manual, click a lit part to edit its lighting. The 2D DualSense shows its white grips, touchpad, sticks,
   D-pad and face buttons, with the live lighting on the touchpad light strips. Fans have
   curved blades and diffuser rings; the board shows its socket, heatsinks, slots and RAM
   latches. The mouse has a shaped shell and continuous light strip, the keyboard has key

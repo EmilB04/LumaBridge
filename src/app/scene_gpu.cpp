@@ -30,7 +30,7 @@ ID3D11Buffer* vertices = nullptr;
 ID3D11RasterizerState* raster = nullptr;
 ID3D11DepthStencilState *solidDepth = nullptr, *blendDepth = nullptr;
 ID3D11BlendState *solidBlend = nullptr, *alphaBlend = nullptr;
-Target targets[3];
+Target targets[kSlots];
 size_t capacity = 0;
 UINT samples = 1;
 
@@ -123,7 +123,7 @@ float4 pixel(P p) : SV_TARGET {
 }
 
 uintptr_t Image(int slot, const std::vector<s3d::DrawItem>& items, const s3d::Viewport& vp, float scale) {
-    if (!dev || slot < 0 || slot >= 3 || vp.w < 1 || vp.h < 1) return 0;
+    if (!dev || slot < 0 || slot >= kSlots || vp.w < 1 || vp.h < 1) return 0;
     Target& t = targets[slot];
     if (!Resize(t, std::clamp(static_cast<int>(std::ceil(vp.w)), 1, 4096), std::clamp(static_cast<int>(std::ceil(vp.h)), 1, 4096))) return 0;
     const s3d::Mesh mesh = s3d::MakeMesh(items, vp, scale);
