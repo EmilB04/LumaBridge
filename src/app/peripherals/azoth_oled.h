@@ -7,8 +7,9 @@
 
 namespace luma::app::azoth {
 
-enum class OledContent { Keep, Animation, Clock };
+enum class OledContent { Keep, Animation, Clock, Equalizer, SongInfo };
 enum class OledAnimationSource { Asus, LumaBridge };
+constexpr int kLumaOledAnimationCount = 18;
 
 struct OledSettings {
     bool direct = true;  // always: the Armoury Crate / LumaBridge choice was removed
@@ -24,10 +25,10 @@ struct OledSettings {
 inline OledSettings NormalizeOled(OledSettings s) {
     s.brightness = std::clamp(s.brightness, 0, 100);
     s.animation = std::clamp(s.animation, 0, 5);
-    s.lumaAnimation = std::clamp(s.lumaAnimation, 0, 5);
+    s.lumaAnimation = std::clamp(s.lumaAnimation, 0, kLumaOledAnimationCount - 1);
     if (s.animationSource != OledAnimationSource::Asus && s.animationSource != OledAnimationSource::LumaBridge)
         s.animationSource = OledAnimationSource::Asus;
-    if (s.content != OledContent::Keep && s.content != OledContent::Animation && s.content != OledContent::Clock)
+    if (s.content < OledContent::Keep || s.content > OledContent::SongInfo)
         s.content = OledContent::Keep;
     return s;
 }
@@ -73,7 +74,8 @@ inline std::vector<Report> OledCommands(OledSettings settings, Link link, OledTi
     std::vector<Report> out{OledCommand(link, 0x69, s.enabled ? 1 : 0)};
     if (!s.enabled) return out;
     out.push_back(OledCommand(link, 0x68, static_cast<uint8_t>(s.brightness)));
-    // Custom GIFs use Armoury Crate's importer; never select a firmware preset in their place.
+    // Custom GIF uploads are manual, serialized transactions; never select a firmware
+    // preset in their place or repeat an upload on a settings change or reconnect.
     if (s.content == OledContent::Animation && s.animationSource == OledAnimationSource::Asus)
         out.push_back(OledCommand(link, 0x61, static_cast<uint8_t>(s.animation)));
     else if (s.content == OledContent::Clock)

@@ -65,10 +65,25 @@ with an administrator prompt.
 
 ![Windows Azoth device page showing screen controls and six LumaBridge GIF previews](docs/images/app-azoth.png)
 
-Preview six custom animations and export a **256 × 64 GIF**, then upload it through
-Armoury Crate using the illustrated guide in the app. Direct screen power, brightness,
+Choose from eighteen compact animation previews and click **Upload to Azoth (USB)** to send
+the animation directly from LumaBridge, with progress and cancellation. This experimental
+upload uses the original Azoth's HID connection and requires no Armoury Crate installation.
+The firmware's artwork area is **208 × 64**, beside its status icons; LumaBridge fits the
+animation into that area. Wireless GIF uploads and importing your own GIF files are not
+implemented yet. You can still export a **256 × 64 GIF** and use the Armoury Crate fallback
+guide. Direct screen power, brightness,
 ASUS built-in animations and a local clock are also available as experimental controls.
-Custom GIFs still require the Armoury Crate upload step.
+Direct GIF uploads have been confirmed on the owner's original Azoth by cable.
+
+The **Show** menu also offers **Audio EQ** and **Song info**. EQ uses the default Windows
+playback device and displays a live 32-band spectrum. Song info reads the current Windows
+media session and displays its title and artist, shortening long lines to fit. Both modes
+require USB and LumaBridge running, pause during keyboard sleep, and use separate music
+commands without uploading to the custom GIF slot. No ASUS software is required. Players
+must share their song information with Windows; exclusive audio streams may not appear in
+the EQ. Windows audio capture and media-session reads have been checked natively, but the
+new music modes still need physical-screen validation. Turn off Armoury Crate's live OLED
+modes if they overwrite LumaBridge's display.
 
 These previews are captured from the native Windows app with connected hardware.
 [Image details](docs/images/README.md).
@@ -110,7 +125,7 @@ connections; vendor apps still handle firmware updates, macros and cooling confi
 | Hardware | Connection and scope |
 |---|---|
 | **ASUS Aura motherboard / ARGB** | Direct USB control of supported motherboard LEDs and ARGB headers, including fans and strips. Optional Aura SDK backend. |
-| **ROG Azoth** | Direct per-key lighting over USB or the ROG Omni receiver; experimental OLED controls and GIF export. |
+| **ROG Azoth** | Direct per-key lighting over USB or the ROG Omni receiver; OLED controls, 18 GIF animations with USB upload, and experimental USB audio EQ / song info. |
 | **Logitech** | Direct HID++ for supported mice; G502 X Plus supports individual LEDs. Other RGB gear can use G HUB's LED SDK, which sends one color. |
 | **HyperX / Kingston FURY RGB DDR4** | Experimental native control through Hardware access. AMD PIIX4 and Intel I801 supported; Intel lighting still needs physical validation. Other controller families and DDR5 can use OpenRGB where supported. |
 | **Windows lighting devices** | Native HID LampArray output for devices that expose Windows' lighting standard in their firmware. |

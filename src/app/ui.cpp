@@ -35,6 +35,7 @@
 #include "azoth_layout.h"
 #include "azoth_oled_assets.h"
 #include "azoth_oled_effects.h"
+#include "azoth_music_source.h"
 #include "armoury_crate.h"
 #include "logitech_hidpp.h"
 #include "openrgb_protocol.h"
@@ -5484,10 +5485,10 @@ void Pixels(const Screen& s, const std::vector<uint8_t>& pixels) {
 
 // ASUS animations use Armoury Crate's installed artwork. LumaBridge animations use the
 // export renderer; the clock remains an illustration of the keyboard's firmware layout.
-void OledMockup(const azoth::OledSettings& s, const Fonts& f, float width) {
+void OledMockup(const azoth::OledSettings& s, const Fonts& f, float width, const azoth::MusicSnapshot& music) {
     using namespace oledview;
     const float bezel = 12 * S();
-    const float px = std::max(1.f, std::floor((width - bezel * 2) / kW * 4) / 4);
+    const float px = std::max(0.25f, std::floor((width - bezel * 2) / kW * 4) / 4);
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float sw = kW * px, sh = kH * px;
     const ImVec2 outerMin(p.x, p.y), outerMax(p.x + sw + bezel * 2, p.y + sh + bezel * 2);
@@ -5553,6 +5554,21 @@ void OledMockup(const azoth::OledSettings& s, const Fonts& f, float width) {
                 note(title);
             }
         }
+    } else if (s.content == azoth::OledContent::Equalizer) {
+        for (size_t i = 0; i < music.levels.size(); ++i)
+            screen.Rect(static_cast<float>(i * 8 + 1), 64.f - music.levels[i], 6, music.levels[i]);
+    } else if (s.content == azoth::OledContent::SongInfo) {
+        static std::wstring title, artist;
+        static std::vector<uint8_t> pixels;
+        if (pixels.empty() || title != music.title || artist != music.artist) {
+            title = music.title; artist = music.artist;
+            pixels = azoth::RenderSong(music);
+        }
+        if (pixels.size() == 208 * 64)
+            for (int y = 0; y < 64; ++y)
+                for (int x = 0; x < 208; ++x)
+                    if (pixels[y * 208 + x]) screen.Rect(static_cast<float>(x + 24), static_cast<float>(y), 1, 1,
+                                                         pixels[y * 208 + x] / 255.f);
     } else {
         note("Current screen kept");
     }
@@ -5710,17 +5726,20 @@ void OledUploadGuide(const Fonts& f, int effect, bool exported) {
     ImGui::PopStyleVar();
 }
 
-bool LumaOledGifGallery(UiState& ui, const Fonts& f, azoth::OledSettings& settings) {
+bool LumaOledGifGallery(Controller& ctl, UiState& ui, const Fonts& f, azoth::OledSettings& settings) {
     ImGui::PushFont(f.bold);
     ImGui::TextUnformatted("LumaBridge GIFs");
     ImGui::PopFont();
     ImGui::SameLine();
     Pill("Custom animations", kAccent2);
-    Muted("Choose an animation, export it, then upload it with Armoury Crate. Each tile is a live preview.");
+    Muted("Choose an animation and upload it directly to your Azoth by USB. Each tile is a live preview.");
+    Muted("Choose Audio EQ in Show for bars that follow your music.");
     ImGui::Dummy(ImVec2(0, 4 * S()));
     bool changed = false;
     const float available = ImGui::GetContentRegionAvail().x;
-    const int cols = available >= 620 * S() ? 3 : available >= 400 * S() ? 2 : 1;
+    const int cols = available >= 1020 * S() ? 6 : available >= 620 * S() ? 3 : available >= 400 * S() ? 2 : 1;
+    static std::array<std::vector<uint8_t>, azoth::kLumaOledAnimationCount> previewPixels;
+    static std::array<double, azoth::kLumaOledAnimationCount> previewTime{};
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6 * S(), 6 * S()));
     if (ImGui::BeginTable("luma-oled-effects", cols, ImGuiTableFlags_SizingStretchSame)) {
         for (int i = 0; i < static_cast<int>(azoth::kLumaAnimationNames.size()); ++i) {
@@ -5728,7 +5747,7 @@ bool LumaOledGifGallery(UiState& ui, const Fonts& f, azoth::OledSettings& settin
             ImGui::PushID(i);
             const ImVec2 p = ImGui::GetCursorScreenPos();
             const float width = ImGui::GetContentRegionAvail().x;
-            const float pad = 10 * S(), screenWidth = width - 2 * pad;
+            const float pad = 10 * S(), screenWidth = std::min(width - 2 * pad, 208 * S());
             const float screenHeight = screenWidth / 4;
             const float height = screenHeight + ImGui::GetTextLineHeight() + 3 * pad;
             if (ImGui::InvisibleButton("effect", ImVec2(width, height)) && settings.lumaAnimation != i) {
@@ -5745,11 +5764,16 @@ bool LumaOledGifGallery(UiState& ui, const Fonts& f, azoth::OledSettings& settin
                 dl->AddRectFilled(p, end, Hex(selected ? 0x242039 : hovered ? kCardHover : 0x10141D), 10 * S());
                 dl->AddRect(p, end, Hex(selected ? kAccent : hovered ? kAccentHover : kBorder), 10 * S(), 0,
                             selected ? 2 * S() : S());
-                const ImVec2 screen(p.x + pad, p.y + pad);
+                const ImVec2 screen(p.x + (width - screenWidth) / 2, p.y + pad);
                 dl->AddRectFilled(screen, ImVec2(screen.x + screenWidth, screen.y + screenHeight), Hex(0x000000), 4 * S());
                 dl->PushClipRect(screen, ImVec2(screen.x + screenWidth, screen.y + screenHeight), true);
                 const oledview::Screen pixels{dl, screen, screenWidth / oledview::kW, 0.9f};
-                oledview::Pixels(pixels, azoth::RenderOledEffect(i, std::floor(ImGui::GetTime() * 20) / 20));
+                const double frameTime = std::floor(ImGui::GetTime() * 20) / 20;
+                if (previewPixels[i].empty() || previewTime[i] != frameTime) {
+                    previewPixels[i] = azoth::RenderOledEffect(i, frameTime);
+                    previewTime[i] = frameTime;
+                }
+                oledview::Pixels(pixels, previewPixels[i]);
                 dl->PopClipRect();
                 const char* label = azoth::kLumaAnimationNames[i] + std::strlen("LumaBridge - ");
                 const float labelY = p.y + 2 * pad + screenHeight;
@@ -5772,6 +5796,34 @@ bool LumaOledGifGallery(UiState& ui, const Fonts& f, azoth::OledSettings& settin
     Muted("Selected file: %s", fileName.c_str());
     Muted("256 x 64  /  20 fps  /  7.5-second loop");
     ImGui::PopFont();
+    const auto uploadState = ctl.azoth().uploadState();
+    const bool uploading = uploadState == AzothOutput::UploadState::Pending ||
+                           uploadState == AzothOutput::UploadState::Uploading;
+    const bool canUpload = !uploading && settings.enabled && !ctl.azothAsleep() &&
+                           ctl.azoth().connection() == azoth::Connection::Wired;
+    ImGui::BeginDisabled(!canUpload);
+    if (PrimaryButton("Upload to Azoth (USB)")) {
+        // Apply any selection made this frame before queuing the manual upload.
+        ctl.SetAzothOled(settings);
+        ctl.UploadAzothOledEffect(settings.lumaAnimation);
+    }
+    ImGui::EndDisabled();
+    if (uploading) {
+        ImGui::SameLine(0, 10 * S());
+        if (Btn("Cancel upload")) ctl.CancelAzothOledUpload();
+        const float progress = ctl.azoth().uploadProgress() / 100.f;
+        char label[24];
+        snprintf(label, sizeof label, "%d%%", ctl.azoth().uploadProgress());
+        ImGui::ProgressBar(progress, ImVec2(std::min(360 * S(), available), 0), label);
+    }
+    const auto uploadMessage = ctl.azoth().uploadMessage();
+    if (!uploadMessage.empty()) Muted("%s", uploadMessage.c_str());
+    if (!canUpload && !uploading)
+        Muted("Connect by USB, wake the keyboard and turn the screen on to upload.");
+    Muted("Test feature. Replaces the keyboard's custom animation; Armoury Crate isn't needed. "
+          "The keyboard fits artwork into 208 x 64 pixels beside its status icons.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    if (!ImGui::CollapsingHeader("Export GIF / Armoury Crate fallback")) return changed;
     const float rowRight = ImGui::GetCursorScreenPos().x + available;
     if (PrimaryButton("Export GIF and open folder")) {
         std::wstring path;
@@ -5806,7 +5858,7 @@ bool LumaOledGifGallery(UiState& ui, const Fonts& f, azoth::OledSettings& settin
         ImGui::PopFont();
     }
     ImGui::Dummy(ImVec2(0, 4 * S()));
-    if (ImGui::CollapsingHeader("How to put this GIF on your Azoth", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("How to upload with Armoury Crate")) {
         ImGui::PushFont(f.caption);
         Muted("Export in LumaBridge; finish the upload in Armoury Crate.");
         ImGui::PopFont();
@@ -5841,8 +5893,9 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
             case OS::Active:
                 if (settings.content == azoth::OledContent::Animation &&
                     settings.animationSource == azoth::OledAnimationSource::LumaBridge) {
-                    text = "Custom GIF: upload required";
-                    color = kAmber;
+                    const bool uploaded = ctl.azoth().uploadedEffect() == settings.lumaAnimation;
+                    text = uploaded ? "Custom GIF uploaded" : "Custom GIF: upload required";
+                    color = uploaded ? kGreen : kAmber;
                 } else {
                     text = ctl.azoth().wireless() ? "Confirmed (Omni)" : "Confirmed (USB)";
                     color = kGreen;
@@ -5853,6 +5906,13 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
             case OS::Failed: text = "OLED request failed"; color = kAmber; break;
             default: text = "Waiting for keyboard"; break;
             }
+            if (ctl.azoth().uploadState() == AzothOutput::UploadState::Pending ||
+                ctl.azoth().uploadState() == AzothOutput::UploadState::Uploading) {
+                text = "Uploading GIF";
+                color = kAccent2;
+            }
+            if ((settings.content == azoth::OledContent::Equalizer || settings.content == azoth::OledContent::SongInfo) &&
+                connection == azoth::Connection::Wireless) { text = "Music: USB required"; color = kAmber; }
         }
         const float pw = ImGui::CalcTextSize(text).x + 20 * S();
         ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - pw));
@@ -5864,17 +5924,21 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
     const bool previewInGallery = settings.content == azoth::OledContent::Animation &&
                                   settings.animationSource == azoth::OledAnimationSource::LumaBridge;
     if (!previewInGallery) {
-        const float mockW = std::min(ImGui::GetContentRegionAvail().x, 600 * S());
-        OledMockup(settings, f, mockW);
+        const float mockW = std::min(ImGui::GetContentRegionAvail().x, 360 * S());
+        OledMockup(settings, f, mockW, ctl.azoth().musicSnapshot());
         ImGui::PushFont(f.caption);
         Muted(settings.enabled && settings.content == azoth::OledContent::Animation
                   ? (settings.animationSource == azoth::OledAnimationSource::LumaBridge
-                        ? "LumaBridge preview. Export this GIF and upload it in Armoury Crate to play it on the keyboard."
+                        ? "LumaBridge preview. Use Upload to Azoth to play this animation on the keyboard."
                         : AsusAzothOledPreview(settings.animation, ImGui::GetTime()).empty()
                             ? "ASUS preset. Preview artwork is unavailable; selecting it still plays the keyboard's built-in effect."
                             : "ASUS preview, using Armoury Crate's original artwork. The keyboard adds its own status icons.")
               : settings.enabled && settings.content == azoth::OledContent::Clock
                   ? "Preview of the clock, from this PC's time. The keyboard draws it in its own style."
+              : settings.enabled && settings.content == azoth::OledContent::Equalizer
+                  ? "Preview of live playback audio. Connect the keyboard by USB and play audio to see the bars."
+              : settings.enabled && settings.content == azoth::OledContent::SongInfo
+                  ? "Preview of the current Windows song title and artist. Connect the keyboard by USB to enable it."
               : !settings.enabled ? "Preview: the screen is off."
                                                      : "Preview.");
         ImGui::PopFont();
@@ -5943,9 +6007,10 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
         ImGui::PopFont();
         ImGui::Dummy(ImVec2(0, 2 * S()));
         ImGui::TextUnformatted("Show");
-        static const char* kShow[] = {"Keep current", "Animation", "Clock"};
+        static const char* kShow[] = {"Keep current", "Animation", "Clock", "Audio EQ", "Song info"};
         int content = static_cast<int>(settings.content);
-        if (Segmented("oled-show", &content, kShow, 3, std::min(ImGui::GetContentRegionAvail().x, 420 * S()))) {
+        ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 420 * S()));
+        if (ImGui::Combo("##oled-show", &content, kShow, 5)) {
             settings.content = static_cast<azoth::OledContent>(content);
             changed = true;
         }
@@ -5984,6 +6049,16 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
             ImGui::PushFont(f.caption);
             Muted("Uses this PC's local date and time. Updates once per minute while the keyboard is awake.");
             ImGui::PopFont();
+        } else if (settings.content == azoth::OledContent::Equalizer || settings.content == azoth::OledContent::SongInfo) {
+            ImGui::PushFont(f.caption);
+            Muted(settings.content == azoth::OledContent::Equalizer
+                      ? "Live spectrum of this PC's default playback device. Play music or other audio to light the bars."
+                      : "Shows the current song title and artist shared with Windows by players such as Spotify or your browser. Long lines are shortened to fit.");
+            Muted("Connect the Azoth by USB and keep LumaBridge running. These music modes pause when the keyboard sleeps. Turn off Armoury Crate's live OLED modes to avoid conflicts.");
+            const auto music = ctl.azoth().musicSnapshot();
+            if (!music.status.empty()) Muted("%s", music.status.c_str());
+            if (!music.title.empty()) ImGui::TextWrapped("%s%s%s", Utf8(music.title).c_str(), music.artist.empty() ? "" : " - ", Utf8(music.artist).c_str());
+            ImGui::PopFont();
         }
         ImGui::EndDisabled();
         if (changed) ctl.SetAzothOled(settings);
@@ -6004,7 +6079,7 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
         ImGui::Dummy(ImVec2(0, 6 * S()));
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0, 6 * S()));
-        if (LumaOledGifGallery(ui, f, settings)) ctl.SetAzothOled(settings);
+        if (LumaOledGifGallery(ctl, ui, f, settings)) ctl.SetAzothOled(settings);
     } else {
         section("Custom images and GIFs");
         Muted("Armoury Crate uploads them: ROG Azoth > OLED > Image or Animation > Custom image/animation > Replace File > Apply. "

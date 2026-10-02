@@ -12,6 +12,7 @@
 
 #include "azoth_protocol.h"
 #include "azoth_oled.h"
+#include "azoth_oled_music.h"
 #include "azoth_connection.h"
 #include "effects.h"
 
@@ -21,6 +22,7 @@ class AzothOutput {
 public:
     enum class State { Off, NotFound, Active, Released };
     enum class OledState { Vendor, Pending, NotFound, Active, Asleep, Failed };
+    enum class UploadState { Idle, Pending, Uploading, Complete, Failed, Cancelled };
 
     ~AzothOutput() { Stop(); }
     void Start();
@@ -30,10 +32,17 @@ public:
     void Set(const fx::Params& effect, double brightness, bool own, bool asleep = false);
     void SetOled(azoth::OledSettings settings);
     void ReapplyOled();
+    bool UploadOledEffect(int effect);
+    void CancelOledUpload();
+    UploadState uploadState() const { return uploadState_; }
+    int uploadProgress() const { return uploadProgress_; }
+    std::string uploadMessage() const;
+    int uploadedEffect() const { return uploadedEffect_; }
     OledState oledState() const { return oledState_; }
     unsigned long oledError() const { return oledError_; }
     int oledAnimation() const { return oledAnimation_; }
     std::string oledFailureDetails() const;
+    azoth::MusicSnapshot musicSnapshot() const;
     azoth::Connection connection() const { return connection_; }
     void Rescan() { rescan_ = true; }
     // Asleep (device_sleep.h): nothing more goes to the keyboard until it's used again.
@@ -60,6 +69,7 @@ private:
     std::atomic<int> oledAnimation_{-1};
     mutable std::mutex mutex_;
     std::string oledFailureDetails_;
+    azoth::MusicSnapshot musicSnapshot_;
     fx::Params effect_;
     double brightness_ = 1.0;
     bool own_ = false;
@@ -67,6 +77,11 @@ private:
     uint64_t effectSince_ = 0;
     azoth::OledSettings oled_;
     uint64_t oledRevision_ = 0;
+    std::atomic<UploadState> uploadState_{UploadState::Idle};
+    std::atomic<int> uploadProgress_{0}, uploadedEffect_{-1};
+    std::atomic<bool> cancelUpload_{false};
+    int uploadEffect_ = -1;
+    std::string uploadMessage_;
 };
 
 }  // namespace luma::app

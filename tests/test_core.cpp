@@ -11,6 +11,8 @@
 #include "color.h"
 #include "effects.h"
 #include "azoth_oled_effects.h"
+#include "azoth_oled_music.h"
+#include "azoth_oled_upload.h"
 #include "lighting_state.h"
 #include "chroma_translate.h"
 #include "aura_usb_protocol.h"
@@ -2956,7 +2958,7 @@ static void TestAzothOled() {
         for (const auto& command : custom) CHECK(command[1] != 0x61 && !IsSave(command));
     }
     s.lumaAnimation = 999;
-    CHECK(NormalizeOled(s).lumaAnimation == 5);
+    CHECK(NormalizeOled(s).lumaAnimation == kLumaOledAnimationCount - 1);
     s.animationSource = static_cast<OledAnimationSource>(999);
     CHECK(NormalizeOled(s).animationSource == OledAnimationSource::Asus);
     s = asusSettings;
@@ -3034,13 +3036,118 @@ static void TestAzothPower() {
     CHECK(!never.Desired(true) && !never.Desired(false));
 }
 
+static void TestAzothOledUpload() {
+    using namespace luma::app::azoth;
+    OledUploadFrame frame{std::vector<uint8_t>(kOledWidth * kOledHeight), 50};
+    // Two adjacent source pixels become the low/high nibbles. Fit the right edge too.
+    frame.gray[0] = 0xAF;
+    frame.gray[1] = 0x3F;
+    frame.gray[254] = 0x70;
+    const auto data = OledUploadData({frame});
+    CHECK(data.size() == 4 + 208 * 64 / 2);
+    CHECK(data[0] == 1 && data[1] == 0 && data[2] == 50 && data[3] == 0);
+    CHECK(data[4] == 0x3A && data[4 + 103] == 0x70);
+    frame.delayMs = 1000;
+    const auto timed = OledUploadData({frame, frame});
+    CHECK(timed[0] == 2 && timed[2] == 0xE8 && timed[3] == 3 && timed[4] == 0xE8 && timed[5] == 3);
+    CHECK(OledUploadData({}).empty());
+    CHECK(OledUploadData(std::vector<OledUploadFrame>(197, frame)).empty());
+    frame.delayMs = 39;
+    CHECK(OledUploadData({frame}).empty());
+    frame.delayMs = 65536;
+    CHECK(OledUploadData({frame}).empty());
+    frame.delayMs = 50;
+    frame.gray.pop_back();
+    CHECK(OledUploadData({frame}).empty());
+    // Real uploads cross the one-byte packet-count boundary. The wire counter counts
+    // down to zero, including the padded final packet; it is not a byte/frame offset.
+    std::vector<uint8_t> payload(60 * 256 + 1, 0xAB);
+    const auto begin = OledUploadBegin(payload);
+    CHECK(begin[0] == 0 && begin[1] == 0x61 && begin[2] == 1 && begin[3] == 0 && begin[4] == 0);
+    CHECK(begin[5] == 1 && begin[6] == 1 && OledUploadChunks(payload) == 257);
+    const auto first = OledUploadPart(payload, 0), last = OledUploadPart(payload, 256);
+    CHECK(first[2] == 2 && first[3] == 0 && first[4] == 1 && first[5] == 0xAB && first[64] == 0xAB);
+    CHECK(last[2] == 2 && last[3] == 0 && last[4] == 0 && last[5] == 0xAB && last[6] == 0 && last[64] == 0);
+    CHECK(OledUploadPart(payload, 257) == Report{} && OledUploadBegin({}) == Report{});
+    const auto show = OledUploadShow();
+    CHECK(show[0] == 0 && show[1] == 0x61 && show[2] == 3 && show[5] == 0);
+    CHECK(ClassifyOledReply(first, begin, begin.size()) == OledReply::Unrelated);
+    CHECK(ClassifyOledReply(first, first, first.size()) == OledReply::Accepted);
+    CHECK(!IsSave(begin) && !IsSave(first) && !IsSave(show));
+}
+
+static void TestAzothOledMusic() {
+    using namespace luma::app::azoth;
+    const uint8_t pcm16[] = {0, 0x80}, pcm24[] = {0, 0, 0x80}, pcm32[] = {0, 0, 0, 0x80};
+    CHECK(PlaybackSample(pcm16, 2, false) == -1);
+    CHECK(PlaybackSample(pcm24, 3, false) == -1);
+    CHECK(PlaybackSample(pcm32, 4, false) == -1);
+    const uint8_t half[] = {0, 0x40}, minusOne[] = {0xFF, 0xFF, 0xFF};
+    CHECK(PlaybackSample(half, 2, false) == .5f);
+    CHECK(PlaybackSample(minusOne, 3, false) == -1.f / 8388608);
+    CHECK(PlaybackSample(nullptr, 4, true) == 0 && PlaybackSample(half, 1, false) == 0);
+    float sample = .25f;
+    CHECK(PlaybackSample(reinterpret_cast<const uint8_t*>(&sample), 4, true) == sample);
+    sample = std::numeric_limits<float>::infinity();
+    CHECK(PlaybackSample(reinterpret_cast<const uint8_t*>(&sample), 4, true) == 0);
+    std::array<float, kSpectrumSamples> samples{};
+    const Spectrum dark{};
+    CHECK(AudioSpectrum(samples, 48000) == dark);
+    CHECK(AudioSpectrum(samples, 0) == dark);
+    for (size_t i = 0; i < samples.size(); ++i)
+        samples[i] = static_cast<float>(.5 * std::sin(6.283185307179586 * 1000 * i / 48000));
+    const auto tone = AudioSpectrum(samples, 48000);
+    const auto loudest = static_cast<size_t>(std::max_element(tone.begin(), tone.end()) - tone.begin());
+    CHECK(loudest >= 16 && loudest <= 18 && tone[loudest] > 50);
+    CHECK(tone[0] < 5 && tone.back() < 5);
+    for (auto& value : samples) value *= .01f;
+    const auto quiet = AudioSpectrum(samples, 48000);
+    CHECK(quiet[loudest] > 0 && quiet[loudest] < tone[loudest]);
+    samples.fill(std::numeric_limits<float>::quiet_NaN());
+    CHECK(AudioSpectrum(samples, 48000) == dark);
+
+    const auto mode = OledMusicMode(true);
+    CHECK(mode[0] == 0 && mode[1] == 0x67 && mode[2] == 0 && mode[5] == 1 && mode[6] == 1);
+    CHECK(mode[7] == 0 && mode[8] == 0 && mode[9] == 208 && mode[10] == 0 && mode[11] == 64 && mode[12] == 0);
+    auto bars = OledSpectrum(tone);
+    CHECK(bars[1] == 0x67 && bars[2] == 2 && bars[3] == 0 && bars[4] == 0);
+    CHECK(std::equal(tone.begin(), tone.end(), bars.begin() + 5));
+    Spectrum excessive{}; excessive.fill(255);
+    CHECK(OledSpectrum(excessive)[5] == 64);
+    std::vector<uint8_t> pixels(208 * 64, 0);
+    pixels[0] = 255; pixels[1] = 128; pixels.back() = 255;
+    const auto data = OledSongPixels(pixels);
+    CHECK(data.size() == 6656 && data.front() == 0x8F && data.back() == 0xF0);
+    CHECK(OledSongPixels({}).empty());
+    const auto song = OledMusicMode(false, data.size());
+    CHECK(song[5] == 0 && song[6] == 0 && song[7] == 111 && song[8] == 0);
+    std::vector<uint8_t> decoded;
+    for (size_t i = 0; i < 111; ++i) {
+        const auto part = OledSongPart(data, i);
+        CHECK(part[1] == 0x67 && part[2] == 1 && part[3] == 110 - i && part[4] == 0);
+        CHECK(!IsSave(part));
+        decoded.insert(decoded.end(), part.begin() + 5, part.end());
+    }
+    CHECK(std::equal(data.begin(), data.end(), decoded.begin()));
+    CHECK(std::all_of(decoded.begin() + data.size(), decoded.end(), [](uint8_t p) { return p == 0; }));
+    CHECK(OledSongPart(data, 111) == Report{});
+    CHECK(ClassifyOledReply(mode, bars, bars.size()) == OledReply::Unrelated);
+    CHECK(ClassifyOledReply(mode, mode, mode.size()) == OledReply::Accepted);
+    OledSettings settings;
+    for (auto content : {OledContent::Equalizer, OledContent::SongInfo}) {
+        settings.content = content;
+        CHECK(NormalizeOled(settings).content == content);
+        CHECK(OledCommands(settings, Link::Wireless, {}).size() == 2); // No live music writes through Omni.
+    }
+}
+
 static void TestAzothOledEffects() {
     using namespace luma::app::azoth;
     CHECK(std::wstring(kAsusAnimationFiles[2]) == L"firework");
     CHECK(std::wstring(kAsusAnimationFiles[4]) == L"heartbeat");
     CHECK(kOledEffectFrames <= 196 && 100 / kOledEffectDelay <= 25 && kOledEffectSeconds <= 8);
     std::vector<std::vector<uint8_t>> examples;
-    for (int effect = 0; effect < 6; ++effect) {
+    for (int effect = 0; effect < kLumaOledAnimationCount; ++effect) {
         const auto first = RenderOledEffect(effect, 1.25);
         CHECK(first.size() == kOledWidth * kOledHeight);
         CHECK(first == RenderOledEffect(effect, 1.25));
@@ -3048,14 +3155,14 @@ static void TestAzothOledEffects() {
         CHECK(first == RenderOledEffect(effect, 1.25 - kOledEffectSeconds));
         CHECK(first != RenderOledEffect(effect, 2.5));
         CHECK(std::any_of(first.begin(), first.end(), [](uint8_t p) { return p != 0; }));
-        CHECK(std::any_of(first.begin(), first.end(), [](uint8_t p) { return p == 0; }));
+        CHECK(*std::min_element(first.begin(), first.end()) != *std::max_element(first.begin(), first.end()));
         for (const auto& previous : examples) CHECK(first != previous);
         examples.push_back(first);
     }
     const auto invalid = RenderOledEffect(-1, 0);
     CHECK(std::all_of(invalid.begin(), invalid.end(), [](uint8_t p) { return p == 0; }));
     CHECK(RenderOledEffect(0, std::numeric_limits<double>::infinity()) == invalid);
-    CHECK(OledEffectGif(-1).empty() && OledEffectGif(6).empty());
+    CHECK(OledEffectGif(-1).empty() && OledEffectGif(kLumaOledAnimationCount).empty());
     const auto gif = OledEffectGif(0);
     CHECK(gif.size() > 1000 && std::memcmp(gif.data(), "GIF89a", 6) == 0 && gif.back() == 0x3B);
     CHECK(gif[6] == 0 && gif[7] == 1 && gif[8] == 64 && gif[9] == 0);
@@ -3180,6 +3287,8 @@ int main() {
     TestAzothOled();
     TestAzothPower();
     TestAzothOledEffects();
+    TestAzothOledMusic();
+    TestAzothOledUpload();
     TestAzothConnection();
     TestDualSense();
     TestAzothKeys();

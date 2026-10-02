@@ -201,6 +201,8 @@ public:
     void SetAzothEnabled(bool on);
     void SetAzothOled(azoth::OledSettings settings);
     void ReapplyAzothOled() { azoth_.ReapplyOled(); }
+    bool UploadAzothOledEffect(int effect) { return azoth_.UploadOledEffect(effect); }
+    void CancelAzothOledUpload() { azoth_.CancelOledUpload(); }
     // A USB device came or went, or the PC woke up (from the window's WM_DEVICECHANGE /
     // WM_POWERBROADCAST): look for the Azoth again, and take the motherboard's lights back if
     // Armoury Crate re-applies its lighting.

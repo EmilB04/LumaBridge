@@ -12,12 +12,20 @@ constexpr std::array<const char*, 6> kAsusAnimationNames{
 // Names used by Armoury Crate's original-Azoth preset list, in firmware-index order.
 constexpr std::array<const wchar_t*, 6> kAsusAnimationFiles{
     L"rog_ani_1", L"rog_ani_6", L"firework", L"rog_ani_4", L"heartbeat", L"rog_ani_8"};
-constexpr std::array<const char*, 6> kLumaAnimationNames{
+constexpr std::array<const char*, kLumaOledAnimationCount> kLumaAnimationNames{
     "LumaBridge - Wave", "LumaBridge - Level bars", "LumaBridge - Stars",
-    "LumaBridge - Scanner", "LumaBridge - Rings", "LumaBridge - Rain"};
-constexpr std::array<const wchar_t*, 6> kLumaAnimationFiles{
+    "LumaBridge - Scanner", "LumaBridge - Rings", "LumaBridge - Rain",
+    "LumaBridge - Spiral", "LumaBridge - Plasma", "LumaBridge - Tunnel",
+    "LumaBridge - Bounce", "LumaBridge - Pulse", "LumaBridge - Fireworks",
+    "LumaBridge - Orbit", "LumaBridge - Checker", "LumaBridge - Ribbons",
+    "LumaBridge - Mountains", "LumaBridge - Comet", "LumaBridge - Dots"};
+constexpr std::array<const wchar_t*, kLumaOledAnimationCount> kLumaAnimationFiles{
     L"LumaBridge-Wave.gif", L"LumaBridge-Level-bars.gif", L"LumaBridge-Stars.gif",
-    L"LumaBridge-Scanner.gif", L"LumaBridge-Rings.gif", L"LumaBridge-Rain.gif"};
+    L"LumaBridge-Scanner.gif", L"LumaBridge-Rings.gif", L"LumaBridge-Rain.gif",
+    L"LumaBridge-Spiral.gif", L"LumaBridge-Plasma.gif", L"LumaBridge-Tunnel.gif",
+    L"LumaBridge-Bounce.gif", L"LumaBridge-Pulse.gif", L"LumaBridge-Fireworks.gif",
+    L"LumaBridge-Orbit.gif", L"LumaBridge-Checker.gif", L"LumaBridge-Ribbons.gif",
+    L"LumaBridge-Mountains.gif", L"LumaBridge-Comet.gif", L"LumaBridge-Dots.gif"};
 constexpr int kOledEffectFrames = 150, kOledEffectDelay = 5; // 20 fps, 7.5-second loop.
 constexpr double kOledEffectSeconds = kOledEffectFrames * kOledEffectDelay / 100.0;
 
@@ -79,6 +87,91 @@ inline std::vector<uint8_t> RenderOledEffect(int index, double time) {
         for (int col = 0; col < 32; ++col) {
             const double head = std::fmod(phase * (1 + col % 3) * (kOledHeight + 30) + col * 41, kOledHeight + 30);
             for (int k = 0; k < 7; ++k) rect(col * 8 + 2, head - k * 4, 3, 3, 1 - k * 0.14);
+        }
+        break;
+    case 6:
+        for (int i = 0; i < 420; ++i) {
+            const double r = i / 420.0, a = r * tau * 4 + phase * tau * 2;
+            rect(128 + std::cos(a) * r * 122, 32 + std::sin(a) * r * 28, 2, 2, 1 - r * .7);
+        }
+        break;
+    case 7:
+        for (int y = 0; y < kOledHeight; y += 2)
+            for (int x = 0; x < kOledWidth; x += 2) {
+                const double v = (std::sin(x * .05 + phase * tau) + std::sin(y * .15 - phase * tau * 2) +
+                                  std::sin((x + y) * .04 + phase * tau * 3)) / 3;
+                rect(x, y, 2, 2, .08 + std::pow(.5 + .5 * v, 3) * .92);
+            }
+        break;
+    case 8:
+        for (int i = 0; i < 12; ++i) {
+            const double u = std::fmod(phase * 2 + i / 12.0, 1.0), w = 250 * u * u, h = 60 * u * u;
+            rect(128 - w / 2, 32 - h / 2, w, 1, u);
+            rect(128 - w / 2, 32 + h / 2, w, 1, u);
+            rect(128 - w / 2, 32 - h / 2, 1, h, u);
+            rect(128 + w / 2, 32 - h / 2, 1, h, u);
+        }
+        break;
+    case 9:
+        for (int i = 10; i >= 0; --i) {
+            const double t = phase * tau - i * .065;
+            rect(121 + std::sin(t * 3) * 111, 25 + std::cos(t * 4) * 23, 13, 13, 1 - i * .085);
+        }
+        break;
+    case 10:
+        for (int x = 0; x < kOledWidth; ++x) {
+            const double u = std::fmod(x / 256.0 + phase * 3, 1.0);
+            const double y = 32 + std::exp(-std::pow((u - .5) * 28, 2)) * std::sin(u * tau * 7) * 27;
+            rect(x, y, 1, 2);
+        }
+        break;
+    case 11:
+        for (int burst = 0; burst < 4; ++burst) {
+            const double u = std::fmod(phase * 3 + burst * .27, 1.0);
+            for (int ray = 0; ray < 24; ++ray) {
+                const double a = ray * tau / 24;
+                rect(32 + burst * 63 + std::cos(a) * u * 28, 30 + std::sin(a) * u * 25, 2, 2, 1 - u);
+            }
+        }
+        break;
+    case 12:
+        for (int ring = 0; ring < 3; ++ring)
+            for (int i = 0; i < 90; ++i) {
+                const double a = i * tau / 90 + phase * tau * (ring + 1);
+                rect(128 + std::cos(a) * (40 + ring * 37), 32 + std::sin(a) * (9 + ring * 9), 2, 2,
+                     .15 + .85 * (90 - i) / 90.0);
+            }
+        break;
+    case 13:
+        for (int y = -16; y < 80; y += 16)
+            for (int x = -16; x < 272; x += 16) {
+                const double a = .2 + .8 * (.5 + .5 * std::sin((x - y) * .035 + phase * tau * 3));
+                rect(x + phase * 16, y + phase * 16, 12, 12, a);
+            }
+        break;
+    case 14:
+        for (int layer = 0; layer < 4; ++layer)
+            for (int x = 0; x < 256; x += 2)
+                rect(x, 30 + std::sin(x * .035 + phase * tau * 2 + layer * .5) * 22, 2, 2, 1 - layer * .22);
+        break;
+    case 15:
+        for (int layer = 0; layer < 3; ++layer)
+            for (int x = 0; x < 256; ++x) {
+                const double a = x * tau / 256 + phase * tau * (layer + 1);
+                const double h = 9 + (std::sin(a * 3 + layer) + std::sin(a * 5)) * 5;
+                rect(x, 64 - layer * 13 - h, 1, h, .25 + layer * .32);
+            }
+        break;
+    case 16:
+        for (int i = 0; i < 50; ++i) {
+            const double u = phase - i / 500.0;
+            rect(128 + std::cos(u * tau * 3) * 117, 32 + std::sin(u * tau * 3) * 25, 3, 3, 1 - i / 50.0);
+        }
+        break;
+    case 17:
+        for (int i = 0; i < 20; ++i) {
+            const double a = std::pow(.5 + .5 * std::cos(phase * tau * 3 - i * .4), 5);
+            rect(10 + i * 12, 25, 7, 14, .08 + a * .92);
         }
         break;
     }

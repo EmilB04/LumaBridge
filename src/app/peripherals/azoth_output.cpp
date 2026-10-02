@@ -13,6 +13,9 @@ extern "C" {
 #include "azoth_layout.h"
 #include "azoth_protocol.h"
 #include "azoth_power.h"
+#include "azoth_oled_effects.h"
+#include "azoth_oled_upload.h"
+#include "azoth_music_source.h"
 #include "log.h"
 
 namespace luma::app {
@@ -107,7 +110,8 @@ bool WriteReport(HANDLE dev, const azoth::Report& report, azoth::Link link) {
     return true;
 }
 
-bool OledExchange(HANDLE dev, const azoth::Report& command, azoth::Link link, azoth::Report& reply, DWORD* replySize = nullptr) {
+bool OledExchange(HANDLE dev, const azoth::Report& command, azoth::Link link, azoth::Report& reply,
+                  DWORD* replySize = nullptr, DWORD timeout = 300) {
     const DWORD size = static_cast<DWORD>(azoth::ReportSize(link));
     DWORD done = 0;
     if (replySize) *replySize = 0;
@@ -116,7 +120,7 @@ bool OledExchange(HANDLE dev, const azoth::Report& command, azoth::Link link, az
         if (!Transfer(dev, false, reply.data(), size, 0, done)) break;
     reply = {};
     if (!WriteReport(dev, command, link)) return false;
-    const uint64_t deadline = GetTickCount64() + 300;
+    const uint64_t deadline = GetTickCount64() + timeout;
     for (int i = 0; i < 64; ++i) {
         const uint64_t now = GetTickCount64();
         if (now >= deadline) break;
@@ -155,6 +159,11 @@ azoth::OledTime LocalOledTime() {
 
 }  // namespace
 
+azoth::MusicSnapshot AzothOutput::musicSnapshot() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return musicSnapshot_;
+}
+
 void AzothOutput::Start() {
     if (thread_.joinable()) return;
     stop_ = false;
@@ -168,6 +177,12 @@ void AzothOutput::Stop() {
     state_ = State::Off;
     oledState_ = OledState::Vendor;
     connection_ = azoth::Connection::Unknown;
+    if (uploadState_ == UploadState::Pending) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        uploadEffect_ = -1;
+        uploadState_ = UploadState::Cancelled;
+        uploadMessage_ = "Upload cancelled because LumaBridge stopped.";
+    }
 }
 
 void AzothOutput::Set(const fx::Params& effect, double brightness, bool own, bool asleep) {
@@ -198,12 +213,43 @@ void AzothOutput::ReapplyOled() {
     if (oled_.direct) oledState_ = OledState::Pending;
 }
 
+bool AzothOutput::UploadOledEffect(int effect) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (uploadState_ == UploadState::Pending || uploadState_ == UploadState::Uploading) return false;
+    if (effect < 0 || effect >= static_cast<int>(azoth::kLumaAnimationNames.size()) || asleep_ ||
+        !oled_.direct || !oled_.enabled || oled_.content != azoth::OledContent::Animation ||
+        oled_.animationSource != azoth::OledAnimationSource::LumaBridge || oled_.lumaAnimation != effect ||
+        connection_ != azoth::Connection::Wired) {
+        uploadMessage_ = "Connect the awake Azoth by USB and turn its screen on before uploading.";
+        uploadState_ = UploadState::Failed;
+        return false;
+    }
+    uploadEffect_ = effect;
+    cancelUpload_ = false;
+    uploadProgress_ = 0;
+    uploadMessage_ = "Preparing the animation...";
+    uploadState_ = UploadState::Pending;
+    return true;
+}
+
+void AzothOutput::CancelOledUpload() { cancelUpload_ = true; }
+
+std::string AzothOutput::uploadMessage() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return uploadMessage_;
+}
+
 std::string AzothOutput::oledFailureDetails() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return oledFailureDetails_;
 }
 
 void AzothOutput::Run() {
+    azoth::MusicSource music;
+    uint64_t musicRevision = UINT64_MAX, nextMusic = 0;
+    std::wstring lastSongTitle, lastSongArtist;
+    bool songSent = false;
+    bool musicNeedsSetup = true;
     HANDLE dev = INVALID_HANDLE_VALUE;
     azoth::Link link = azoth::Link::Wired;
     std::wstring openedPath;
@@ -232,6 +278,11 @@ void AzothOutput::Run() {
         nextIdleApply = GetTickCount64() + 5000;
     };
     auto resetSession = [&] {
+        music.Reset();
+        musicRevision = UINT64_MAX;
+        nextMusic = 0;
+        songSent = false;
+        musicNeedsSetup = true;
         lastSent = 0;
         lastKeys.clear();
         appliedRevision = attemptedRevision = UINT64_MAX;
@@ -239,9 +290,16 @@ void AzothOutput::Run() {
         lastClock = {};
         oledProbed = false;
         oledAnimation_ = -1;
+        uploadedEffect_ = -1;
         oledError_ = 0;
         std::lock_guard<std::mutex> lock(mutex_);
+        musicSnapshot_ = {};
         oledFailureDetails_.clear();
+        if (uploadState_ == UploadState::Pending) {
+            uploadEffect_ = -1;
+            uploadMessage_ = "The USB connection changed. Click Upload to Azoth to try again.";
+            uploadState_ = UploadState::Failed;
+        }
     };
     auto closeDevice = [&] {
         applyIdleTimeout(false);
@@ -274,6 +332,22 @@ void AzothOutput::Run() {
             revision = oledRevision_;
         }
         const uint64_t now = GetTickCount64();
+        const bool liveMusic = oled.direct && oled.enabled && !asleep && dev != INVALID_HANDLE_VALUE &&
+                               link == azoth::Link::Wired &&
+                               (oled.content == azoth::OledContent::Equalizer || oled.content == azoth::OledContent::SongInfo);
+        const auto media = music.Poll(liveMusic ? oled.content : azoth::OledContent::Keep);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            musicSnapshot_ = media;
+        }
+        // Never carry a queued upload across a disconnect or sleep into a later session.
+        if (uploadState_ == UploadState::Pending &&
+            (cancelUpload_ || asleep || !oled.direct || !oled.enabled)) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            uploadEffect_ = -1;
+            uploadMessage_ = "Upload cancelled. Click Upload to Azoth to try again.";
+            uploadState_ = UploadState::Cancelled;
+        }
         const bool forcedScan = rescan_.exchange(false);
         if (forcedScan || now >= nextScan) {
             devices = FindAzothControls();
@@ -302,6 +376,12 @@ void AzothOutput::Run() {
         }
         if (!own) { state_ = State::Released; lastSent = 0; }
         if (devices.wired.empty() && devices.receiver.empty()) {
+            if (uploadState_ == UploadState::Pending) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                uploadEffect_ = -1;
+                uploadMessage_ = "The keyboard disconnected before the upload started.";
+                uploadState_ = UploadState::Failed;
+            }
             if (own) state_ = State::NotFound;
             if (oled.direct) oledState_ = OledState::NotFound;
             lastWriteError_ = 0;
@@ -345,6 +425,12 @@ void AzothOutput::Run() {
             dev = OpenAzoth(openedPath);
             if (dev == INVALID_HANDLE_VALUE) {
                 lastWriteError_ = GetLastError();
+                if (uploadState_ == UploadState::Pending) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    uploadEffect_ = -1;
+                    uploadMessage_ = "Couldn't open the USB connection. Reconnect the keyboard and retry the upload.";
+                    uploadState_ = UploadState::Failed;
+                }
                 if (own) state_ = State::NotFound;
                 if (oled.direct) oledState_ = OledState::NotFound;
                 nextFind = now + 2000;
@@ -408,6 +494,72 @@ void AzothOutput::Run() {
             }
         }
         if (now >= nextIdleApply) applyIdleTimeout(true);
+        if (uploadState_ == UploadState::Pending) {
+            int uploadEffect;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                uploadEffect = uploadEffect_;
+                uploadEffect_ = -1;
+                uploadState_ = UploadState::Uploading;
+                uploadMessage_ = "Uploading to Azoth. Keep the USB cable connected.";
+            }
+            bool cancelled = false;
+            auto interrupted = [&] {
+                std::lock_guard<std::mutex> lock(mutex_);
+                cancelled = stop_ || cancelUpload_ || asleep_ || !oled_.direct || !oled_.enabled ||
+                            oledRevision_ != revision;
+                return cancelled;
+            };
+            azoth::Report reply{}, failedCommand{};
+            DWORD size = 0, error = ERROR_SUCCESS;
+            auto exchange = [&](const azoth::Report& command, DWORD timeout) {
+                if (interrupted()) return false;
+                if (OledExchange(dev, command, link, reply, &size, timeout)) return true;
+                error = GetLastError();
+                failedCommand = command;
+                return false;
+            };
+            bool ok = link == azoth::Link::Wired;
+            std::vector<azoth::OledUploadFrame> frames;
+            if (ok) {
+                frames.reserve(azoth::kOledEffectFrames);
+                for (int i = 0; i < azoth::kOledEffectFrames && !interrupted(); ++i)
+                    frames.push_back({azoth::RenderOledEffect(uploadEffect, i * azoth::kOledEffectDelay / 100.0),
+                                      azoth::kOledEffectDelay * 10});
+            }
+            const auto data = cancelled ? std::vector<uint8_t>{} : azoth::OledUploadData(frames);
+            ok = ok && !data.empty();
+            if (ok) ok = exchange(azoth::OledUploadBegin(data), 1500);
+            const size_t chunks = azoth::OledUploadChunks(data);
+            // The ASUS SDK advances only after each acknowledgment. Do not retry an
+            // ambiguous chunk or activate partial data. RGB and other OLED writes wait.
+            for (size_t i = 0; ok && i < chunks; ++i) {
+                ok = exchange(azoth::OledUploadPart(data, i), 1000);
+                if (ok) uploadProgress_ = static_cast<int>((i + 1) * 99 / chunks);
+            }
+            if (ok) ok = exchange(azoth::OledUploadShow(), 1500);
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (ok) {
+                    uploadedEffect_ = uploadEffect;
+                    uploadProgress_ = 100;
+                    uploadMessage_ = "Upload completed and acknowledged by the keyboard.";
+                    uploadState_ = UploadState::Complete;
+                } else {
+                    uploadedEffect_ = -1;
+                    uploadMessage_ = cancelled ? "Upload cancelled. Click Upload to Azoth to start again."
+                        : link != azoth::Link::Wired ? "Direct GIF uploads require a USB cable."
+                        : error ? "Upload stopped: " + ExchangeDetails(link, failedCommand, reply, size, error)
+                                : "Couldn't prepare the animation for upload.";
+                    uploadState_ = cancelled ? UploadState::Cancelled : UploadState::Failed;
+                }
+                LUMA_INFO("ROG Azoth GIF: %s", uploadMessage_.c_str());
+            }
+            lastSent = 0;
+            nextHealth = 0;
+            if (stop_) break;
+            continue;
+        }
         if (oled.direct && (revision != attemptedRevision || now >= nextOled)) {
             const auto time = LocalOledTime();
             const auto clock = azoth::OledClock(link, time, oled.clock12Hour);
@@ -452,6 +604,9 @@ void AzothOutput::Run() {
                     lastClock = clock;
                     if (oled.enabled && oled.content == azoth::OledContent::Animation &&
                         oled.animationSource == azoth::OledAnimationSource::Asus) oledAnimation_ = oled.animation;
+                    if (oled.enabled && (oled.content == azoth::OledContent::Clock ||
+                        (oled.content == azoth::OledContent::Animation && oled.animationSource == azoth::OledAnimationSource::Asus)))
+                        uploadedEffect_ = -1;
                     oledError_ = 0;
                     oledState_ = OledState::Active;
                     {
@@ -480,6 +635,70 @@ void AzothOutput::Run() {
                         continue;
                     }
                 }
+            }
+        }
+        if (liveMusic && appliedRevision == revision && (musicRevision != revision || now >= nextMusic)) {
+            const bool spectrum = oled.content == azoth::OledContent::Equalizer;
+            const bool setup = musicRevision != revision || musicNeedsSetup;
+            const bool trackChanged = !songSent || media.title != lastSongTitle || media.artist != lastSongArtist;
+            azoth::Report reply{}, failedCommand{};
+            DWORD replySize = 0, error = ERROR_SUCCESS;
+            bool superseded = false;
+            auto exchange = [&](const azoth::Report& command) {
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    superseded = stop_ || asleep_ || revision != oledRevision_;
+                }
+                if (superseded) return false;
+                if (OledExchange(dev, command, link, reply, &replySize, 1000)) return true;
+                failedCommand = command; error = GetLastError(); return false;
+            };
+            bool ok = true;
+            if (spectrum) {
+                if (setup) ok = exchange(azoth::OledMusicMode(true));
+                // ASUS sends spectrum updates without waiting for an acknowledgment.
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    superseded = stop_ || asleep_ || revision != oledRevision_;
+                }
+                if (ok && !superseded) {
+                    failedCommand = azoth::OledSpectrum(media.levels);
+                    ok = WriteReport(dev, failedCommand, link);
+                    if (!ok) error = GetLastError();
+                }
+            } else if (setup || trackChanged) {
+                const auto pixels = azoth::RenderSong(media);
+                const auto data = azoth::OledSongPixels(pixels);
+                if (data.empty()) { ok = false; error = ERROR_NOT_ENOUGH_MEMORY; }
+                else ok = exchange(azoth::OledMusicMode(false, data.size()));
+                for (size_t i = 0; ok && i < (data.size() + 59) / 60; ++i)
+                    ok = exchange(azoth::OledSongPart(data, i));
+                if (ok) {
+                    lastSongTitle = media.title; lastSongArtist = media.artist; songSent = true;
+                }
+            }
+            if (superseded) { musicRevision = UINT64_MAX; continue; }
+            if (ok) {
+                musicRevision = revision;
+                musicNeedsSetup = false;
+                uploadedEffect_ = -1;
+                nextMusic = GetTickCount64() + (spectrum ? 100 : 500);
+                oledState_ = OledState::Active;
+                oledError_ = 0;
+                std::lock_guard<std::mutex> lock(mutex_);
+                oledFailureDetails_.clear();
+            } else {
+                // Back off after a rejected live mode; ordinary RGB still continues.
+                musicRevision = revision;
+                musicNeedsSetup = true;
+                nextMusic = GetTickCount64() + 5000;
+                songSent = false;
+                oledState_ = OledState::Failed;
+                oledError_ = error;
+                const auto details = ExchangeDetails(link, failedCommand, reply, replySize, error);
+                std::lock_guard<std::mutex> lock(mutex_);
+                oledFailureDetails_ = details;
+                LUMA_WARN("ROG Azoth music: %s", details.c_str());
             }
         }
         if (!own) continue;
