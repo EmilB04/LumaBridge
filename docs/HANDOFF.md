@@ -39,7 +39,7 @@ GPU power readings, which Wine lacks).
 | SDK stand-ins (Logitech, Razer, Corsair, Alienware, SteelSeries) | `src/integrations/` |
 | Unit tests (portable; run on Linux) | `tests/test_core.cpp` |
 | Release notes | `docs/releases/vX.Y.Z.md` |
-| README screenshots | `docs/images/app-mysetup.png`, `app-lighting.png` |
+| README screenshots | Native Windows captures; see `docs/images/README.md` |
 
 ## Building and checking from Linux
 
@@ -77,8 +77,9 @@ Wine has no RGB hardware, sensors or USB devices, so lit devices, power readings
 Kraken don't appear. For screenshots of those, add a **temporary** block at the end of
 `view3d::Gather()` in `ui.cpp`, guarded by `if (getenv("LUMA_DEMO"))`, that fills the
 `Model` (fans RGB, `m.aio`, `m.kraken`, `m.screens`, keyboard / mouse devices), run with
-`LUMA_DEMO=1`, and **remove it before committing**. The README screenshots were made this
-way. The lighting only shows when not paused: the run script clears `Running=1` in the INI
+`LUMA_DEMO=1`, and **remove it before committing**. Use this only for local UI checks;
+README previews are captured from the native Windows app with connected hardware
+(see [image details](images/README.md)). The lighting only shows when not paused: the run script clears `Running=1` in the INI
 so the app doesn't think it crashed.
 
 ## How the owner works

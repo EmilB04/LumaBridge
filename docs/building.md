@@ -64,8 +64,8 @@ cmake -S . -B build/native && cmake --build build/native && ctest --test-dir bui
 tests, and uploads a ready-to-copy `LumaBridge-<arch>` artifact (app, DLLs, tools,
 scripts, ini example).
 
-## UI screenshots without Windows
+## README screenshots
 
-The images in `docs/images` were rendered offscreen on Linux from the real `ui.cpp`, with
-the Windows-only classes stubbed out and a small CPU rasterizer for ImGui's draw lists.
-They show the layout; on Windows the font is Segoe UI.
+The current README previews are captured from the native Windows app with connected
+hardware. See [docs/images/README.md](images/README.md) for their provenance and capture
+conventions. Linux/WSL compile checks and offscreen renders are not used for these previews.
