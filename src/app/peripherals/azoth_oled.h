@@ -20,9 +20,12 @@ struct OledSettings {
     bool clock12Hour = false;
     OledAnimationSource animationSource = OledAnimationSource::Asus;
     int lumaAnimation = 0;
+    bool cs2BombTimer = true;
+    int cs2BombSeconds = 40;
 };
 
 inline OledSettings NormalizeOled(OledSettings s) {
+    s.cs2BombSeconds = std::clamp(s.cs2BombSeconds, 10, 120);
     s.brightness = std::clamp(s.brightness, 0, 100);
     s.animation = std::clamp(s.animation, 0, 5);
     s.lumaAnimation = std::clamp(s.lumaAnimation, 0, kLumaOledAnimationCount - 1);
@@ -36,7 +39,8 @@ inline OledSettings NormalizeOled(OledSettings s) {
 inline bool operator==(const OledSettings& a, const OledSettings& b) {
     return a.direct == b.direct && a.enabled == b.enabled && a.brightness == b.brightness &&
            a.content == b.content && a.animation == b.animation && a.clock12Hour == b.clock12Hour &&
-           a.animationSource == b.animationSource && a.lumaAnimation == b.lumaAnimation;
+           a.animationSource == b.animationSource && a.lumaAnimation == b.lumaAnimation &&
+           a.cs2BombTimer == b.cs2BombTimer && a.cs2BombSeconds == b.cs2BombSeconds;
 }
 inline bool operator!=(const OledSettings& a, const OledSettings& b) { return !(a == b); }
 

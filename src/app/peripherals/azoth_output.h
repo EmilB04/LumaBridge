@@ -15,6 +15,7 @@
 #include "azoth_oled_music.h"
 #include "azoth_connection.h"
 #include "effects.h"
+#include "games/cs2_bomb.h"
 
 namespace luma::app {
 
@@ -31,6 +32,7 @@ public:
     // keyboard keeps the last color until it restarts; its saved lighting is untouched).
     void Set(const fx::Params& effect, double brightness, bool own, bool asleep = false);
     void SetOled(azoth::OledSettings settings);
+    void SetBombCountdown(games::BombCountdown countdown);
     void ReapplyOled();
     bool UploadOledEffect(int effect);
     void CancelOledUpload();
@@ -52,6 +54,9 @@ public:
     // was simply never found, the more common case).
     unsigned long lastWriteError() const { return lastWriteError_; }
     unsigned long sleepTimerError() const { return sleepTimerError_; }
+    // By cable, the lighting interface stopped answering while the keyboard still types.
+    // Replugging the cable resets it.
+    bool stuck() const { return stuck_; }
 
 private:
     void Run();
@@ -64,6 +69,7 @@ private:
     std::atomic<bool> rescan_{true};
     std::atomic<unsigned long> lastWriteError_{0};
     std::atomic<unsigned long> sleepTimerError_{0};
+    std::atomic<bool> stuck_{false};
     std::atomic<OledState> oledState_{OledState::Vendor};
     std::atomic<unsigned long> oledError_{0};
     std::atomic<int> oledAnimation_{-1};
@@ -75,6 +81,7 @@ private:
     bool own_ = false;
     bool asleep_ = false;  // same snapshot as the final RGB brightness
     uint64_t effectSince_ = 0;
+    games::BombCountdown bomb_;
     azoth::OledSettings oled_;
     uint64_t oledRevision_ = 0;
     std::atomic<UploadState> uploadState_{UploadState::Idle};

@@ -16,6 +16,7 @@ extern "C" {
 #include "azoth_oled_effects.h"
 #include "azoth_oled_upload.h"
 #include "azoth_music_source.h"
+#include "azoth_oled_bomb.h"
 #include "log.h"
 
 namespace luma::app {
@@ -194,6 +195,11 @@ void AzothOutput::Set(const fx::Params& effect, double brightness, bool own, boo
     asleep_ = asleep;
 }
 
+void AzothOutput::SetBombCountdown(games::BombCountdown countdown) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    bomb_ = countdown;
+}
+
 void AzothOutput::SetOled(azoth::OledSettings settings) {
     std::lock_guard<std::mutex> lock(mutex_);
     settings = azoth::NormalizeOled(settings);
@@ -216,6 +222,11 @@ void AzothOutput::ReapplyOled() {
 bool AzothOutput::UploadOledEffect(int effect) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (uploadState_ == UploadState::Pending || uploadState_ == UploadState::Uploading) return false;
+    if (bomb_.active && oled_.cs2BombTimer) {
+        uploadMessage_ = "Wait until the bomb countdown ends before uploading a GIF.";
+        uploadState_ = UploadState::Failed;
+        return false;
+    }
     if (effect < 0 || effect >= static_cast<int>(azoth::kLumaAnimationNames.size()) || asleep_ ||
         !oled_.direct || !oled_.enabled || oled_.content != azoth::OledContent::Animation ||
         oled_.animationSource != azoth::OledAnimationSource::LumaBridge || oled_.lumaAnimation != effect ||
@@ -250,6 +261,9 @@ void AzothOutput::Run() {
     std::wstring lastSongTitle, lastSongArtist;
     int64_t lastSongSecond = -1, lastSongLength = -1;
     bool songSent = false;
+    bool bombWasShown = false, bombRestore = false;
+    int restoreCustom = -1, restorePreset = -1, lastBombSecond = -1;
+    bool lastBombEstimated = true, lastBombTesting = false;
     bool musicNeedsSetup = true;
     HANDLE dev = INVALID_HANDLE_VALUE;
     azoth::Link link = azoth::Link::Wired;
@@ -260,6 +274,12 @@ void AzothOutput::Run() {
     uint64_t appliedRevision = UINT64_MAX, attemptedRevision = UINT64_MAX, nextOled = 0;
     azoth::Report lastClock{};
     bool oledProbed = false, versionChecked = false, keyboardReady = false, wasAsleep = false;
+    // Right after waking, or after the screen was switched back on, the keyboard is busy for
+    // a moment. A burst of writes then can lock up its lighting interface until the cable is
+    // replugged (seen twice on the owner's Azoth), so nothing else is sent until settleUntil.
+    uint64_t settleUntil = 0;
+    bool screenOff = false;
+    int silentChecks = 0;
     azoth::IdleTimeoutOverride idleTimeout;
     uint64_t nextIdleApply = 0;
     auto applyIdleTimeout = [&](bool control) {
@@ -279,6 +299,8 @@ void AzothOutput::Run() {
         nextIdleApply = GetTickCount64() + 5000;
     };
     auto resetSession = [&] {
+        bombWasShown = bombRestore = false;
+        restoreCustom = restorePreset = lastBombSecond = -1;
         music.Reset();
         musicRevision = UINT64_MAX;
         nextMusic = 0;
@@ -321,6 +343,7 @@ void AzothOutput::Run() {
         bool asleep;
         uint64_t since;
         azoth::OledSettings oled;
+        games::BombCountdown bomb;
         uint64_t revision;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -330,10 +353,13 @@ void AzothOutput::Run() {
             asleep = asleep_;
             since = effectSince_;
             oled = oled_;
+            bomb = bomb_;
             revision = oledRevision_;
         }
         const uint64_t now = GetTickCount64();
-        const bool liveMusic = oled.direct && oled.enabled && !asleep && dev != INVALID_HANDLE_VALUE &&
+        const bool liveBomb = bomb.active && oled.cs2BombTimer && oled.direct && oled.enabled && !asleep &&
+                              dev != INVALID_HANDLE_VALUE && link == azoth::Link::Wired;
+        const bool liveMusic = !liveBomb && oled.direct && oled.enabled && !asleep && dev != INVALID_HANDLE_VALUE &&
                                link == azoth::Link::Wired &&
                                (oled.content == azoth::OledContent::Equalizer || oled.content == azoth::OledContent::SongInfo);
         const auto media = music.Poll(liveMusic ? oled.content : azoth::OledContent::Keep);
@@ -370,6 +396,8 @@ void AzothOutput::Run() {
         }
         if (!own && !oled.direct) {
             if (dev != INVALID_HANDLE_VALUE) closeDevice();
+            stuck_ = false;
+            silentChecks = 0;
             connection_ = azoth::SelectConnection(!devices.wired.empty(), !devices.receiver.empty(), false, asleep);
             state_ = State::Released;
             nextFind = 0;
@@ -386,6 +414,8 @@ void AzothOutput::Run() {
             if (own) state_ = State::NotFound;
             if (oled.direct) oledState_ = OledState::NotFound;
             lastWriteError_ = 0;
+            silentChecks = 0;
+            stuck_ = false;
             continue;
         }
         // Asleep: nothing goes out (the dark frame went out before), so the keyboard can sleep.
@@ -407,6 +437,7 @@ void AzothOutput::Run() {
                     azoth::Report reply{};
                     if (!OledExchange(dev, azoth::OledCommand(link, 0x69, 0), link, reply))
                         LUMA_WARN("ROG Azoth: couldn't turn the OLED off for sleep (error %lu)", GetLastError());
+                    else screenOff = true;
                 }
                 applyIdleTimeout(false);
             }
@@ -417,7 +448,8 @@ void AzothOutput::Run() {
             wasAsleep = true;
             continue;
         }
-        if (wasAsleep) { nextHealth = nextIdleApply = 0; wasAsleep = false; }
+        if (wasAsleep) { nextHealth = nextIdleApply = 0; wasAsleep = false; settleUntil = now + 1000; }
+        if (now < settleUntil) continue;
         if (dev == INVALID_HANDLE_VALUE) {
             if (now < nextFind) continue;
             // Reconsider the cable even if the receiver is still plugged in and writable.
@@ -458,11 +490,19 @@ void AzothOutput::Run() {
                     std::lock_guard<std::mutex> lock(mutex_);
                     oledFailureDetails_ = detail;
                 }
+                // A cabled keyboard that keeps typing but never answers has locked up its
+                // lighting interface; only a replug has brought it back so far.
+                silentChecks = error == ERROR_TIMEOUT ? silentChecks + 1 : 0;
+                if (link == azoth::Link::Wired && silentChecks == 3)
+                    LUMA_WARN("ROG Azoth: the lighting interface stopped answering; unplugging the cable and plugging it back in resets it");
+                stuck_ = link == azoth::Link::Wired && silentChecks >= 3;
                 LUMA_WARN("ROG Azoth: control interface not ready: %s", detail.c_str());
                 nextFind = now + 2000;
                 continue;
             }
             versionChecked = true;
+            silentChecks = 0;
+            stuck_ = false;
             if (link == azoth::Link::Wired) LUMA_INFO("ROG Azoth: connected (wired USB, interface confirmed)");
         }
         {
@@ -494,8 +534,27 @@ void AzothOutput::Run() {
                 continue;
             }
         }
+        if (liveBomb != bombWasShown) {
+            if (liveBomb) {
+                if (!bombRestore) {
+                    restoreCustom = uploadedEffect_;
+                    restorePreset = oledAnimation_;
+                }
+                lastBombSecond = -1;
+            } else {
+                bombRestore = true;
+                appliedRevision = attemptedRevision = UINT64_MAX;
+                nextOled = 0;
+                lastClock = {};
+            }
+            bombWasShown = liveBomb;
+            musicRevision = UINT64_MAX;
+            songSent = false;
+            musicNeedsSetup = true;
+            nextMusic = 0;
+        }
         if (now >= nextIdleApply) applyIdleTimeout(true);
-        if (uploadState_ == UploadState::Pending) {
+        if (!liveBomb && !bombRestore && uploadState_ == UploadState::Pending) {
             int uploadEffect;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -565,7 +624,7 @@ void AzothOutput::Run() {
             const auto time = LocalOledTime();
             const auto clock = azoth::OledClock(link, time, oled.clock12Hour);
             const bool changed = revision != appliedRevision;
-            const bool clockDue = oled.enabled && oled.content == azoth::OledContent::Clock && clock != lastClock;
+            const bool clockDue = !liveBomb && oled.enabled && oled.content == azoth::OledContent::Clock && clock != lastClock;
             if (changed || clockDue) {
                 attemptedRevision = revision;
                 azoth::Report reply{};
@@ -579,8 +638,14 @@ void AzothOutput::Run() {
                     }
                     oledProbed = true;
                 }
-                const auto commands = changed ? azoth::OledCommands(oled, link, time)
-                                              : std::vector<azoth::Report>{clock};
+                auto screenSettings = oled;
+                if (liveBomb) screenSettings.content = azoth::OledContent::Keep;
+                auto commands = changed ? azoth::OledCommands(screenSettings, link, time)
+                                        : std::vector<azoth::Report>{clock};
+                if (bombRestore && !liveBomb) {
+                    const auto restore = azoth::BombRestoreCommands(oled, link, time, restoreCustom, restorePreset);
+                    commands.insert(commands.end(), restore.begin(), restore.end());
+                }
                 bool superseded = false;
                 azoth::Report failedCommand{};
                 DWORD exchangeError = ERROR_SUCCESS;
@@ -601,8 +666,16 @@ void AzothOutput::Run() {
                 }
                 if (superseded) continue;
                 if (ok) {
+                    if (bombRestore && !liveBomb && oled.direct && oled.enabled) {
+                        if (oled.enabled && ((oled.content == azoth::OledContent::Animation &&
+                            oled.animationSource == azoth::OledAnimationSource::LumaBridge) ||
+                            oled.content == azoth::OledContent::Keep)) uploadedEffect_ = restoreCustom;
+                        bombRestore = false;
+                    }
                     appliedRevision = revision;
                     lastClock = clock;
+                    if (changed && oled.enabled && screenOff) settleUntil = GetTickCount64() + 500;
+                    if (changed) screenOff = !oled.enabled;
                     if (oled.enabled && oled.content == azoth::OledContent::Animation &&
                         oled.animationSource == azoth::OledAnimationSource::Asus) oledAnimation_ = oled.animation;
                     if (oled.enabled && (oled.content == azoth::OledContent::Clock ||
@@ -638,19 +711,22 @@ void AzothOutput::Run() {
                 }
             }
         }
-        if (liveMusic && appliedRevision == revision && (musicRevision != revision || now >= nextMusic)) {
-            const bool spectrum = oled.content == azoth::OledContent::Equalizer;
+        if (GetTickCount64() < settleUntil) continue;
+        if ((liveMusic || liveBomb) && appliedRevision == revision && (musicRevision != revision || now >= nextMusic)) {
+            const bool spectrum = !liveBomb && oled.content == azoth::OledContent::Equalizer;
             const bool setup = musicRevision != revision || musicNeedsSetup;
             // The progress bar and clock change once a second while a song plays.
-            const bool trackChanged = !songSent || media.title != lastSongTitle || media.artist != lastSongArtist ||
-                                      media.positionMs / 1000 != lastSongSecond || media.durationMs / 1000 != lastSongLength;
+            const bool trackChanged = liveBomb
+                ? bomb.seconds != lastBombSecond || bomb.estimated != lastBombEstimated || bomb.testing != lastBombTesting
+                : !songSent || media.title != lastSongTitle || media.artist != lastSongArtist ||
+                  media.positionMs / 1000 != lastSongSecond || media.durationMs / 1000 != lastSongLength;
             azoth::Report reply{}, failedCommand{};
             DWORD replySize = 0, error = ERROR_SUCCESS;
             bool superseded = false;
             auto exchange = [&](const azoth::Report& command) {
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
-                    superseded = stop_ || asleep_ || revision != oledRevision_;
+                    superseded = stop_ || asleep_ || revision != oledRevision_ || bomb.active != bomb_.active;
                 }
                 if (superseded) return false;
                 if (OledExchange(dev, command, link, reply, &replySize, 1000)) return true;
@@ -662,7 +738,7 @@ void AzothOutput::Run() {
                 // ASUS sends spectrum updates without waiting for an acknowledgment.
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
-                    superseded = stop_ || asleep_ || revision != oledRevision_;
+                    superseded = stop_ || asleep_ || revision != oledRevision_ || bomb.active != bomb_.active;
                 }
                 if (ok && !superseded) {
                     failedCommand = azoth::OledSpectrum(media.levels);
@@ -670,13 +746,14 @@ void AzothOutput::Run() {
                     if (!ok) error = GetLastError();
                 }
             } else if (setup || trackChanged) {
-                const auto pixels = azoth::RenderSong(media);
+                const auto pixels = liveBomb ? azoth::RenderBomb(bomb) : azoth::RenderSong(media);
                 const auto data = azoth::OledSongPixels(pixels);
                 if (data.empty()) { ok = false; error = ERROR_NOT_ENOUGH_MEMORY; }
                 else ok = exchange(azoth::OledMusicMode(false, data.size()));
                 for (size_t i = 0; ok && i < (data.size() + 59) / 60; ++i)
                     ok = exchange(azoth::OledSongPart(data, i));
                 if (ok) {
+                    lastBombSecond = bomb.seconds; lastBombEstimated = bomb.estimated; lastBombTesting = bomb.testing;
                     lastSongTitle = media.title; lastSongArtist = media.artist; songSent = true;
                     lastSongSecond = media.positionMs / 1000; lastSongLength = media.durationMs / 1000;
                 }
@@ -702,7 +779,7 @@ void AzothOutput::Run() {
                 const auto details = ExchangeDetails(link, failedCommand, reply, replySize, error);
                 std::lock_guard<std::mutex> lock(mutex_);
                 oledFailureDetails_ = details;
-                LUMA_WARN("ROG Azoth music: %s", details.c_str());
+                LUMA_WARN("ROG Azoth live display: %s", details.c_str());
             }
         }
         if (!own) continue;

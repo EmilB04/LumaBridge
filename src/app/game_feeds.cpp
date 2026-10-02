@@ -134,6 +134,16 @@ void GameFeeds::Stop() {
     wsa_ = false;
 }
 
+bool GameFeeds::Cs2Receiving(uint64_t now) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cs2_.Receiving(now);
+}
+
+games::BombCountdown GameFeeds::Cs2Bomb(uint64_t now, int fuseSeconds) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cs2_.Bomb(now, fuseSeconds);
+}
+
 GameFeeds::Feed GameFeeds::Cs2(uint64_t now) {
     std::lock_guard<std::mutex> lock(mutex_);
     return Feed{cs2_.Active(now), cs2_.Current(now)};
@@ -1072,6 +1082,8 @@ std::string Cs2ConfigText() {
              "    \"round\" \"1\"\n"
              "    \"player_id\" \"1\"\n"
              "    \"player_state\" \"1\"\n"
+             "    \"bomb\" \"1\"\n"
+             "    \"phase_countdowns\" \"1\"\n"
              "  }\n"
              "}\n",
              GameFeeds::kCs2Port, GameFeeds::kCs2Token);
@@ -1083,7 +1095,13 @@ std::wstring Cs2ConfigPath(const std::wstring& gameDir) {
 }
 
 bool Cs2ConfigInstalled(const std::wstring& gameDir) {
-    return !gameDir.empty() && ReadText(Cs2ConfigPath(gameDir)) == Cs2ConfigText();
+    if (gameDir.empty()) return false;
+    const auto text = ReadText(Cs2ConfigPath(gameDir));
+    auto legacy = Cs2ConfigText();
+    const std::string extras = "    \"bomb\" \"1\"\n    \"phase_countdowns\" \"1\"\n";
+    const auto at = legacy.find(extras);
+    if (at != std::string::npos) legacy.erase(at, extras.size());
+    return text == Cs2ConfigText() || text == legacy;
 }
 
 std::wstring RocketLeagueStatsIni(const std::wstring& gameDir) {

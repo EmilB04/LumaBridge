@@ -75,6 +75,21 @@ guide. Direct screen power, brightness,
 ASUS built-in animations and a local clock are also available as experimental controls.
 Direct GIF uploads have been confirmed on the owner's original Azoth by cable.
 
+Enable **CS2 bomb countdown on Azoth** on the CS2 game page or under Devices > Azoth >
+OLED display. Connect the USB cable and set the keyboard switch to **wired USB**; the
+Omni / 2.4 GHz receiver does not support this countdown. Enabling the option keeps your
+normal screen until a bomb is planted. **Test countdown on keyboard** runs a 10-second
+check without a match, then restores the screen. Connection and feed status beside the
+option explain when it is waiting or unavailable. Large remaining seconds replace the
+screen while the bomb is planted. Normal play uses an **estimated** 40-second fuse from
+the plant signal; community-server fuse duration is adjustable. When GSI supplies a bomb
+countdown, LumaBridge uses it instead. Defuse, explosion, round changes, feed loss and timer
+expiry clear the countdown and restore the selected clock, music mode or confirmed animation.
+An unknown previous mode or a custom GIF not confirmed in this connection returns to the
+clock. Existing CS2 feed setups work for the estimate; **Update feed** on the CS2 page adds
+the optional countdown fields (restart CS2 afterward). This USB display feature needs testing
+on a real keyboard.
+
 The **Show** menu also offers **Audio EQ** and **Song info**. EQ uses the default Windows
 playback device and displays a live 32-band spectrum that scales itself to the music, so
 quiet songs and low Windows volume still fill the screen. Song info reads the current

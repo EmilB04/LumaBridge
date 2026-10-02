@@ -198,6 +198,10 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (!v.empty()) p.azothOled.lumaAnimation = _wtoi(v.c_str());
     v = Read(ini, L"AzothOLED", L"Clock12Hour");
     if (!v.empty()) p.azothOled.clock12Hour = v == L"1";
+    v = Read(ini, L"AzothOLED", L"Cs2BombTimer");
+    if (!v.empty()) p.azothOled.cs2BombTimer = v != L"0";
+    v = Read(ini, L"AzothOLED", L"Cs2BombSeconds");
+    if (!v.empty()) p.azothOled.cs2BombSeconds = _wtoi(v.c_str());
     p.azothOled = azoth::NormalizeOled(p.azothOled);
     p.azothOledBanner = Read(ini, L"AzothOLED", L"Banner", p.azothOledBanner.c_str());
     v = Read(ini, L"AzothOLED", L"BannerSize");
@@ -387,6 +391,8 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"AzothOLED", L"AnimationSource", Num(static_cast<int>(p.azothOled.animationSource)));
     WriteConfigValue(ini, L"AzothOLED", L"LumaAnimation", Num(p.azothOled.lumaAnimation));
     WriteConfigValue(ini, L"AzothOLED", L"Clock12Hour", p.azothOled.clock12Hour ? L"1" : L"0");
+    WriteConfigValue(ini, L"AzothOLED", L"Cs2BombTimer", p.azothOled.cs2BombTimer ? L"1" : L"0");
+    WriteConfigValue(ini, L"AzothOLED", L"Cs2BombSeconds", Num(p.azothOled.cs2BombSeconds));
     WriteConfigValue(ini, L"AzothOLED", L"Banner", p.azothOledBanner);
     WriteConfigValue(ini, L"AzothOLED", L"BannerSize", Num(p.azothOledBannerSize));
     WriteConfigValue(ini, L"AzothOLED", L"BannerInvert", p.azothOledBannerInvert ? L"1" : L"0");

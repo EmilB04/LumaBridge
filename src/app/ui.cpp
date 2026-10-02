@@ -32,6 +32,7 @@
 #include "integrations.h"
 #include "setup_hardware.h"
 #include "vendor_detect.h"
+#include "azoth_oled_bomb.h"
 #include "azoth_layout.h"
 #include "azoth_oled_assets.h"
 #include "azoth_oled_effects.h"
@@ -5259,6 +5260,9 @@ DeviceStatus AzothStatus(Controller& ctl) {
         return {ctl.azothAsleep() ? "Keyboard asleep / connection unverified" : "Receiver only", kMuted,
                 "The Omni USB receiver is present. The keyboard hasn't answered; it may be off, asleep or out of range."};
     const bool wireless = connection == azoth::Connection::Wireless;
+    if (az.stuck() && !ctl.azothAsleep())
+        return {"Not answering - replug the USB cable", kAmber,
+                "The keyboard stopped answering LumaBridge. Unplug its USB cable and plug it back in."};
     if (!ctl.prefs().azothKeyboard) {
         if (ctl.prefs().azothOled.direct) {
             const auto display = az.oledState();
@@ -5485,7 +5489,8 @@ void Pixels(const Screen& s, const std::vector<uint8_t>& pixels) {
 
 // ASUS animations use Armoury Crate's installed artwork. LumaBridge animations use the
 // export renderer; the clock remains an illustration of the keyboard's firmware layout.
-void OledMockup(const azoth::OledSettings& s, const Fonts& f, float width, const azoth::MusicSnapshot& music) {
+void OledMockup(const azoth::OledSettings& s, const Fonts& f, float width, const azoth::MusicSnapshot& music,
+                const games::BombCountdown& bomb) {
     using namespace oledview;
     const float bezel = 12 * S();
     const float px = std::max(0.25f, std::floor((width - bezel * 2) / kW * 4) / 4);
@@ -5513,6 +5518,11 @@ void OledMockup(const azoth::OledSettings& s, const Fonts& f, float width, const
     };
     if (!s.enabled) {
         // Off: an OLED that's off is simply black.
+    } else if (s.cs2BombTimer && bomb.active) {
+        const auto pixels = azoth::RenderBomb(bomb);
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 208; ++x)
+                if (pixels[y * 208 + x]) screen.Rect(static_cast<float>(x + 24), static_cast<float>(y), 1, 1);
     } else if (s.content == azoth::OledContent::Clock) {
         SYSTEMTIME now;
         GetLocalTime(&now);
@@ -5870,9 +5880,70 @@ bool LumaOledGifGallery(Controller& ctl, UiState& ui, const Fonts& f, azoth::Ole
     return changed;
 }
 
+void Cs2BombSettings(Controller& ctl) {
+    auto settings = ctl.prefs().azothOled;
+    bool changed = Toggle("CS2 bomb countdown on Azoth", &settings.cs2BombTimer);
+    Muted("The screen changes after a bomb is planted. Enabling this option alone keeps your normal screen.");
+    Muted("Normal play estimates from the plant signal. Spectator countdowns are used when available.");
+    ImGui::BeginDisabled(!settings.cs2BombTimer);
+    ImGui::TextUnformatted("Bomb fuse (community servers)");
+    ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 260 * S()));
+    changed |= ImGui::SliderInt("##cs2-bomb-fuse", &settings.cs2BombSeconds, 10, 120, "%d seconds");
+    Muted("Default: 40 seconds. Used only when CS2 supplies no countdown.");
+    ImGui::EndDisabled();
+    if (settings.content == azoth::OledContent::Keep ||
+        (settings.content == azoth::OledContent::Animation && settings.animationSource == azoth::OledAnimationSource::LumaBridge))
+        Muted("Unconfirmed screen content returns to the clock. Upload a GIF first to restore it automatically.");
+    if (changed) ctl.SetAzothOled(settings);
+    const auto& az = ctl.azoth();
+    const auto connection = az.connection();
+    const uint64_t now = GetTickCount64();
+    const auto bomb = ctl.AzothBombCountdown(now);
+    const char* status;
+    unsigned color = kMuted;
+    if (!settings.cs2BombTimer) status = "Bomb display disabled";
+    else if (!settings.enabled) status = "Screen off";
+    else if (connection == azoth::Connection::Wireless || connection == azoth::Connection::ReceiverOnly) {
+        status = "Omni connected - bomb display requires wired USB";
+        color = kAmber;
+    } else if (connection != azoth::Connection::Wired) {
+        status = "Connect the Azoth by USB to enable the bomb display";
+        color = kAmber;
+    } else if (az.stuck()) { status = "Keyboard not answering - replug USB"; color = kAmber; }
+    else if (ctl.azothAsleep()) status = "Keyboard asleep - press a key to wake it";
+    else if (az.oledState() == AzothOutput::OledState::Failed) {
+        status = "OLED request failed - see the Azoth response details";
+        color = kAmber;
+    } else if (bomb.active) {
+        status = bomb.testing ? "Testing countdown on the keyboard" : "Bomb planted - countdown active";
+        color = kGreen;
+    } else if (ctl.output().stopped) status = "Lighting stopped - automatic bomb display paused";
+    else if (!ctl.feeds().Cs2Listening()) { status = "CS2 port busy - close other LumaBridge instances"; color = kAmber; }
+    else if (!ctl.feeds().Cs2Receiving(now)) status = "Waiting for CS2 data - set up the feed and restart CS2";
+    else { status = "CS2 connected - waiting for a bomb plant"; color = kGreen; }
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    ImGui::PushStyleColor(ImGuiCol_Text, V4(color));
+    ImGui::TextWrapped("%s", status);
+    ImGui::PopStyleColor();
+    if (connection == azoth::Connection::Wireless || connection == azoth::Connection::ReceiverOnly)
+        Muted("Plug in the USB cable and set the keyboard switch to wired USB. Omni supports RGB and built-in screen modes, but this live countdown uses USB.");
+    if (ctl.azothBombTesting()) {
+        if (Btn("Stop countdown test")) ctl.CancelAzothBombTest();
+    } else {
+        const bool liveBomb = ctl.feeds().Cs2Bomb(now, settings.cs2BombSeconds).active;
+        ImGui::BeginDisabled(!settings.enabled || !settings.cs2BombTimer || connection != azoth::Connection::Wired ||
+                             ctl.azothAsleep() || az.stuck() || liveBomb);
+        if (Btn("Test countdown on keyboard")) ctl.TestAzothBombCountdown();
+        ImGui::EndDisabled();
+    }
+    Muted("The test runs for 10 seconds over USB, then restores your screen. No match is needed.");
+}
+
 void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
     BeginCard("azoth-oled");
     auto settings = ctl.prefs().azothOled;
+    const auto bomb = ctl.AzothBombCountdown(GetTickCount64());
+    const bool bombPreview = settings.enabled && settings.cs2BombTimer && bomb.active;
     // Title, a Test tag, and how the screen is doing on the right.
     {
         IconItem(Icon::Grid, 18 * S(), Hex(kAccent));
@@ -5917,6 +5988,10 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
             if ((settings.content == azoth::OledContent::Equalizer || settings.content == azoth::OledContent::SongInfo) &&
                 connection == azoth::Connection::Wireless) { text = "Music: USB required"; color = kAmber; }
         }
+        if (bombPreview) {
+            text = ctl.azoth().wireless() ? "Bomb timer: USB required" : bomb.testing ? "Countdown test" : "CS2 bomb countdown";
+            color = kAmber;
+        }
         const float pw = ImGui::CalcTextSize(text).x + 20 * S();
         ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - pw));
         Pill(text, color);
@@ -5926,11 +6001,14 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
 
     const bool previewInGallery = settings.content == azoth::OledContent::Animation &&
                                   settings.animationSource == azoth::OledAnimationSource::LumaBridge;
-    if (!previewInGallery) {
+    if (!previewInGallery || bombPreview) {
         const float mockW = std::min(ImGui::GetContentRegionAvail().x, 360 * S());
-        OledMockup(settings, f, mockW, ctl.azoth().musicSnapshot());
+        OledMockup(settings, f, mockW, ctl.azoth().musicSnapshot(), bomb);
         ImGui::PushFont(f.caption);
-        Muted(settings.enabled && settings.content == azoth::OledContent::Animation
+        Muted(bombPreview ? (bomb.testing ? "Display test: the same countdown sent to the Azoth over USB."
+                                : bomb.estimated ? "CS2 bomb countdown. Estimated seconds are counted from the plant signal."
+                                            : "CS2 bomb countdown. Remaining seconds supplied by the game feed.")
+              : settings.enabled && settings.content == azoth::OledContent::Animation
                   ? (settings.animationSource == azoth::OledAnimationSource::LumaBridge
                         ? "LumaBridge preview. Use Upload to Azoth to play this animation on the keyboard."
                         : AsusAzothOledPreview(settings.animation, ImGui::GetTime()).empty()
@@ -5950,7 +6028,9 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
     {
         if (const auto error = ctl.azoth().oledError()) {
             const char* text =
-                error == ERROR_TIMEOUT
+                ctl.azoth().stuck()
+                    ? "The keyboard stopped answering. Unplug its USB cable and plug it back in."
+                : error == ERROR_TIMEOUT
                     ? "The keyboard didn't acknowledge the OLED command. Try USB, keep the keyboard awake, and turn off "
                       "Armoury Crate's live OLED modes before retrying."
                 : error == ERROR_NOT_SUPPORTED
@@ -6075,6 +6155,9 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
             ImGui::PopFont();
         }
     }
+
+    section("Counter-Strike 2");
+    Cs2BombSettings(ctl);
 
     const bool showGallery = settings.content == azoth::OledContent::Animation &&
                              settings.animationSource == azoth::OledAnimationSource::LumaBridge;
@@ -7870,11 +7953,17 @@ void FeedPill(const Controller& ctl, const UiState& ui, const std::string& key) 
 void FeedSetup(Controller& ctl, Integrations& in, UiState& ui, const std::string& key) {
     const auto& feeds = ctl.feeds();
     if (key == "cs2") {
+        Cs2BombSettings(ctl);
+        ImGui::Separator();
         if (ui.cs2Dir.empty()) {
             Muted("Counter-Strike 2 wasn't found in your game libraries (Rescan on the list).");
         } else if (ui.cs2Installed) {
             Muted("%s", feeds.Cs2Seen() ? "CS2 is sending its game state." : "Set up. Restart CS2 once so it picks it up.");
             ImGui::BeginDisabled(in.Busy());
+            if (Btn("Update feed##cs2"))
+                WriteFeedFile(in, ui, "cs2", "Counter-Strike 2 feed updated - restart CS2", Cs2ConfigPath(ui.cs2Dir),
+                              Cs2ConfigText(), false);
+            ImGui::SameLine();
             if (Btn("Remove##cs2"))
                 WriteFeedFile(in, ui, "cs2", "Counter-Strike 2 feed removed", Cs2ConfigPath(ui.cs2Dir), "", true);
             ImGui::EndDisabled();

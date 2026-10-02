@@ -110,6 +110,7 @@ public:
         fx::Params effect;
     };
     Feed Cs2(uint64_t now);
+    games::BombCountdown Cs2Bomb(uint64_t now, int fuseSeconds = 40) const;
     Feed RocketLeague(uint64_t now);
     Feed WarThunder(uint64_t now);
     Feed Dota2(uint64_t now);
@@ -129,6 +130,7 @@ public:
     Feed RaceRoom(uint64_t now);
 
     bool Cs2Listening() const { return cs2Listen_ != INVALID_SOCKET; }
+    bool Cs2Receiving(uint64_t now) const;
     bool Cs2Seen() const { return cs2Seen_; }            // CS2 has sent at least once
     bool RocketLeagueConnected() const { return rlConnected_; }
     bool WarThunderSeen() const { return wtSeen_; }
@@ -186,7 +188,7 @@ private:
     MemoryGame memory_[kMemoryCount];
     std::thread memoryThread_;
 
-    std::mutex mutex_;  // guards the engines
+    mutable std::mutex mutex_;  // guards the engines
     games::Cs2Lighting cs2_;
     games::RocketLeagueLighting rl_;
     int rlLoggedTeam_ = -1, rlUpdatesWithoutTeam_ = 0;  // for the log (RlHandle)

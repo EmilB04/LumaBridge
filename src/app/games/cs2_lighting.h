@@ -12,6 +12,7 @@
 
 #include "effects.h"
 #include "json.h"
+#include "cs2_bomb.h"
 
 namespace luma::app::games {
 
@@ -26,6 +27,7 @@ public:
     bool OnState(const Json& j, uint64_t now, const std::string& token = "") {
         if (!j.IsObject()) return false;
         if (!token.empty() && j["auth"]["token"].String() != token) return false;
+        bombTimer_.OnState(j, now);
         lastSeen_ = now;
         const Json& player = j["player"];
         const std::string self = j["provider"]["steamid"].String();
@@ -65,7 +67,8 @@ public:
     }
 
     // Receiving data and in a match.
-    bool Active(uint64_t now) const { return lastSeen_ && now - lastSeen_ < kStaleMs && !inMenu_; }
+    bool Receiving(uint64_t now) const { return lastSeen_ && now >= lastSeen_ && now - lastSeen_ < kStaleMs; }
+    bool Active(uint64_t now) const { return Receiving(now) && !inMenu_; }
 
     fx::Params Current(uint64_t now) const {
         using fx::Kind;
@@ -97,6 +100,8 @@ public:
         return Make(Kind::Static, teamColor);
     }
 
+    BombCountdown Bomb(uint64_t now, int fuseSeconds = 40) const { return bombTimer_.Current(now, fuseSeconds); }
+
     const std::string& team() const { return team_; }
 
 private:
@@ -111,6 +116,7 @@ private:
     static uint8_t Mix(uint8_t a, uint8_t b, double k) { return static_cast<uint8_t>(a + (b - a) * k + 0.5); }
     static void Pulse(uint64_t* until, uint64_t now, uint64_t ms) { *until = now + ms; }
 
+    Cs2BombTimer bombTimer_;
     uint64_t lastSeen_ = 0;
     bool inMenu_ = true;
     std::string team_ = "CT";

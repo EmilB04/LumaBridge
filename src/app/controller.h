@@ -200,6 +200,10 @@ public:
     const AzothOutput& azoth() const { return azoth_; }
     void SetAzothEnabled(bool on);
     void SetAzothOled(azoth::OledSettings settings);
+    games::BombCountdown AzothBombCountdown(uint64_t now) const;
+    bool TestAzothBombCountdown();
+    void CancelAzothBombTest() { azothBombTestUntil_ = 0; }
+    bool azothBombTesting() const { return GetTickCount64() < azothBombTestUntil_; }
     void ReapplyAzothOled() { azoth_.ReapplyOled(); }
     bool UploadAzothOledEffect(int effect) { return azoth_.UploadOledEffect(effect); }
     void CancelAzothOledUpload() { azoth_.CancelOledUpload(); }
@@ -296,6 +300,7 @@ private:
     sensors::SystemMonitor monitor_;
     LogitechOutput logitech_;
     AzothOutput azoth_;
+    uint64_t azothBombTestUntil_ = 0;
     DualSenseOutput dualsense_;
     PadInput pad_;
     OpenRgbOutput openRgb_;

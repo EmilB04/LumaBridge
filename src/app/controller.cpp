@@ -167,9 +167,26 @@ void Controller::SetAzothEnabled(bool on) {
     Changed();
 }
 
+games::BombCountdown Controller::AzothBombCountdown(uint64_t now) const {
+    const auto live = feeds_.Cs2Bomb(now, prefs_.azothOled.cs2BombSeconds);
+    if (live.active) return output_.stopped ? games::BombCountdown{} : live;
+    return games::TestBombCountdown(now, azothBombTestUntil_);
+}
+
+bool Controller::TestAzothBombCountdown() {
+    if (!prefs_.azothOled.enabled || !prefs_.azothOled.cs2BombTimer || !prefs_.azothOled.direct ||
+        azoth_.connection() != azoth::Connection::Wired || azothAsleep_ || azoth_.stuck() ||
+        feeds_.Cs2Bomb(GetTickCount64(), prefs_.azothOled.cs2BombSeconds).active) return false;
+    azothBombTestUntil_ = GetTickCount64() + 10000;
+    azoth_.ReapplyOled();
+    LUMA_INFO("ROG Azoth: starting a 10-second bomb display test");
+    return true;
+}
+
 void Controller::SetAzothOled(azoth::OledSettings settings) {
     prefs_.azothOled = azoth::NormalizeOled(settings);
     azoth_.SetOled(prefs_.azothOled);
+    if (!prefs_.azothOled.enabled || !prefs_.azothOled.cs2BombTimer) CancelAzothBombTest();
     azoth_.Start();
     Changed();
 }
@@ -872,6 +889,7 @@ void Controller::Tick() {
         const bool asleep = sleep::Asleep(now, azothInputAt_, timeout);
         if (asleep != azothAsleep_) LUMA_INFO("ROG Azoth: %s", asleep ? "asleep (not used for a while)" : "awake");
         azothAsleep_ = asleep;
+        azoth_.SetBombCountdown(AzothBombCountdown(now));
         azoth_.Set(keyboardEffect,
                    cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kKeyboard) *
                        sleep::Level(now, azothInputAt_, timeout),

@@ -12,6 +12,7 @@
 #include "effects.h"
 #include "azoth_oled_effects.h"
 #include "azoth_oled_music.h"
+#include "azoth_oled_bomb.h"
 #include "azoth_oled_upload.h"
 #include "lighting_state.h"
 #include "chroma_translate.h"
@@ -678,6 +679,102 @@ static void TestCs2() {
     CHECK(cs.OnState(J(R"({"provider":{"steamid":"1"},"player":{"activity":"menu"}})"), 60000));
     CHECK(!cs.Active(60000));
     CHECK(!cs.Active(60000 + Cs2Lighting::kStaleMs + 1));
+}
+
+static void TestCs2Bomb() {
+    using namespace luma::app::games;
+    using namespace luma::app::azoth;
+    Cs2Lighting cs;
+    const auto planted = J(R"({"auth":{"token":"ok"},"map":{"name":"de_dust2","round":4},"round":{"phase":"live","bomb":"planted"}})");
+    CHECK(!cs.Bomb(1000).active);
+    CHECK(!cs.OnState(planted, 1000, "wrong"));
+    CHECK(!cs.Bomb(1000).active);
+    CHECK(cs.OnState(planted, 1000, "ok"));
+    CHECK(cs.Bomb(1000).active && cs.Bomb(1000).estimated && cs.Bomb(1000).seconds == 40);
+    CHECK(cs.Bomb(1999).seconds == 40 && cs.Bomb(2000).seconds == 39);
+    CHECK(cs.OnState(planted, 12000, "ok")); // repeated plant state must not restart the fuse
+    CHECK(cs.Bomb(12000).seconds == 29);
+    CHECK(cs.Bomb(12000, 35).seconds == 24);
+    CHECK(cs.Bomb(12000, 1).active == false); // fuse is clamped to 10 seconds
+    CHECK(!cs.Bomb(41000).active);
+    CHECK(!cs.Bomb(47000).active); // expired heartbeat
+    const auto defusing = J(R"({"auth":{"token":"ok"},"map":{"name":"de_dust2","round":4},"round":{"phase":"live","bomb":"planted"},"bomb":{"state":"defusing","countdown":"5.0"}})");
+    CHECK(cs.OnState(defusing, 20000, "ok"));
+    CHECK(cs.Bomb(20000).seconds == 21 && cs.Bomb(20000).estimated);
+    auto exact = J(R"({"map":{"name":"de_dust2","round":4},"round":{"phase":"live","bomb":"planted"},"bomb":{"state":"defusing","countdown":"5.0"},"phase_countdowns":{"phase":"bomb","phase_ends_in":"17.25"}})");
+    cs.OnState(exact, 21000);
+    CHECK(cs.Bomb(21000).seconds == 18 && !cs.Bomb(21000).estimated);
+    CHECK(cs.Bomb(22250).seconds == 16);
+    cs.OnState(defusing, 23000, "ok"); // preserve the fuse clock during defusing
+    CHECK(cs.Bomb(23000).seconds == 16 && !cs.Bomb(23000).estimated);
+    const auto defused = J(R"({"map":{"name":"de_dust2","round":4},"round":{"phase":"over","bomb":"defused"}})");
+    cs.OnState(defused, 24000);
+    CHECK(!cs.Bomb(24000).active);
+    cs.OnState(planted, 25000, "ok");
+    cs.OnState(J(R"({"map":{"name":"de_dust2","round":4},"round":{"bomb":"exploded"}})"), 26000);
+    CHECK(!cs.Bomb(26000).active);
+    cs.OnState(planted, 27000, "ok");
+    cs.OnState(J(R"({"map":{"name":"de_dust2","round":5},"round":{"phase":"freezetime"}})"), 28000);
+    CHECK(!cs.Bomb(28000).active);
+    cs.OnState(planted, 29000, "ok");
+    cs.OnState(J(R"({"player":{"activity":"menu"}})"), 30000);
+    CHECK(!cs.Bomb(30000).active);
+    Cs2BombTimer timer;
+    timer.OnState(J(R"({"map":{},"bomb":{"state":"planted","countdown":9.1}})"), 1000);
+    CHECK(timer.Current(1000).seconds == 10 && !timer.Current(1000).estimated);
+    timer.OnState(J(R"({"map":{},"bomb":{"state":"defusing","countdown":"5.0"}})"), 2000);
+    CHECK(timer.Current(2000).seconds == 9);
+    CHECK(!timer.Current(10100).active);
+    for (const char* bad : {"nan", "inf", "-2", "130", "oops", "3x", ""}) {
+        Cs2BombTimer invalid;
+        const auto j = J((std::string(R"({"map":{},"round":{"bomb":"planted"},"bomb":{"state":"planted","countdown":")") + bad + R"("}})").c_str());
+        invalid.OnState(j, 1000);
+        CHECK(invalid.Current(1000).estimated && invalid.Current(1000).seconds == 40);
+    }
+    Cs2BombTimer roundClock;
+    roundClock.OnState(J(R"({"map":{},"round":{"bomb":"planted"},"phase_countdowns":{"phase":"live","phase_ends_in":"99.0"}})"), 1000);
+    CHECK(roundClock.Current(1000).seconds == 40 && roundClock.Current(1000).estimated);
+    CHECK(!roundClock.Current(36000).active);
+    timer.OnState(J(R"({"map":{},"bomb":{"state":"planted","countdown":"0"}})"), 20000);
+    CHECK(!timer.Current(20000).active);
+    CHECK(!TestBombCountdown(1000, 0).active);
+    const auto displayTest = TestBombCountdown(1000, 11000);
+    CHECK(displayTest.active && displayTest.testing && !displayTest.estimated && displayTest.seconds == 10);
+    CHECK(TestBombCountdown(1999, 11000).seconds == 10);
+    CHECK(TestBombCountdown(2000, 11000).seconds == 9);
+    CHECK(TestBombCountdown(10999, 11000).seconds == 1);
+    CHECK(!TestBombCountdown(11000, 11000).active);
+    CHECK(!TestBombCountdown(11001, 11000).active);
+    CHECK(RenderBomb(displayTest) != RenderBomb({true, false, 10}));
+    CHECK(!cs.Receiving(29999) && cs.Receiving(30000));
+    CHECK(!cs.Receiving(65000));
+    const auto pixels = RenderBomb({true, true, 40});
+    CHECK(pixels.size() == 208 * 64);
+    CHECK(RenderBomb({true, true, 39}) != pixels);
+    CHECK(RenderBomb({true, false, 40}) != pixels);
+    CHECK(RenderBomb({true, true, 120}).size() == pixels.size());
+    CHECK(std::count(pixels.begin(), pixels.end(), 255) > 500);
+    const auto blank = RenderBomb({});
+    CHECK(std::count(blank.begin(), blank.end(), 0) == 208 * 64);
+    const auto packed = OledSongPixels(pixels);
+    CHECK(packed.size() == 6656 && OledSongPart(packed, 110)[1] == 0x67);
+    OledSettings settings;
+    CHECK(settings.cs2BombTimer && settings.cs2BombSeconds == 40);
+    settings.cs2BombSeconds = 200;
+    CHECK(NormalizeOled(settings).cs2BombSeconds == 120);
+    settings.cs2BombSeconds = -1;
+    CHECK(NormalizeOled(settings).cs2BombSeconds == 10);
+    CHECK(BombRestoreCommands(settings, Link::Wired, {}, 3, -1)[0] == OledUploadShow());
+    CHECK(BombRestoreCommands(settings, Link::Wired, {}, -1, 2)[0] == OledCommand(Link::Wired, 0x61, 2));
+    CHECK(BombRestoreCommands(settings, Link::Wired, {}, -1, -1)[0][1] == 0x63);
+    settings.content = OledContent::SongInfo;
+    CHECK(BombRestoreCommands(settings, Link::Wired, {}, 3, 2).empty());
+    settings.content = OledContent::Animation;
+    settings.animationSource = OledAnimationSource::LumaBridge;
+    CHECK(BombRestoreCommands(settings, Link::Wired, {}, 3, 2)[0] == OledUploadShow());
+    CHECK(BombRestoreCommands(settings, Link::Wired, {}, -1, 2)[0][1] == 0x63);
+    settings.enabled = false;
+    CHECK(BombRestoreCommands(settings, Link::Wired, {}, 3, 2).empty());
 }
 
 static void TestRocketLeague() {
@@ -3307,6 +3404,7 @@ int main() {
     TestGameCatalog();
     TestGameProfiles();
     TestCs2();
+    TestCs2Bomb();
     TestRocketLeague();
     TestWarThunder();
     TestScreenColors();
