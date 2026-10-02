@@ -11,8 +11,8 @@
 // Wired (USB 0B05:1A83): the vendor interface (MI_01, usage page 0xFF00), 64-byte output
 // reports with report ID 0. Wireless (ROG Omni receiver 0B05:1ACE): the same commands on
 // the receiver's MI_02 vendor collection (usage page 0xFF00), report ID 2, 63 data bytes;
-// the receiver passes them on to the keyboard. LumaBridge only ever sends the color
-// command, never the save: what it shows lasts until the keyboard restarts, and the
+// the receiver passes them on to the keyboard. LumaBridge never sends the save:
+// what it shows lasts until the keyboard restarts, and the
 // lighting Armoury Crate saved stays in the keyboard. Pure packet building, tested.
 #pragma once
 

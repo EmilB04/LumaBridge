@@ -872,11 +872,10 @@ void Controller::Tick() {
         const bool asleep = sleep::Asleep(now, azothInputAt_, timeout);
         if (asleep != azothAsleep_) LUMA_INFO("ROG Azoth: %s", asleep ? "asleep (not used for a while)" : "awake");
         azothAsleep_ = asleep;
-        azoth_.SetAsleep(asleep);
         azoth_.Set(keyboardEffect,
                    cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kKeyboard) *
                        sleep::Level(now, azothInputAt_, timeout),
-                   prefs_.azothKeyboard && !output_.stopped && !DeviceNative(prefs_, device::kKeyboard));
+                   prefs_.azothKeyboard && !output_.stopped && !DeviceNative(prefs_, device::kKeyboard), asleep);
     }
     kraken_.SetLighting(DeviceEffect(device::kOther),
                        cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kOther),

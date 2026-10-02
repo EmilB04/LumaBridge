@@ -63,6 +63,7 @@
 #include "azoth_protocol.h"
 #include "azoth_oled.h"
 #include "azoth_connection.h"
+#include "azoth_power.h"
 #include "dualsense_protocol.h"
 #include "azoth_layout.h"
 #include "logitech_hidpp.h"
@@ -3003,6 +3004,36 @@ static void TestAzothOled() {
     CHECK(bmp[54 + kOledWidth * (kOledHeight - 1) * 3] == 255);
 }
 
+static void TestAzothPower() {
+    using namespace luma::app::azoth;
+    for (auto link : {Link::Wired, Link::Wireless}) {
+        auto report = SetIdleTimeout(link, kNeverSleep);
+        CHECK(report[0] == (link == Link::Wired ? 0 : 2));
+        CHECK(report[1] == 0x51 && report[2] == 0x38 && report[5] == 0xFF);
+        CHECK(!IsSave(report));
+        report = SetIdleTimeout(link, 3);
+        CHECK(report[5] == 3);  // five-minute ASUS timer
+    }
+    IdleTimeoutOverride timer;
+    CHECK(!timer.Desired(true) && !timer.Desired(false));
+    timer.Observe(0xFA);  // a rejected/unknown setting must never be overwritten
+    CHECK(!timer.Desired(true));
+    timer.Observe(0);  // ASUS: one minute; LumaBridge can keep both outputs on longer
+    CHECK(timer.Desired(true) == kNeverSleep);
+    timer.Applied(kNeverSleep, true);
+    timer.Observe(kNeverSleep);  // reading back our override doesn't lose the ASUS timer
+    CHECK(!timer.Desired(true) && timer.Desired(false) == 0);
+    timer.Observe(3);  // ASUS changes its preference while LumaBridge is active
+    CHECK(timer.Desired(true) == kNeverSleep);
+    timer.Applied(kNeverSleep, true);
+    CHECK(timer.Desired(false) == 3);
+    timer.Applied(3, false);  // restore on idle/exit; wake can override again
+    CHECK(!timer.Desired(false) && timer.Desired(true) == kNeverSleep);
+    IdleTimeoutOverride never;
+    never.Observe(kNeverSleep);
+    CHECK(!never.Desired(true) && !never.Desired(false));
+}
+
 static void TestAzothOledEffects() {
     using namespace luma::app::azoth;
     CHECK(std::wstring(kAsusAnimationFiles[2]) == L"firework");
@@ -3147,6 +3178,7 @@ int main() {
     TestFriendlyNames();
     TestAzoth();
     TestAzothOled();
+    TestAzothPower();
     TestAzothOledEffects();
     TestAzothConnection();
     TestDualSense();

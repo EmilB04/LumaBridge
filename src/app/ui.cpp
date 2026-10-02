@@ -5389,8 +5389,11 @@ void AzothCard(Controller& ctl, const Fonts& f) {
     if (SleepControls("azothsleep", &ctl.prefs().azothSleep, &ctl.prefs().azothSleepSec,
                       &ctl.prefs().azothSleepIgnoreDynamic))
         ctl.Changed();
-    Muted("When you haven't typed for a while, the keys fade out and LumaBridge stops sending, so the keyboard can "
-          "sleep (and save its battery wirelessly). The next key press lights it up again.");
+    Muted("LumaBridge overrides the keyboard's own sleep timer while controlling it. After this delay, the keys "
+          "fade out and the OLED turns off. The next key press restores both. ASUS's timer is restored when control ends.");
+    if (ctl.azoth().sleepTimerError())
+        Muted("The keyboard didn't accept the sleep timer override. Its own timer may still turn it off earlier; "
+              "the app log has the details.");
     if (SmallBtn("Run the device probe")) {
         const std::wstring exe = AppDirectory() + L"\\tools\\device-probe.exe";
         ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNORMAL);

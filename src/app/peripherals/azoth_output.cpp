@@ -12,6 +12,7 @@ extern "C" {
 
 #include "azoth_layout.h"
 #include "azoth_protocol.h"
+#include "azoth_power.h"
 #include "log.h"
 
 namespace luma::app {
@@ -169,12 +170,13 @@ void AzothOutput::Stop() {
     connection_ = azoth::Connection::Unknown;
 }
 
-void AzothOutput::Set(const fx::Params& effect, double brightness, bool own) {
+void AzothOutput::Set(const fx::Params& effect, double brightness, bool own, bool asleep) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (effect.kind != effect_.kind || effect.speed != effect_.speed) effectSince_ = GetTickCount64();
     effect_ = effect;
     brightness_ = brightness;
     own_ = own;
+    asleep_ = asleep;
 }
 
 void AzothOutput::SetOled(azoth::OledSettings settings) {
@@ -211,6 +213,24 @@ void AzothOutput::Run() {
     uint64_t appliedRevision = UINT64_MAX, attemptedRevision = UINT64_MAX, nextOled = 0;
     azoth::Report lastClock{};
     bool oledProbed = false, versionChecked = false, keyboardReady = false, wasAsleep = false;
+    azoth::IdleTimeoutOverride idleTimeout;
+    uint64_t nextIdleApply = 0;
+    auto applyIdleTimeout = [&](bool control) {
+        const auto target = idleTimeout.Desired(control);
+        if (!target || dev == INVALID_HANDLE_VALUE) return;
+        azoth::Report reply{};
+        DWORD size = 0;
+        const auto command = azoth::SetIdleTimeout(link, *target);
+        if (OledExchange(dev, command, link, reply, &size)) {
+            sleepTimerError_ = 0;
+            idleTimeout.Applied(*target, control);
+            LUMA_INFO("ROG Azoth: firmware sleep timer %s (%02X)", control ? "overridden by LumaBridge" : "restored", *target);
+        } else {
+            sleepTimerError_ = GetLastError();
+            LUMA_WARN("ROG Azoth: firmware sleep timer: %s", ExchangeDetails(link, command, reply, size, GetLastError()).c_str());
+        }
+        nextIdleApply = GetTickCount64() + 5000;
+    };
     auto resetSession = [&] {
         lastSent = 0;
         lastKeys.clear();
@@ -224,11 +244,14 @@ void AzothOutput::Run() {
         oledFailureDetails_.clear();
     };
     auto closeDevice = [&] {
+        applyIdleTimeout(false);
         if (dev != INVALID_HANDLE_VALUE) CloseHandle(dev);
         dev = INVALID_HANDLE_VALUE;
         openedPath.clear();
         versionChecked = keyboardReady = false;
         nextHealth = 0;
+        idleTimeout = {};
+        nextIdleApply = 0;
         resetSession();
     };
     while (!stop_) {
@@ -236,6 +259,7 @@ void AzothOutput::Run() {
         fx::Params effect;
         double brightness;
         bool own;
+        bool asleep;
         uint64_t since;
         azoth::OledSettings oled;
         uint64_t revision;
@@ -244,12 +268,12 @@ void AzothOutput::Run() {
             effect = effect_;
             brightness = brightness_;
             own = own_;
+            asleep = asleep_;
             since = effectSince_;
             oled = oled_;
             revision = oledRevision_;
         }
         const uint64_t now = GetTickCount64();
-        const bool asleep = asleep_;
         const bool forcedScan = rescan_.exchange(false);
         if (forcedScan || now >= nextScan) {
             devices = FindAzothControls();
@@ -286,6 +310,25 @@ void AzothOutput::Run() {
         // Asleep: nothing goes out (the dark frame went out before), so the keyboard can sleep.
         // Used again: every key again (lastSent 0 forces a full refresh).
         if (asleep) {
+            if (!wasAsleep && dev != INVALID_HANDLE_VALUE) {
+                // Explicitly darken both outputs. Merely stopping updates leaves the OLED
+                // running until ASUS's independent timer fires.
+                if (own) {
+                    std::vector<azoth::KeyColor> black;
+                    for (const auto& key : azoth::IsoKeys()) black.push_back({static_cast<uint8_t>(key.led), Rgb{}});
+                    for (const auto& report : azoth::KeyColors(black, link))
+                        if (!WriteReport(dev, report, link)) {
+                            LUMA_WARN("ROG Azoth: couldn't send the final sleep RGB frame (error %lu)", GetLastError());
+                            break;
+                        }
+                }
+                if (oled.direct) {
+                    azoth::Report reply{};
+                    if (!OledExchange(dev, azoth::OledCommand(link, 0x69, 0), link, reply))
+                        LUMA_WARN("ROG Azoth: couldn't turn the OLED off for sleep (error %lu)", GetLastError());
+                }
+                applyIdleTimeout(false);
+            }
             lastSent = 0;
             if (oled.direct) oledState_ = OledState::Asleep;
             appliedRevision = UINT64_MAX;
@@ -293,7 +336,7 @@ void AzothOutput::Run() {
             wasAsleep = true;
             continue;
         }
-        if (wasAsleep) { nextHealth = 0; wasAsleep = false; }
+        if (wasAsleep) { nextHealth = nextIdleApply = 0; wasAsleep = false; }
         if (dev == INVALID_HANDLE_VALUE) {
             if (now < nextFind) continue;
             // Reconsider the cable even if the receiver is still plugged in and writable.
@@ -335,28 +378,36 @@ void AzothOutput::Run() {
             versionChecked = true;
             if (link == azoth::Link::Wired) LUMA_INFO("ROG Azoth: connected (wired USB, interface confirmed)");
         }
-        if (link == azoth::Link::Wireless) {
+        {
             if (now >= nextHealth) {
                 nextHealth = now + 2000;
                 azoth::Report reply{};
                 DWORD size = 0;
                 const bool ready = OledExchange(dev, azoth::StatusQuery(link, 1), link, reply, &size) &&
                                    azoth::PowerReply(link, reply, size);
-                if (ready != keyboardReady) {
+                if (ready) idleTimeout.Observe(reply[7]);
+                if (ready && !azoth::ValidIdleTimeout(reply[7])) {
+                    if (sleepTimerError_ != ERROR_NOT_SUPPORTED)
+                        LUMA_WARN("ROG Azoth: unrecognised firmware sleep timer %02X", reply[7]);
+                    sleepTimerError_ = ERROR_NOT_SUPPORTED;
+                }
+                if (link == azoth::Link::Wireless && ready != keyboardReady) {
                     LUMA_INFO("ROG Azoth: %s", ready ? "keyboard connected through Omni (power reply confirmed)"
                                                    : "receiver present; keyboard stopped answering");
                     resetSession();
                 }
                 keyboardReady = ready;
             }
-            connection_ = keyboardReady ? azoth::Connection::Wireless : azoth::Connection::ReceiverOnly;
-            if (!keyboardReady) {
+            if (link == azoth::Link::Wireless)
+                connection_ = keyboardReady ? azoth::Connection::Wireless : azoth::Connection::ReceiverOnly;
+            if (link == azoth::Link::Wireless && !keyboardReady) {
                 if (own) state_ = State::NotFound;
                 if (oled.direct) oledState_ = OledState::NotFound;
                 oledError_ = 0;
                 continue;
             }
         }
+        if (now >= nextIdleApply) applyIdleTimeout(true);
         if (oled.direct && (revision != attemptedRevision || now >= nextOled)) {
             const auto time = LocalOledTime();
             const auto clock = azoth::OledClock(link, time, oled.clock12Hour);
@@ -474,7 +525,7 @@ void AzothOutput::Run() {
         lastSent = now;
         state_ = State::Active;
     }
-    if (dev != INVALID_HANDLE_VALUE) CloseHandle(dev);
+    closeDevice();
 }
 
 }  // namespace luma::app

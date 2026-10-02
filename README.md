@@ -94,6 +94,9 @@ and desk in 3D, live.
   off command. Lighting updates and receiver queries pause until you use the mouse again.
   **Stay awake while a game controls the lighting** applies only to an active game lighting
   feed; desktop colors and animated presets still sleep normally. The same rule applies to Azoth.
+- **Azoth inactivity:** LumaBridge pauses the keyboard's firmware sleep timer while controlling
+  it, turns the keys and OLED off at its own inactivity timeout, and restores the ASUS timer
+  when idle or released. Armoury Crate's shorter timer should no longer turn them off early.
 - **ROG Azoth OLED (test):** **Devices > ROG Azoth > OLED display** offers direct screen
   on/off, brightness, six **ASUS built-in** animations and a local clock over USB or the Omni
   receiver. LumaBridge runs the screen, independent of RGB; it pauses while the keyboard

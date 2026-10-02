@@ -21,6 +21,16 @@ Armoury Crate import limits, not proof of a USB streaming format.
 
 ## Commands found in an existing implementation
 
+The firmware idle timer is separate from RGB/OLED writes. G-Helper's
+[AsusKeyboard energy settings](https://github.com/seerge/g-helper/blob/main/app/Peripherals/Keyboard/AsusKeyboard.cs)
+reads it from byte 7 of `ID 12 01` and writes `ID 51 38 00 00 value`. Values 0..4 mean
+1, 2, 3, 5 and 10 minutes; FF disables firmware sleep. LumaBridge remembers the
+reported ASUS value, uses FF while controlling the awake keyboard, explicitly darkens
+RGB and OLED at LumaBridge's timeout, and restores the ASUS value on sleep or release.
+It never writes the low-battery setting or sends the flash-save command. Timer commands
+require matching acknowledgments. The timer override and RGB/OLED inactivity behavior
+were verified on the original ROG Azoth.
+
 [G-Helper's Azoth model](https://github.com/seerge/g-helper/blob/main/app/Peripherals/Keyboard/Models/Azoth.cs)
 uses these reports, padded with zeroes to the link's report length. `ID` is the HID
 report ID, included in the Windows buffer: `00` wired, `02` for Omni. Wired buffers

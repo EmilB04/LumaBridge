@@ -27,7 +27,7 @@ public:
     void Stop();
     // `brightness` 0..1 (LumaBridge's brightness slider); `own = false` stops sending (the
     // keyboard keeps the last color until it restarts; its saved lighting is untouched).
-    void Set(const fx::Params& effect, double brightness, bool own);
+    void Set(const fx::Params& effect, double brightness, bool own, bool asleep = false);
     void SetOled(azoth::OledSettings settings);
     void ReapplyOled();
     OledState oledState() const { return oledState_; }
@@ -37,12 +37,12 @@ public:
     azoth::Connection connection() const { return connection_; }
     void Rescan() { rescan_ = true; }
     // Asleep (device_sleep.h): nothing more goes to the keyboard until it's used again.
-    void SetAsleep(bool asleep) { asleep_ = asleep; }
     State state() const { return state_; }
     bool wireless() const { return connection_ == azoth::Connection::Wireless; }
     // Windows' error from the last failed write, if State is NotFound because of one (0: it
     // was simply never found, the more common case).
     unsigned long lastWriteError() const { return lastWriteError_; }
+    unsigned long sleepTimerError() const { return sleepTimerError_; }
 
 private:
     void Run();
@@ -50,11 +50,11 @@ private:
     std::thread thread_;
     std::atomic<bool> stop_{false};
     std::atomic<State> state_{State::Off};
-    std::atomic<bool> asleep_{false};
     std::atomic<azoth::Link> link_{azoth::Link::Wired};
     std::atomic<azoth::Connection> connection_{azoth::Connection::Unknown};
     std::atomic<bool> rescan_{true};
     std::atomic<unsigned long> lastWriteError_{0};
+    std::atomic<unsigned long> sleepTimerError_{0};
     std::atomic<OledState> oledState_{OledState::Vendor};
     std::atomic<unsigned long> oledError_{0};
     std::atomic<int> oledAnimation_{-1};
@@ -63,6 +63,7 @@ private:
     fx::Params effect_;
     double brightness_ = 1.0;
     bool own_ = false;
+    bool asleep_ = false;  // same snapshot as the final RGB brightness
     uint64_t effectSince_ = 0;
     azoth::OledSettings oled_;
     uint64_t oledRevision_ = 0;
