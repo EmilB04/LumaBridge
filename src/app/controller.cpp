@@ -88,17 +88,14 @@ void Controller::OnDeviceInput(uint16_t vid, uint16_t pid) {
         azothInputAt_ = now;
 }
 
-uint64_t Controller::LogitechSleepMs(bool dynamicActive) const {
+uint64_t Controller::LogitechSleepMs(bool gameLighting) const {
     // G HUB's own setting decides whether the mouse's lighting turns off; LumaBridge's decides when.
-    if (!prefs_.logitechSleep || !presence_.ghubSleep.value_or(true)) return 0;
-    if (dynamicActive && prefs_.logitechSleepIgnoreDynamic) return 0;
-    return static_cast<uint64_t>(std::max(10, prefs_.logitechSleepSec)) * 1000;
+    return sleep::Timeout(prefs_.logitechSleep && presence_.ghubSleep.value_or(true), prefs_.logitechSleepSec,
+                          prefs_.logitechSleepIgnoreDynamic, gameLighting);
 }
 
-uint64_t Controller::AzothSleepMs(bool dynamicActive) const {
-    if (!prefs_.azothSleep) return 0;
-    if (dynamicActive && prefs_.azothSleepIgnoreDynamic) return 0;
-    return static_cast<uint64_t>(std::max(10, prefs_.azothSleepSec)) * 1000;
+uint64_t Controller::AzothSleepMs(bool gameLighting) const {
+    return sleep::Timeout(prefs_.azothSleep, prefs_.azothSleepSec, prefs_.azothSleepIgnoreDynamic, gameLighting);
 }
 
 void Controller::SetLampArrayEnabled(bool on) {
@@ -200,15 +197,14 @@ void Controller::SetLogitechEnabled(bool on) {
 
 void Controller::UpdateLogitech() {
     // Not used for a while: its lighting fades out, then nothing goes to it (device_sleep.h),
-    // unless it's showing a dynamic effect the owner asked never to interrupt.
+    // unless an active game lighting feed is keeping it awake.
     const uint64_t now = GetTickCount64();
     const fx::Params effect = DeviceEffect(device::kMouse);
-    const bool dynamic = effect.kind != fx::Kind::Static;
-    const double awake = sleep::Level(now, logitechInputAt_, LogitechSleepMs(dynamic));
-    const bool asleep = sleep::Asleep(now, logitechInputAt_, LogitechSleepMs(dynamic));
+    const uint64_t timeout = LogitechSleepMs(output_.game && !output_.stopped);
+    const double awake = sleep::Level(now, logitechInputAt_, timeout);
+    const bool asleep = sleep::Asleep(now, logitechInputAt_, timeout);
     if (asleep != logitechAsleep_) LUMA_INFO("Logitech devices: %s", asleep ? "asleep (not used for a while)" : "awake");
     logitechAsleep_ = asleep;
-    logitech_.SetAsleep(asleep);
     if (!prefs_.logitechDevices) {
         logitechNote_ = "Turned off";
         return;
@@ -221,7 +217,7 @@ void Controller::UpdateLogitech() {
     }
     if (own && prefs_.logitechForce) {
         logitech_.Set(effect, cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, true,
-                      output_.game);
+                      output_.game, asleep);
         return;  // kept with LumaBridge even while a game lights Logitech gear
     }
     if (own && logitech_.sdkAvailable())
@@ -238,7 +234,7 @@ void Controller::UpdateLogitech() {
                 break;
             }
     logitech_.Set(effect, cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kMouse) * awake, own,
-                  output_.game);
+                  output_.game, asleep);
 }
 
 std::wstring Controller::GameDir(const char* profileKey) const {
@@ -298,7 +294,7 @@ void Controller::RemoveManualGame(const std::wstring& exePath) {
 void Controller::RescanPresence() {
     if (presenceJob_.valid()) return;  // already scanning
     presenceAt_ = GetTickCount64();
-    presenceJob_ = std::async(std::launch::async, [] {
+    presenceJob_ = std::async(std::launch::async, [paused = logitechProbePaused_, cached = presence_.logitech] {
         Presence p;
         p.inventory = inventory::ScanPresentDevices();
         p.azoth = UsbDevicePresent(azoth::kVendor, {azoth::Product(azoth::Link::Wired), azoth::Product(azoth::Link::Wireless)});
@@ -306,7 +302,13 @@ void Controller::RescanPresence() {
         for (const auto& d : p.inventory.devices)
             if (d.vid == dualsense::kVendor && (d.pid == dualsense::kProductStandard || d.pid == dualsense::kProductEdge))
                 p.dualsense = true;
-        p.logitech = ScanLogitechDevices();
+        // Name/feature queries send HID++ reports and can wake a wireless mouse. Keep
+        // its last inventory while idle; cancel a scan already underway when fading starts.
+        if (*paused) p.logitech = cached;
+        else {
+            p.logitech = ScanLogitechDevices([paused] { return paused->load(); });
+            if (*paused) p.logitech = cached;
+        }
         p.ghubSleep = GHubTurnsOffOnInactivity();
         p.usb = UsbDevices();
         for (const auto& k : nzxt::FindByName()) p.krakens.emplace_back(k.vid, k.pid);
@@ -721,8 +723,48 @@ uint64_t Controller::handbackMsLeft() const {
     return handbackDoneAt_ > now ? handbackDoneAt_ - now : 0;
 }
 
+void Controller::OnSystemSuspend() {
+    if (systemSuspended_) return;
+    systemSuspended_ = true;
+    suspendedTicks_ = 0;
+    *logitechProbePaused_ = true;
+    LUMA_INFO("System sleep: turning off fan and Logitech lighting, then pausing updates");
+    // Ask both workers first so they can finish together. Windows gives this handler
+    // about two seconds; never wait indefinitely for a disappearing USB device.
+    mirror_.SetSystemSuspended(true);
+    logitech_.SetSystemSuspended(true);
+    if (!mirror_.WaitForSuspend(750)) LUMA_WARN("System sleep: Aura worker didn't finish in time");
+    if (!logitech_.WaitForSuspend(750)) LUMA_WARN("System sleep: Logitech worker didn't finish in time");
+}
+
+void Controller::OnSystemResume() {
+    if (!systemSuspended_) {
+        OnHardwareChanged();
+        return;
+    }
+    LUMA_INFO("System resume: restoring fan and Logitech lighting");
+    systemSuspended_ = false;
+    *logitechProbePaused_ = false;
+    logitechInputAt_ = GetTickCount64();
+    logitech_.SetAsleep(false);
+    mirror_.SetSystemSuspended(false);
+    logitech_.SetSystemSuspended(false);
+    outputApplied_ = false;
+    OnHardwareChanged();
+}
+
 void Controller::Tick() {
+    if (systemSuspended_) {
+        // Ticks only run while the PC is awake. Half a minute of them without Windows reporting
+        // the resume (a cancelled sleep, a missed message): resume anyway, rather than leave the
+        // lights dark.
+        if (++suspendedTicks_ < 600) return;
+        LUMA_WARN("System resume wasn't reported - restoring the lighting anyway");
+        OnSystemResume();
+    }
     const uint64_t now = GetTickCount64();
+    const uint64_t mouseTimeout = LogitechSleepMs(output_.game && !output_.stopped);
+    *logitechProbePaused_ = mouseTimeout && now >= logitechInputAt_ && now - logitechInputAt_ >= mouseTimeout;
 
     if (gameSense_.IsRunning()) {
         auto snap = gameSense_.Poll(now);
@@ -826,14 +868,14 @@ void Controller::Tick() {
     {
         const uint64_t now = GetTickCount64();
         const fx::Params keyboardEffect = DeviceEffect(device::kKeyboard);
-        const bool dynamic = keyboardEffect.kind != fx::Kind::Static;
-        const bool asleep = sleep::Asleep(now, azothInputAt_, AzothSleepMs(dynamic));
+        const uint64_t timeout = AzothSleepMs(output_.game && !output_.stopped);
+        const bool asleep = sleep::Asleep(now, azothInputAt_, timeout);
         if (asleep != azothAsleep_) LUMA_INFO("ROG Azoth: %s", asleep ? "asleep (not used for a while)" : "awake");
         azothAsleep_ = asleep;
         azoth_.SetAsleep(asleep);
         azoth_.Set(keyboardEffect,
                    cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kKeyboard) *
-                       sleep::Level(now, azothInputAt_, AzothSleepMs(dynamic)),
+                       sleep::Level(now, azothInputAt_, timeout),
                    prefs_.azothKeyboard && !output_.stopped && !DeviceNative(prefs_, device::kKeyboard));
     }
     kraken_.SetLighting(DeviceEffect(device::kOther),

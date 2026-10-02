@@ -393,7 +393,9 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_ctl.OnHardwareChanged();
         break;
     case WM_POWERBROADCAST:
-        if (wp == PBT_APMRESUMEAUTOMATIC || wp == PBT_APMRESUMESUSPEND) g_ctl.OnHardwareChanged();
+        if (wp == PBT_APMSUSPEND) g_ctl.OnSystemSuspend();
+        else if (wp == PBT_APMRESUMEAUTOMATIC || wp == PBT_APMRESUMESUSPEND || wp == PBT_APMRESUMECRITICAL)
+            g_ctl.OnSystemResume();
         break;
     case WM_SIZE:
         if (wp != SIZE_MINIMIZED) {

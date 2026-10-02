@@ -13,12 +13,14 @@
 #include <windows.h>
 
 #include <atomic>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "effects.h"
+#include "power_suspend.h"
 
 namespace luma::app {
 
@@ -31,7 +33,7 @@ struct LogitechDevice {
 
 // Every Logitech device reachable over HID++, with or without lighting. Talks to each
 // receiver and cable, so it takes a few seconds: run it in the background.
-std::vector<LogitechDevice> ScanLogitechDevices();
+std::vector<LogitechDevice> ScanLogitechDevices(const std::function<bool()>& cancelled = {});
 
 class LogitechOutput {
 public:
@@ -47,11 +49,13 @@ public:
     // `brightness` 0..1.
     // `inStep`: a game's lighting - the mouse shows it LED by LED on the shared clock, never with
     // its own effects (they run on the mouse's clock, out of step with the other devices).
-    void Set(const fx::Params& effect, double brightness, bool own, bool inStep = false);
+    void Set(const fx::Params& effect, double brightness, bool own, bool inStep = false, bool asleep = false);
 
     // Asleep (device_sleep.h): nothing more goes to the devices until they're used again, so a
     // wireless mouse can sleep.
-    void SetAsleep(bool asleep) { asleep_ = asleep; }
+    void SetAsleep(bool asleep) { std::lock_guard<std::mutex> lock(mutex_); asleep_ = asleep; }
+    void SetSystemSuspended(bool suspended) { powerSuspend_.Request(suspended); }
+    bool WaitForSuspend(unsigned ms) { return !thread_.joinable() || powerSuspend_.Wait(ms); }
 
     State state() const { return state_; }
     // Whether the mouse shows the whole effect right now (its own effect or LED by LED),
@@ -74,12 +78,13 @@ private:
     std::atomic<bool> mouseEffect_{false};
     std::atomic<bool> sdkActive_{false};
     std::atomic<bool> sdkAvailable_{false};
-    std::atomic<bool> asleep_{false};
+    PowerSuspend powerSuspend_;
     std::atomic<bool> inStep_{false};
     mutable std::mutex mutex_;
     fx::Params effect_;
     double brightness_ = 1.0;
     bool own_ = false;
+    bool asleep_ = false;  // part of the same snapshot as brightness and ownership
     uint64_t effectSince_ = 0;
     std::wstring dll_;
     std::string directName_;

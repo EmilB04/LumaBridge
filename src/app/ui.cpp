@@ -5308,9 +5308,9 @@ bool SleepControls(const char* id, bool* on, int* seconds, bool* ignoreDynamic) 
             changed = true;
         }
         ImGui::Dummy(ImVec2(0, 4 * S()));
-        if (Toggle("Refuse to sleep while a dynamic effect is showing", ignoreDynamic)) changed = true;
-        Muted("Games and animated presets (Rainbow, Comet, ...) keep it awake instead of fading out mid-effect; "
-              "a still color still fades and sleeps as usual.");
+        if (Toggle("Stay awake while a game controls the lighting", ignoreDynamic)) changed = true;
+        Muted("Keeps it awake while an active game sends lighting. Your normal colors and animated presets "
+              "still fade and sleep when you're not using it.");
     }
     ImGui::PopID();
     return changed;

@@ -88,6 +88,12 @@ and desk in 3D, live.
   **Lighting and readings**, grouped controls let you switch lights on or off, set up fans
   (count, LEDs per fan, test pattern), choose memory slots and view cooler / GPU readings.
 - **Logitech devices** (mice, ...) follow along through G HUB's own LED SDK.
+- **PC sleep:** fan and Logitech lighting turns off before sleep, with updates paused
+  until wake. LumaBridge then reconnects and restores the current lighting.
+- **Mouse power saving:** after the inactivity fade, Logitech lighting receives a final
+  off command. Lighting updates and receiver queries pause until you use the mouse again.
+  **Stay awake while a game controls the lighting** applies only to an active game lighting
+  feed; desktop colors and animated presets still sleep normally. The same rule applies to Azoth.
 - **ROG Azoth OLED (test):** **Devices > ROG Azoth > OLED display** offers direct screen
   on/off, brightness, six **ASUS built-in** animations and a local clock over USB or the Omni
   receiver. LumaBridge runs the screen, independent of RGB; it pauses while the keyboard

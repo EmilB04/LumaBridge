@@ -6,6 +6,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <limits>
+#include <thread>
 
 #include "color.h"
 #include "effects.h"
@@ -14,6 +15,7 @@
 #include "chroma_translate.h"
 #include "aura_usb_protocol.h"
 #include "direct_mode_reclaim.h"
+#include "power_suspend.h"
 #include "core_props.h"
 #include "fake_devices.h"
 #include "gamesense_engine.h"
@@ -2407,6 +2409,15 @@ static void TestSharedClock() {
 
 static void TestDeviceSleep() {
     namespace sl = luma::app::sleep;
+    // Desktop animations sleep with the game exemption enabled. An active game feed
+    // stays awake even when its SDK sends plain color frames instead of an animation.
+    CHECK(sl::Timeout(true, 30, true, false) == 30000);
+    CHECK(sl::Timeout(true, 30, true, true) == 0);
+    CHECK(sl::Timeout(true, 30, false, true) == 30000);
+    CHECK(sl::Timeout(false, 30, false, false) == 0);
+    CHECK(sl::Timeout(true, -1, false, false) == 10000);
+    CHECK(sl::Asleep(60000, 0, sl::Timeout(true, 30, true, false)));
+    CHECK(!sl::Asleep(60000, 0, sl::Timeout(true, 30, true, true)));
     // Awake until the timeout, then a fade over kFadeMs, then dark; asleep once the dark frame is out.
     CHECK(sl::Level(1000, 0, 60000) == 1.0 && sl::Level(60000, 0, 60000) == 1.0);
     CHECK(std::fabs(sl::Level(60000 + sl::kFadeMs / 2, 0, 60000) - 0.5) < 1e-9);
@@ -2414,6 +2425,16 @@ static void TestDeviceSleep() {
     CHECK(!sl::Asleep(60000 + sl::kFadeMs, 0, 60000) && sl::Asleep(60000 + sl::kFadeMs + sl::kQuietMs, 0, 60000));
     CHECK(sl::Level(999999, 0, 0) == 1.0 && !sl::Asleep(999999, 0, 0));  // timeout 0: never sleeps
     CHECK(sl::Level(10, 50, 1000) == 1.0);                                 // input after "now": awake
+    sl::OutputSleep gate;
+    using Action = sl::OutputSleep::Action;
+    CHECK(gate.Update(false) == Action::Awake);
+    CHECK(gate.Update(sl::Level(62500, 0, 60000) == 0) == Action::Dark);
+    CHECK(gate.Update(true) == Action::Quiet);  // no repeated off commands or discovery
+    CHECK(gate.Update(sl::Asleep(999999, 0, 60000)) == Action::Quiet);
+    CHECK(gate.Update(false) == Action::Awake);  // movement allows discovery and repaint
+    // A slow worker that skips the entire fade still turns off the onboard effect once.
+    CHECK(gate.Update(sl::Asleep(999999, 0, 60000)) == Action::Dark);
+    CHECK(gate.Update(true) == Action::Quiet);
     // G HUB's answer, as it came from a real G HUB (ghub-probe --scan).
     const std::string on = R"({
  "msgId": "probe-46",
@@ -3073,7 +3094,27 @@ static void TestAzothConnection() {
     CHECK(SelectConnection(false, true, PowerReply(Link::Wireless, power, 64), false) == Connection::ReceiverOnly);
 }
 
+static void TestPowerSuspend() {
+    luma::PowerSuspend power;
+    CHECK(!power.Requested() && power.Wait(0));
+    power.Acknowledge();  // a late worker cannot acknowledge the next sleep
+    power.Request(true);
+    CHECK(power.Requested() && !power.Acknowledged() && !power.Wait(0));
+    std::thread worker([&] { power.Acknowledge(); });
+    CHECK(power.Wait(1000));
+    worker.join();
+    power.Request(true);  // duplicate sleep notifications don't ask for another dark frame
+    CHECK(power.Acknowledged() && power.Wait(0));
+    power.Request(false);
+    CHECK(!power.Requested() && !power.Acknowledged() && power.Wait(0));
+    power.Request(true);  // every sleep cycle requires a fresh dark frame
+    CHECK(!power.Acknowledged() && !power.Wait(0));
+    power.Request(false);  // a resume also releases a waiter after a missed dark frame
+    CHECK(power.Wait(0));
+}
+
 int main() {
+    TestPowerSuspend();
     TestSceneDepth();
     TestDeskModels();
     TestDisplaySizes();

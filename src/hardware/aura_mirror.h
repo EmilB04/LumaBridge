@@ -22,6 +22,7 @@
 #include "config.h"
 #include "effects.h"
 #include "lighting_state.h"
+#include "power_suspend.h"
 
 namespace luma {
 
@@ -69,6 +70,10 @@ public:
     // seconds (aurausb::DirectModeReclaim).
     void Reclaim();
 
+    // Send black once, then leave the hardware alone until resume. No vendor hand-back.
+    void SetSystemSuspended(bool suspended) { powerSuspend_.Request(suspended); Wake(); }
+    bool WaitForSuspend(unsigned ms) { return !IsRunning() || powerSuspend_.Wait(ms); }
+
     Status GetStatus() const;
 
 private:
@@ -86,6 +91,7 @@ private:
     HANDLE wake_ = nullptr;
     HMODULE module_ = nullptr;
     std::atomic<bool> stop_{false};
+    PowerSuspend powerSuspend_;
 
     std::mutex mutex_;
     LightingState state_;  // guarded by mutex_

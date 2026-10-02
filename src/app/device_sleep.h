@@ -13,6 +13,13 @@ namespace luma::app::sleep {
 constexpr uint64_t kFadeMs = 2500;   // the fade out
 constexpr uint64_t kQuietMs = 1500;  // after the fade: time for the last (dark) frame to go out
 
+// Game SDKs often send changing colors as Static frames. The exemption follows the active
+// game lighting feed, rather than the effect kind (which also includes desktop animations).
+inline uint64_t Timeout(bool enabled, int seconds, bool keepAwakeForGame, bool gameLighting) {
+    if (!enabled || (keepAwakeForGame && gameLighting)) return 0;
+    return static_cast<uint64_t>(seconds < 10 ? 10 : seconds) * 1000;
+}
+
 // Brightness factor 0..1 at `now` for a device last used at `lastInput`: 1 until `timeoutMs`,
 // then fading to 0 over kFadeMs. `timeoutMs` 0: never sleeps.
 inline double Level(uint64_t now, uint64_t lastInput, uint64_t timeoutMs) {
@@ -27,6 +34,20 @@ inline double Level(uint64_t now, uint64_t lastInput, uint64_t timeoutMs) {
 inline bool Asleep(uint64_t now, uint64_t lastInput, uint64_t timeoutMs) {
     return timeoutMs && now > lastInput && now - lastInput >= timeoutMs + kFadeMs + kQuietMs;
 }
+
+// A worker can miss the fade entirely during a slow USB call. Always send a dark frame
+// once before becoming quiet, and don't retry discovery until the device is used again.
+class OutputSleep {
+public:
+    enum class Action { Awake, Dark, Quiet };
+    Action Update(bool quiet) {
+        const bool entered = quiet && !quiet_;
+        quiet_ = quiet;
+        return entered ? Action::Dark : quiet ? Action::Quiet : Action::Awake;
+    }
+private:
+    bool quiet_ = false;
+};
 
 // G HUB's answer to GET /lighting/turn_off_for_inactivity, e.g.
 //   {..."path": "/lighting/turn_off_for_inactivity", ... "payload": {..., "enabled": true}}

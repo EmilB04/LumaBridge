@@ -11,7 +11,9 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <future>
+#include <memory>
 #include <map>
 #include <optional>
 #include <string>
@@ -85,6 +87,8 @@ public:
     // G HUB's "turn off lighting on inactivity" (nullopt: G HUB didn't answer).
     std::optional<bool> ghubSleep() const { return presence_.ghubSleep; }
     void Tick();  // call every ~50 ms
+    void OnSystemSuspend();
+    void OnSystemResume();
 
     // Settings: mutate, then call Changed() so they are applied and (debounced) saved.
     Prefs& prefs() { return prefs_; }
@@ -201,6 +205,7 @@ public:
     // WM_POWERBROADCAST): look for the Azoth again, and take the motherboard's lights back if
     // Armoury Crate re-applies its lighting.
     void OnHardwareChanged() {
+        if (systemSuspended_) return;
         azoth_.Rescan();
         // Not needed while Armoury Crate's lighting service is paused (it can't interfere then).
         if (mirror_.IsRunning() && hardware_.asusLighting() != helper::AsusLighting::Paused) mirror_.Reclaim();
@@ -274,6 +279,8 @@ private:
     bool armouryOpen_ = false;     // its window is open: its lighting service runs
     bool shutDown_ = false;
     Output output_;
+    bool systemSuspended_ = false;
+    int suspendedTicks_ = 0;  // Tick() calls while suspended: the app runs, so the PC is awake
     bool outputApplied_ = false;
     bool dirty_ = false;
     uint64_t dirtySince_ = 0;
@@ -298,6 +305,7 @@ private:
     bool feedActive_[18] = {};
     std::future<std::vector<InstalledGame>> libraryJob_;
     Presence presence_;
+    std::shared_ptr<std::atomic<bool>> logitechProbePaused_ = std::make_shared<std::atomic<bool>>(false);
     std::string presenceLogged_;  // what the log last said about NZXT devices
     nzxt::Kraken kraken_;
     uint64_t logitechInputAt_ = 0, azothInputAt_ = 0;  // last used (GetTickCount64)
@@ -305,8 +313,8 @@ private:
     bool logitechAsleep_ = false, azothAsleep_ = false;
     // The mouse's and the keyboard's sleep timeouts right now (0: they don't sleep).
     // `dynamicActive`: an effect other than a plain static color is currently showing on it.
-    uint64_t LogitechSleepMs(bool dynamicActive) const;
-    uint64_t AzothSleepMs(bool dynamicActive) const;
+    uint64_t LogitechSleepMs(bool gameLighting) const;
+    uint64_t AzothSleepMs(bool gameLighting) const;
     std::future<Presence> presenceJob_;
     uint64_t presenceAt_ = 0;  // when the last presence scan started
     bool libraryRescanPending_ = false;  // the list changed while a scan was running

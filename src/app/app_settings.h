@@ -89,7 +89,7 @@ struct Prefs {
     // also follows G HUB's "turn off lighting on inactivity" when G HUB answers.
     bool logitechSleep = true;
     int logitechSleepSec = 60;
-    bool logitechSleepIgnoreDynamic = false;  // refuse to sleep while a dynamic effect is showing
+    bool logitechSleepIgnoreDynamic = false;  // stay awake while an active game sends lighting
     bool azothSleep = true;
     int azothSleepSec = 300;
     // Default on: a game played with a controller never touches the keyboard, so the default

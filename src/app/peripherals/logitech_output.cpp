@@ -11,6 +11,7 @@ extern "C" {
 #include <vector>
 
 #include "log.h"
+#include "device_sleep.h"
 #include "logitech_hidpp.h"
 #include "real_logiled.h"
 
@@ -62,6 +63,7 @@ std::vector<std::wstring> HidppInterfaces() {
 // receiver or its cable, next to G HUB (which keeps its own connection).
 class HidppMouse {
 public:
+    explicit HidppMouse(std::function<bool()> cancelled = {}) : cancelled_(std::move(cancelled)) {}
     ~HidppMouse() { Close(); }
     bool open() const { return h_ != INVALID_HANDLE_VALUE; }
     const hidpp::Layout& layout() const { return layout_; }
@@ -192,6 +194,7 @@ private:
     }
 
     bool Send(const hidpp::Report& req, hidpp::Report* reply, DWORD timeoutMs = 1000) {
+        if (cancelled_ && cancelled_()) return false;
         OVERLAPPED ov{};
         ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         DWORD n = 0;
@@ -227,16 +230,19 @@ private:
     HANDLE h_ = INVALID_HANDLE_VALUE;
     uint8_t device_ = 0, feature_ = 0;
     hidpp::Layout layout_;
+    std::function<bool()> cancelled_;
     std::string name_;
 };
 
 }  // namespace
 
-std::vector<LogitechDevice> ScanLogitechDevices() {
+std::vector<LogitechDevice> ScanLogitechDevices(const std::function<bool()>& cancelled) {
     std::vector<LogitechDevice> out;
-    HidppMouse link;
-    for (const std::wstring& path : HidppInterfaces())
+    HidppMouse link(cancelled);
+    for (const std::wstring& path : HidppInterfaces()) {
+        if (cancelled && cancelled()) break;
         if (link.OpenPath(path)) link.List(&out);
+    }
     // The same device by cable and through its receiver: once.
     std::vector<LogitechDevice> unique;
     for (const LogitechDevice& d : out) {
@@ -268,13 +274,14 @@ void LogitechOutput::Stop() {
     state_ = State::Off;
 }
 
-void LogitechOutput::Set(const fx::Params& effect, double brightness, bool own, bool inStep) {
+void LogitechOutput::Set(const fx::Params& effect, double brightness, bool own, bool inStep, bool asleep) {
     inStep_ = inStep;
     std::lock_guard<std::mutex> lock(mutex_);
     brightness_ = brightness < 0 ? 0 : brightness > 1 ? 1 : brightness;
     const bool changed = effect.kind != effect_.kind || effect.speed != effect_.speed;
     effect_ = effect;
     own_ = own;
+    asleep_ = asleep;
     if (changed) effectSince_ = GetTickCount64();
 }
 
@@ -309,22 +316,60 @@ void LogitechOutput::Run() {
     std::vector<Rgb> lastFrame;
     uint64_t lastFrameSent = 0;
     bool wasAsleep = false;
+    sleep::OutputSleep idleSleep;
     uint64_t wokeAt = 0;
+    auto sendDark = [&] {
+        // Black per-LED frames don't stop every onboard effect. Use a fixed black effect
+        // when supported, and darken the SDK too so G HUB doesn't retain an old color.
+        if (inited && !real::LogiLedSetLighting(0, 0, 0))
+            LUMA_WARN("Logitech: couldn't send the SDK dark frame before sleep");
+        if (mouse.open()) {
+            bool dark = false;
+            if (mouse.layout().Has(hidpp::Kind::Fixed)) {
+                hidpp::Effect fixed;
+                fixed.kind = hidpp::Kind::Fixed;
+                dark = mouse.Set(fixed);
+            } else if (mouse.layout().perKey() && (perKeyOn || mouse.StartPerKey())) {
+                const std::vector<Rgb> black(mouse.layout().strip.size());
+                dark = mouse.Frame(black.data());
+            }
+            if (!dark) LUMA_WARN("Logitech: couldn't stop the mouse effect before sleep");
+        }
+        // Keep the SDK session: Shutdown would let G HUB put its profile back.
+        mouse.Close();
+        nextMouseFind = 0;
+        onMouse.reset();
+        perKeyOn = false;
+        lastFrame.clear();
+        last[0] = last[1] = last[2] = -1;
+        mouseEffect_ = false;
+        wasAsleep = true;
+    };
     while (!stop_) {
         Sleep(kFrameMs);
         fx::Params effect;
         double level;
         bool own;
+        bool asleep;
         uint64_t since;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             effect = effect_;
             level = brightness_;
             own = own_;
+            asleep = asleep_;
             since = effectSince_;
         }
         const uint64_t now = GetTickCount64();
+        if (powerSuspend_.Requested()) {
+            if (!powerSuspend_.Acknowledged()) {
+                if (own) sendDark();
+                powerSuspend_.Acknowledge();
+            }
+            continue;
+        }
         if (!own) {
+            idleSleep.Update(false);
             if (inited) {
                 real::LogiLedShutdown();  // G HUB takes its profile back (its lighting replaces the mouse's effect)
                 inited = false;
@@ -339,12 +384,16 @@ void LogitechOutput::Run() {
             state_ = State::Released;
             continue;
         }
-        // Asleep: nothing goes out, so the mouse can sleep (the dark frame went out before).
-        if (asleep_ && (inited || mouse.open())) {
-            if (!wasAsleep) LUMA_INFO("Logitech devices: not used for a while - asleep, nothing sent until they're used");
-            wasAsleep = true;
-            mouseEffect_ = false;
-            state_ = State::Active;
+        // Become quiet as soon as the fade reaches black. Even without a connection,
+        // stop SDK initialization and HID++ discovery: probing can wake a sleeping mouse.
+        const auto sleepAction = idleSleep.Update(asleep || level <= 0);
+        if (sleepAction != sleep::OutputSleep::Action::Awake) {
+            if (sleepAction == sleep::OutputSleep::Action::Dark) {
+                const bool connected = inited || mouse.open();
+                sendDark();
+                if (connected) state_ = State::Active;
+                LUMA_INFO("Logitech devices: lighting off - no SDK or HID++ traffic until used again");
+            }
             continue;
         }
         if (wasAsleep) {

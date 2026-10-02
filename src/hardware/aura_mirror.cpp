@@ -307,6 +307,21 @@ void AuraMirror::Run() {
     };
 
     while (!stop_) {
+        if (powerSuspend_.Requested()) {
+            if (!powerSuspend_.Acknowledged()) {
+                if (backend->IsConnected() && !backend->SetAll(0))
+                    LUMA_WARN("Aura: couldn't send the dark frame before system sleep");
+                // Keep the dark frame, and reopen USB/COM after resume. Releasing control
+                // here could let Armoury Crate replace it with an animated effect.
+                backend->Disconnect(false);
+                havePushed = false;
+                nextConnectAt = 0;
+                publish();
+                powerSuspend_.Acknowledge();
+            }
+            PumpingWait(wake_, kIdleWaitMs);
+            continue;
+        }
         const uint64_t now = GetTickCount64();
 
         Rgb color;
