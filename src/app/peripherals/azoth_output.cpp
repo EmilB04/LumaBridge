@@ -248,6 +248,7 @@ void AzothOutput::Run() {
     azoth::MusicSource music;
     uint64_t musicRevision = UINT64_MAX, nextMusic = 0;
     std::wstring lastSongTitle, lastSongArtist;
+    int64_t lastSongSecond = -1, lastSongLength = -1;
     bool songSent = false;
     bool musicNeedsSetup = true;
     HANDLE dev = INVALID_HANDLE_VALUE;
@@ -640,7 +641,9 @@ void AzothOutput::Run() {
         if (liveMusic && appliedRevision == revision && (musicRevision != revision || now >= nextMusic)) {
             const bool spectrum = oled.content == azoth::OledContent::Equalizer;
             const bool setup = musicRevision != revision || musicNeedsSetup;
-            const bool trackChanged = !songSent || media.title != lastSongTitle || media.artist != lastSongArtist;
+            // The progress bar and clock change once a second while a song plays.
+            const bool trackChanged = !songSent || media.title != lastSongTitle || media.artist != lastSongArtist ||
+                                      media.positionMs / 1000 != lastSongSecond || media.durationMs / 1000 != lastSongLength;
             azoth::Report reply{}, failedCommand{};
             DWORD replySize = 0, error = ERROR_SUCCESS;
             bool superseded = false;
@@ -675,6 +678,7 @@ void AzothOutput::Run() {
                     ok = exchange(azoth::OledSongPart(data, i));
                 if (ok) {
                     lastSongTitle = media.title; lastSongArtist = media.artist; songSent = true;
+                    lastSongSecond = media.positionMs / 1000; lastSongLength = media.durationMs / 1000;
                 }
             }
             if (superseded) { musicRevision = UINT64_MAX; continue; }

@@ -33,10 +33,20 @@ struct PlaybackInfo : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_Controls(IInspectable**) = 0;
     virtual HRESULT STDMETHODCALLTYPE get_PlaybackStatus(int*) = 0;
 };
+// TimeSpan and DateTime are single 64-bit counts of 100 ns; DateTime counts from 1601
+// in UTC, like FILETIME.
+struct TimelineProperties : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_StartTime(int64_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_EndTime(int64_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_MinSeekTime(int64_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_MaxSeekTime(int64_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Position(int64_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_LastUpdatedTime(int64_t*) = 0;
+};
 struct MediaSession : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_SourceAppUserModelId(HSTRING*) = 0;
     virtual HRESULT STDMETHODCALLTYPE TryGetMediaPropertiesAsync(MediaAsync<MediaProperties>**) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetTimelineProperties(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetTimelineProperties(TimelineProperties**) = 0;
     virtual HRESULT STDMETHODCALLTYPE GetPlaybackInfo(PlaybackInfo**) = 0;
 };
 struct MediaManager : IInspectable {
@@ -89,6 +99,11 @@ std::wstring TakeString(HSTRING value) {
     WindowsDeleteString(value);
     return result;
 }
+int64_t UtcNow() {
+    FILETIME now{};
+    GetSystemTimePreciseAsFileTime(&now);
+    return static_cast<int64_t>((uint64_t(now.dwHighDateTime) << 32) | now.dwLowDateTime);
+}
 }
 
 struct MusicSource::Impl {
@@ -104,6 +119,9 @@ struct MusicSource::Impl {
     std::array<float, kSpectrumSamples> ring{};
     size_t cursor = 0;
     uint64_t nextEndpoint = 0, lastSamples = 0;
+    SpectrumScale scale;
+    int64_t reportedMs = 0, reportedAt = 0;
+    bool playing = false;
     ComPtr<MediaManager> manager;
     ComPtr<MediaAsync<MediaManager>> managerOp;
     ComPtr<MediaAsync<MediaProperties>> propertiesOp;
@@ -112,7 +130,7 @@ struct MusicSource::Impl {
     ~Impl() { Reset(); if (SUCCEEDED(initialized)) RoUninitialize(); }
     void CloseAudio() {
         if (audio) audio->Stop();
-        capture.Reset(); audio.Reset(); endpoint.clear(); ring.fill(0); cursor = 0; lastSamples = 0;
+        capture.Reset(); audio.Reset(); endpoint.clear(); ring.fill(0); cursor = 0; lastSamples = 0; scale = {};
     }
     void Reset() {
         CloseAudio(); enumerator.Reset();
@@ -192,7 +210,7 @@ struct MusicSource::Impl {
         if (lastSamples && now - lastSamples < 200) {
             std::array<float, kSpectrumSamples> samples{};
             for (size_t i = 0; i < samples.size(); ++i) samples[i] = ring[(cursor + i) % ring.size()];
-            target = AudioSpectrum(samples, rate);
+            target = scale.Apply(AudioBands(samples, rate), now);
         }
         for (size_t i = 0; i < target.size(); ++i)
             snapshot.levels[i] = target[i] >= snapshot.levels[i] ? target[i] :
@@ -208,6 +226,7 @@ struct MusicSource::Impl {
             ComPtr<MediaProperties> properties;
             if (!Finish(propertiesOp, properties, hr, deadline)) return;
             snapshot.title.clear(); snapshot.artist.clear();
+            snapshot.durationMs = 0; playing = false;
             if (SUCCEEDED(hr) && properties) {
                 HSTRING value = nullptr;
                 hr = properties->get_Title(&value); snapshot.title = TakeString(value); value = nullptr;
@@ -218,6 +237,18 @@ struct MusicSource::Impl {
                 int status = 0;
                 if (SUCCEEDED(session->GetPlaybackInfo(&playback)) && playback && SUCCEEDED(playback->get_PlaybackStatus(&status))) {
                     if (status == 4) snapshot.status = "Playing"; else if (status == 5) snapshot.status = "Paused";
+                    playing = status == 4;
+                }
+                ComPtr<TimelineProperties> timeline;
+                int64_t start = 0, end = 0, position = 0, updated = 0;
+                if (SUCCEEDED(session->GetTimelineProperties(&timeline)) && timeline &&
+                    SUCCEEDED(timeline->get_StartTime(&start)) && SUCCEEDED(timeline->get_EndTime(&end)) &&
+                    SUCCEEDED(timeline->get_Position(&position)) && SUCCEEDED(timeline->get_LastUpdatedTime(&updated)) &&
+                    end > start) {
+                    snapshot.durationMs = (end - start) / 10000;
+                    reportedMs = (position - start) / 10000;
+                    // Players that leave the report time empty are counted from now.
+                    reportedAt = updated > 0 ? updated : UtcNow();
                 }
             }
             if (FAILED(hr)) snapshot.status = Failure("Can't read song information", hr);
@@ -253,7 +284,10 @@ MusicSnapshot MusicSource::Poll(OledContent content) {
     if (content != p.mode) { p.Reset(); p.mode = content; }
     if (FAILED(p.initialized)) { p.snapshot.status = Failure("Windows media APIs unavailable", p.initialized); return p.snapshot; }
     if (content == OledContent::Equalizer) p.Audio(GetTickCount64());
-    else if (content == OledContent::SongInfo) p.Song(GetTickCount64());
+    else if (content == OledContent::SongInfo) {
+        p.Song(GetTickCount64());
+        p.snapshot.positionMs = SongPosition(p.reportedMs, p.snapshot.durationMs, (UtcNow() - p.reportedAt) / 10000, p.playing);
+    }
     return p.snapshot;
 }
 
@@ -271,20 +305,47 @@ std::vector<uint8_t> RenderSong(const MusicSnapshot& song) {
     if (!bitmap || !bits) { if (bitmap) DeleteObject(bitmap); DeleteDC(dc); return {}; }
     auto oldBitmap = SelectObject(dc, bitmap);
     std::memset(bits, 0, width * height * 4);
-    SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(255,255,255));
-    auto line = [&](const std::wstring& text, int y, int size, int weight) {
-        HFONT font = CreateFontW(-size, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-                                DEFAULT_PITCH, L"Segoe UI");
-        if (!font) return;
-        auto oldFont = SelectObject(dc, font);
-        RECT rect{5, y, width - 5, y + size + 7};
-        DrawTextW(dc, text.c_str(), static_cast<int>(text.size()), &rect,
-                  DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX | DT_VCENTER);
-        SelectObject(dc, oldFont); DeleteObject(font);
+    SetBkMode(dc, TRANSPARENT);
+    auto font = [&](int size, int weight) {
+        return CreateFontW(-size, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                           CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
     };
-    line(song.title.empty() ? L"No song playing" : song.title, 5, 18, FW_SEMIBOLD);
-    line(song.artist.empty() ? L"LumaBridge" : song.artist, 34, 14, FW_NORMAL);
+    // Returns the drawn text's width.
+    auto text = [&](const std::wstring& value, RECT rect, int size, int weight, UINT align, uint8_t shade) {
+        HFONT f = font(size, weight);
+        if (!f) return 0;
+        auto oldFont = SelectObject(dc, f);
+        SetTextColor(dc, RGB(shade, shade, shade));
+        DrawTextW(dc, value.c_str(), static_cast<int>(value.size()), &rect,
+                  align | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX | DT_VCENTER);
+        SIZE extent{};
+        GetTextExtentPoint32W(dc, value.c_str(), static_cast<int>(value.size()), &extent);
+        SelectObject(dc, oldFont); DeleteObject(f);
+        return static_cast<int>(extent.cx);
+    };
+    const std::wstring title = song.title.empty() ? L"No song playing" : song.title;
+    const std::wstring artist = song.artist.empty() ? L"LumaBridge" : song.artist;
+    if (song.durationMs > 0) {
+        // Title, artist, then "0:37 ━━━━──── 4:03" along the bottom.
+        text(title, {4, 0, width - 4, 24}, 17, FW_SEMIBOLD, DT_CENTER, 255);
+        text(artist, {4, 22, width - 4, 40}, 13, FW_NORMAL, DT_CENTER, 200);
+        const RECT row{3, 45, width - 3, 62};
+        const int left = text(SongClock(song.positionMs), row, 11, FW_NORMAL, DT_LEFT, 190);
+        const int right = text(SongClock(song.durationMs), row, 11, FW_NORMAL, DT_RIGHT, 190);
+        const int x0 = row.left + left + 6, x1 = row.right - right - 6;
+        if (x1 > x0) {
+            const int fill = SongBarFill(song.positionMs, song.durationMs, x1 - x0);
+            HBRUSH track = CreateSolidBrush(RGB(64, 64, 64)), done = CreateSolidBrush(RGB(255, 255, 255));
+            const RECT all{x0, 52, x1, 55}, played{x0, 52, x0 + fill, 55};
+            if (track) FillRect(dc, &all, track);
+            if (done && fill > 0) FillRect(dc, &played, done);
+            if (track) DeleteObject(track);
+            if (done) DeleteObject(done);
+        }
+    } else {
+        text(title, {4, 5, width - 4, 30}, 18, FW_SEMIBOLD, DT_CENTER, 255);
+        text(artist, {4, 34, width - 4, 55}, 14, FW_NORMAL, DT_CENTER, 255);
+    }
     GdiFlush();
     const auto* pixels = static_cast<const uint8_t*>(bits);
     for (size_t i = 0; i < gray.size(); ++i) gray[i] = std::max({pixels[i*4],pixels[i*4+1],pixels[i*4+2]});

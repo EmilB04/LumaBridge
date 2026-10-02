@@ -76,8 +76,10 @@ ASUS built-in animations and a local clock are also available as experimental co
 Direct GIF uploads have been confirmed on the owner's original Azoth by cable.
 
 The **Show** menu also offers **Audio EQ** and **Song info**. EQ uses the default Windows
-playback device and displays a live 32-band spectrum. Song info reads the current Windows
-media session and displays its title and artist, shortening long lines to fit. Both modes
+playback device and displays a live 32-band spectrum that scales itself to the music, so
+quiet songs and low Windows volume still fill the screen. Song info reads the current
+Windows media session and displays its title, artist and a progress bar with the elapsed
+and total time (when the player shares them), shortening long lines to fit. Both modes
 require USB and LumaBridge running, pause during keyboard sleep, and use separate music
 commands without uploading to the custom GIF slot. No ASUS software is required. Players
 must share their song information with Windows; exclusive audio streams may not appear in

@@ -5559,9 +5559,12 @@ void OledMockup(const azoth::OledSettings& s, const Fonts& f, float width, const
             screen.Rect(static_cast<float>(i * 8 + 1), 64.f - music.levels[i], 6, music.levels[i]);
     } else if (s.content == azoth::OledContent::SongInfo) {
         static std::wstring title, artist;
+        static int64_t second = -1, length = -1;
         static std::vector<uint8_t> pixels;
-        if (pixels.empty() || title != music.title || artist != music.artist) {
+        if (pixels.empty() || title != music.title || artist != music.artist ||
+            second != music.positionMs / 1000 || length != music.durationMs / 1000) {
             title = music.title; artist = music.artist;
+            second = music.positionMs / 1000; length = music.durationMs / 1000;
             pixels = azoth::RenderSong(music);
         }
         if (pixels.size() == 208 * 64)
@@ -6053,7 +6056,7 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
             ImGui::PushFont(f.caption);
             Muted(settings.content == azoth::OledContent::Equalizer
                       ? "Live spectrum of this PC's default playback device. Play music or other audio to light the bars."
-                      : "Shows the current song title and artist shared with Windows by players such as Spotify or your browser. Long lines are shortened to fit.");
+                      : "Shows the current song title, artist and progress shared with Windows by players such as Spotify or your browser. Long lines are shortened to fit.");
             Muted("Connect the Azoth by USB and keep LumaBridge running. These music modes pause when the keyboard sleeps. Turn off Armoury Crate's live OLED modes to avoid conflicts.");
             const auto music = ctl.azoth().musicSnapshot();
             if (!music.status.empty()) Muted("%s", music.status.c_str());

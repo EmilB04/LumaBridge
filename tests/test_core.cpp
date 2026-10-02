@@ -3106,6 +3106,36 @@ static void TestAzothOledMusic() {
     samples.fill(std::numeric_limits<float>::quiet_NaN());
     CHECK(AudioSpectrum(samples, 48000) == dark);
 
+    // The self-scaling EQ fills the screen for quiet music and falls back slowly.
+    for (size_t i = 0; i < samples.size(); ++i)
+        samples[i] = static_cast<float>(.01 * std::sin(6.283185307179586 * 1000 * i / 48000));
+    SpectrumScale scale;
+    const auto lifted = scale.Apply(AudioBands(samples, 48000), 1000);
+    CHECK(lifted[loudest] >= 60 && lifted[loudest] > AudioSpectrum(samples, 48000)[loudest]);
+    CHECK(lifted[0] < 5);
+    for (auto& value : samples) value *= 50;
+    CHECK(scale.Apply(AudioBands(samples, 48000), 1100)[loudest] == 64);
+    const float loud = scale.reference();
+    for (auto& value : samples) value /= 50;
+    const auto after = scale.Apply(AudioBands(samples, 48000), 1600);
+    CHECK(std::abs(scale.reference() - (loud - 2)) < .01f && after[loudest] < 20);
+    for (uint64_t t = 2000; t < 20000; t += 1000) scale.Apply(AudioBands(samples, 48000), t);
+    CHECK(scale.Apply(AudioBands(samples, 48000), 20000)[loudest] >= 60);
+    samples.fill(0);
+    CHECK(scale.Apply(AudioBands(samples, 48000), 62000) == dark);
+    SpectrumScale fresh;
+    for (size_t i = 0; i < samples.size(); ++i) samples[i] = static_cast<float>(1e-5 * std::sin(i * .3));
+    CHECK(fresh.Apply(AudioBands(samples, 48000), 1000) == dark); // Near-silence stays dark.
+
+    CHECK(SongPosition(37000, 243000, 5000, true) == 42000);
+    CHECK(SongPosition(37000, 243000, 5000, false) == 37000);
+    CHECK(SongPosition(240000, 243000, 9000, true) == 243000);
+    CHECK(SongPosition(-50, 243000, -10, true) == 0 && SongPosition(5000, 0, 0, true) == 0);
+    CHECK(SongClock(37999) == L"0:37" && SongClock(243000) == L"4:03" && SongClock(-1) == L"0:00");
+    CHECK(SongClock(3725000) == L"1:02:05");
+    CHECK(SongBarFill(37000, 243000, 100) == 15 && SongBarFill(243000, 243000, 100) == 100);
+    CHECK(SongBarFill(500000, 243000, 100) == 100 && SongBarFill(10, 0, 100) == 0);
+
     const auto mode = OledMusicMode(true);
     CHECK(mode[0] == 0 && mode[1] == 0x67 && mode[2] == 0 && mode[5] == 1 && mode[6] == 1);
     CHECK(mode[7] == 0 && mode[8] == 0 && mode[9] == 208 && mode[10] == 0 && mode[11] == 64 && mode[12] == 0);

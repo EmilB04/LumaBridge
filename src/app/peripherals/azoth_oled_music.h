@@ -4,6 +4,8 @@
 #include <cmath>
 #include <complex>
 #include <cstring>
+#include <cwchar>
+#include <string>
 
 namespace luma::app::azoth {
 
@@ -29,10 +31,14 @@ inline float PlaybackSample(const uint8_t* data, unsigned bytes, bool floating) 
 }
 
 // Logarithmic frequency bands from desktop playback, with a Hann window to reduce
-// leakage. Silence stays dark; -60 dB to 0 dB maps to the screen's 64-pixel height.
-inline Spectrum AudioSpectrum(const std::array<float, kSpectrumSamples>& samples, unsigned rate) {
-    Spectrum levels{};
-    if (rate < 8000 || rate > 384000) return levels;
+// leakage. Each band holds its loudest bin in dB (0 dB is a full-scale sine); bands
+// without sound stay at kSpectrumSilence.
+constexpr float kSpectrumSilence = -120;
+using SpectrumDb = std::array<float, kSpectrumBands>;
+inline SpectrumDb AudioBands(const std::array<float, kSpectrumSamples>& samples, unsigned rate) {
+    SpectrumDb bands;
+    bands.fill(kSpectrumSilence);
+    if (rate < 8000 || rate > 384000) return bands;
     constexpr double tau = 6.283185307179586;
     std::array<std::complex<double>, kSpectrumSamples> fft{};
     for (size_t i = 0; i < samples.size(); ++i) {
@@ -56,17 +62,55 @@ inline Spectrum AudioSpectrum(const std::array<float, kSpectrumSamples>& samples
         }
     }
     const double high = std::min(16000.0, rate / 2.0);
-    for (size_t band = 0; band < levels.size(); ++band) {
-        const double lowHz = 40 * std::pow(high / 40, band / double(levels.size()));
-        const double highHz = 40 * std::pow(high / 40, (band + 1) / double(levels.size()));
+    for (size_t band = 0; band < bands.size(); ++band) {
+        const double lowHz = 40 * std::pow(high / 40, band / double(bands.size()));
+        const double highHz = 40 * std::pow(high / 40, (band + 1) / double(bands.size()));
         const size_t first = std::max<size_t>(1, static_cast<size_t>(std::ceil(lowHz * fft.size() / rate)));
         const size_t last = std::min(fft.size() / 2, std::max(first + 1, static_cast<size_t>(std::ceil(highHz * fft.size() / rate))));
         double peak = 0;
         for (size_t bin = first; bin < last; ++bin) peak = std::max(peak, std::abs(fft[bin]) * 4 / fft.size());
-        if (peak > .001) levels[band] = static_cast<uint8_t>(std::clamp((20 * std::log10(peak) + 60) / 60 * 64, 0.0, 64.0));
+        if (peak > 1e-6) bands[band] = static_cast<float>(std::max<double>(kSpectrumSilence, 20 * std::log10(peak)));
     }
+    return bands;
+}
+
+// Fixed scale: -60 dB to 0 dB maps to the screen's 64-pixel height.
+inline Spectrum AudioSpectrum(const std::array<float, kSpectrumSamples>& samples, unsigned rate) {
+    Spectrum levels{};
+    const auto bands = AudioBands(samples, rate);
+    for (size_t i = 0; i < levels.size(); ++i)
+        if (bands[i] > -60) levels[i] = static_cast<uint8_t>(std::clamp((bands[i] + 60) / 60 * 64, 0.f, 64.f));
     return levels;
 }
+
+// Loopback audio follows the Windows volume, and music rarely gets near full scale,
+// so a fixed scale left short bars. This scale follows the loudest recent band: it
+// rises at once and falls slowly, so quiet songs fill the screen too. High bands get
+// a small lift because music has less energy there. Near-silence stays dark.
+class SpectrumScale {
+public:
+    static constexpr float kRange = 30, kTilt = 9, kFallPerSecond = 4, kQuietest = -50, kGate = -75;
+    Spectrum Apply(const SpectrumDb& bands, uint64_t nowMs) {
+        SpectrumDb lifted;
+        float loudest = kSpectrumSilence;
+        for (size_t i = 0; i < bands.size(); ++i) {
+            lifted[i] = bands[i] + kTilt * i / (bands.size() - 1);
+            if (bands[i] > kGate) loudest = std::max(loudest, lifted[i]);
+        }
+        const float elapsed = last_ ? std::min(5.f, (nowMs - last_) / 1000.f) : 0;
+        last_ = nowMs;
+        reference_ = std::max({loudest, kQuietest, reference_ - kFallPerSecond * elapsed});
+        Spectrum levels{};
+        for (size_t i = 0; i < bands.size(); ++i)
+            if (bands[i] > kGate)
+                levels[i] = static_cast<uint8_t>(std::clamp((lifted[i] - reference_ + kRange) / kRange * 64, 0.f, 64.f));
+        return levels;
+    }
+    float reference() const { return reference_; }
+private:
+    float reference_ = kQuietest;
+    uint64_t last_ = 0;
+};
 
 // Original Azoth (M701), ASUS HAL SetMusicMode / SetMusicMode_MusicInfo /
 // SetMusicMode_Spectrum. Live music packets use RAM rather than the custom GIF slot.
@@ -104,9 +148,35 @@ inline Report OledSongPart(const std::vector<uint8_t>& data, size_t part) {
     return r;
 }
 
+// Players report their position only now and then (on play, pause or seek), so the
+// position in between is counted on from the last report while playing. Times are in
+// milliseconds; a duration of 0 means the player shares no timeline.
+inline int64_t SongPosition(int64_t reportedMs, int64_t durationMs, int64_t sinceReportMs, bool playing) {
+    if (durationMs <= 0) return 0;
+    const int64_t position = reportedMs + (playing ? std::max<int64_t>(0, sinceReportMs) : 0);
+    return std::clamp<int64_t>(position, 0, durationMs);
+}
+inline std::wstring SongClock(int64_t ms) {
+    const int64_t seconds = std::max<int64_t>(0, ms) / 1000;
+    wchar_t text[24];
+    if (seconds >= 3600)
+        std::swprintf(text, std::size(text), L"%lld:%02lld:%02lld", static_cast<long long>(seconds / 3600),
+                      static_cast<long long>(seconds / 60 % 60), static_cast<long long>(seconds % 60));
+    else
+        std::swprintf(text, std::size(text), L"%lld:%02lld", static_cast<long long>(seconds / 60),
+                      static_cast<long long>(seconds % 60));
+    return text;
+}
+// Filled width of a progress bar `width` pixels wide.
+inline int SongBarFill(int64_t positionMs, int64_t durationMs, int width) {
+    if (durationMs <= 0 || width <= 0) return 0;
+    return static_cast<int>(std::clamp<int64_t>(positionMs, 0, durationMs) * width / durationMs);
+}
+
 struct MusicSnapshot {
     Spectrum levels{};
     std::wstring title, artist;
+    int64_t positionMs = 0, durationMs = 0;
     std::string status;
 };
 
