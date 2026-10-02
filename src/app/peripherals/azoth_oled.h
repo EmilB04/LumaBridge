@@ -1,5 +1,6 @@
 // Original ROG Azoth OLED commands documented by G-Helper's Azoth implementation.
-// This is independent of RGB ownership. The default leaves the display with its current app.
+// This is independent of RGB ownership. LumaBridge runs the screen (on/off, brightness); "Keep
+// current" leaves what it shows alone, so Armoury Crate's uploads and modes stay.
 #pragma once
 
 #include "azoth_protocol.h"
@@ -7,19 +8,25 @@
 namespace luma::app::azoth {
 
 enum class OledContent { Keep, Animation, Clock };
+enum class OledAnimationSource { Asus, LumaBridge };
 
 struct OledSettings {
-    bool direct = false;
+    bool direct = true;  // always: the Armoury Crate / LumaBridge choice was removed
     bool enabled = true;
     int brightness = 50;
     OledContent content = OledContent::Keep;
     int animation = 0;
     bool clock12Hour = false;
+    OledAnimationSource animationSource = OledAnimationSource::Asus;
+    int lumaAnimation = 0;
 };
 
 inline OledSettings NormalizeOled(OledSettings s) {
     s.brightness = std::clamp(s.brightness, 0, 100);
     s.animation = std::clamp(s.animation, 0, 5);
+    s.lumaAnimation = std::clamp(s.lumaAnimation, 0, 5);
+    if (s.animationSource != OledAnimationSource::Asus && s.animationSource != OledAnimationSource::LumaBridge)
+        s.animationSource = OledAnimationSource::Asus;
     if (s.content != OledContent::Keep && s.content != OledContent::Animation && s.content != OledContent::Clock)
         s.content = OledContent::Keep;
     return s;
@@ -27,7 +34,8 @@ inline OledSettings NormalizeOled(OledSettings s) {
 
 inline bool operator==(const OledSettings& a, const OledSettings& b) {
     return a.direct == b.direct && a.enabled == b.enabled && a.brightness == b.brightness &&
-           a.content == b.content && a.animation == b.animation && a.clock12Hour == b.clock12Hour;
+           a.content == b.content && a.animation == b.animation && a.clock12Hour == b.clock12Hour &&
+           a.animationSource == b.animationSource && a.lumaAnimation == b.lumaAnimation;
 }
 inline bool operator!=(const OledSettings& a, const OledSettings& b) { return !(a == b); }
 
@@ -65,7 +73,8 @@ inline std::vector<Report> OledCommands(OledSettings settings, Link link, OledTi
     std::vector<Report> out{OledCommand(link, 0x69, s.enabled ? 1 : 0)};
     if (!s.enabled) return out;
     out.push_back(OledCommand(link, 0x68, static_cast<uint8_t>(s.brightness)));
-    if (s.content == OledContent::Animation)
+    // Custom GIFs use Armoury Crate's importer; never select a firmware preset in their place.
+    if (s.content == OledContent::Animation && s.animationSource == OledAnimationSource::Asus)
         out.push_back(OledCommand(link, 0x61, static_cast<uint8_t>(s.animation)));
     else if (s.content == OledContent::Clock)
         out.push_back(OledClock(link, time, s.clock12Hour));

@@ -197,7 +197,14 @@ public:
     void SetAzothEnabled(bool on);
     void SetAzothOled(azoth::OledSettings settings);
     void ReapplyAzothOled() { azoth_.ReapplyOled(); }
-    void RescanAzoth() { azoth_.Rescan(); }
+    // A USB device came or went, or the PC woke up (from the window's WM_DEVICECHANGE /
+    // WM_POWERBROADCAST): look for the Azoth again, and take the motherboard's lights back if
+    // Armoury Crate re-applies its lighting.
+    void OnHardwareChanged() {
+        azoth_.Rescan();
+        // Not needed while Armoury Crate's lighting service is paused (it can't interfere then).
+        if (mirror_.IsRunning() && hardware_.asusLighting() != helper::AsusLighting::Paused) mirror_.Reclaim();
+    }
 
     // Sony DualSense lightbar, by USB or Bluetooth (experimental).
     const DualSenseOutput& dualsense() const { return dualsense_; }
@@ -263,6 +270,8 @@ private:
     bool AuraNative() const;
     bool auraNativeApplied_ = false;  // Apply() handed the Aura devices back to Armoury Crate
     uint64_t handbackDoneAt_ = 0;  // GetTickCount64() when the current hand-back should be done
+    uint64_t armouryCheckAt_ = 0;  // when to look for Armoury Crate's window again
+    bool armouryOpen_ = false;     // its window is open: its lighting service runs
     bool shutDown_ = false;
     Output output_;
     bool outputApplied_ = false;
@@ -286,7 +295,7 @@ private:
     uint64_t sensorsPushedAt_ = 0;
     std::string logitechNote_;
     void UpdateLogitech();
-    bool feedActive_[14] = {};
+    bool feedActive_[18] = {};
     std::future<std::vector<InstalledGame>> libraryJob_;
     Presence presence_;
     std::string presenceLogged_;  // what the log last said about NZXT devices

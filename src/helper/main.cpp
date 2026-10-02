@@ -2,7 +2,9 @@
 //
 //   - RAM lighting: HyperX / Kingston FURY RGB DDR4 on the SMBus (hyperx_ram.h);
 //   - sensors: the Ryzen CPU temperature and the Nuvoton monitoring chip's fans and board
-//     temperatures (hw_sensors.h), instead of LibreHardwareMonitor.
+//     temperatures (hw_sensors.h), instead of LibreHardwareMonitor;
+//   - Armoury Crate's lighting service (ASUS LightingService): stopped while the app asks, and
+//     started again when it doesn't any more or exits (AsusLightingService below).
 //
 // It talks to the signed PawnIO driver directly (device I/O control; no PawnIO library),
 // loading one small signed PawnIO module per job from its own folder. It runs as a
@@ -501,6 +503,107 @@ private:
     char chip_[32] = "";
 };
 
+// ---- Armoury Crate's lighting service --------------------------------------------------------
+// ASUS LightingService re-applies Armoury Crate's lighting whenever a USB device comes or goes
+// (an ASUS keyboard unplugged), over LumaBridge's: the fans go dark or flicker and the RAM's
+// effect stalls for seconds. While the app asks, the service is kept stopped; it's started
+// again when the app lets go of the lights or exits. Only a service LumaBridge stopped is
+// started again, and a registry value remembers that, so a helper that was ended meanwhile
+// (an update) still starts it. Nothing else about the service is changed.
+class AsusLightingService {
+public:
+    // Looks every couple of seconds; `now` forces a look when 0.
+    void Update(bool pause, uint64_t now) {
+        if (now && now < nextCheck_) return;
+        nextCheck_ = now + 2000;
+        SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+        if (!scm) {
+            Set(helper::AsusLighting::Failed, "can't open the service manager (error %lu)", GetLastError());
+            return;
+        }
+        SC_HANDLE svc = OpenServiceW(scm, kName, SERVICE_QUERY_STATUS | SERVICE_STOP | SERVICE_START);
+        if (!svc) {
+            const DWORD err = GetLastError();
+            if (err == ERROR_SERVICE_DOES_NOT_EXIST) Set(helper::AsusLighting::NotInstalled, nullptr);
+            else Set(helper::AsusLighting::Failed, "can't open LightingService (error %lu)", err);
+            CloseServiceHandle(scm);
+            return;
+        }
+        SERVICE_STATUS_PROCESS st{};
+        DWORD need = 0;
+        QueryServiceStatusEx(svc, SC_STATUS_PROCESS_INFO, reinterpret_cast<LPBYTE>(&st), sizeof st, &need);
+        const bool stopped = st.dwCurrentState == SERVICE_STOPPED || st.dwCurrentState == SERVICE_STOP_PENDING;
+        if (pause) {
+            if (st.dwCurrentState == SERVICE_RUNNING) {
+                SERVICE_STATUS s{};
+                const bool again = state_ == helper::AsusLighting::Paused;
+                Mark(true);  // before stopping: whatever happens next, it's started again later
+                if (ControlService(svc, SERVICE_CONTROL_STOP, &s)) {
+                    if (again) Log("LightingService was started again by something else - paused again");
+                    Set(helper::AsusLighting::Paused, "Armoury Crate's lighting service paused while LumaBridge has the lights");
+                } else
+                    Set(helper::AsusLighting::Failed, "couldn't pause LightingService (error %lu)", GetLastError());
+            } else if (stopped) {
+                Set(helper::AsusLighting::Paused, nullptr);
+            }
+        } else if (Marked()) {
+            if (st.dwCurrentState == SERVICE_RUNNING) {
+                Mark(false);  // running already (it never stopped, or something else started it)
+                Set(helper::AsusLighting::Running, nullptr);
+            } else if (st.dwCurrentState == SERVICE_STOPPED) {
+                if (StartServiceW(svc, 0, nullptr) || GetLastError() == ERROR_SERVICE_ALREADY_RUNNING) {
+                    Mark(false);
+                    Set(helper::AsusLighting::Running, "Armoury Crate's lighting service started again");
+                } else {
+                    Set(helper::AsusLighting::Failed, "couldn't start LightingService again (error %lu)", GetLastError());
+                }
+            }  // else still stopping: started at a later look
+        } else {
+            Set(stopped ? helper::AsusLighting::Paused : helper::AsusLighting::Running, nullptr);
+        }
+        CloseServiceHandle(svc);
+        CloseServiceHandle(scm);
+    }
+
+    // The app is gone: start the service again if LumaBridge stopped it (waits for it to stop).
+    void Restore() {
+        for (int i = 0; i < 20 && Marked(); ++i) {
+            Update(false, 0);
+            if (Marked()) Sleep(250);
+        }
+    }
+
+    helper::AsusLighting state() const { return state_; }
+
+private:
+    static constexpr wchar_t kName[] = L"LightingService";
+    static constexpr wchar_t kKey[] = L"SOFTWARE\\LumaBridge";
+    static constexpr wchar_t kValue[] = L"LightingServicePausedByLumaBridge";
+
+    // Logs `what` (if any) when the state changes or the message is new.
+    void Set(helper::AsusLighting s, const char* what, unsigned long code = 0) {
+        if (what && (s != state_ || what != lastLog_)) Log(what, code);
+        if (what) lastLog_ = what;
+        state_ = s;
+    }
+    static bool Marked() {
+        DWORD v = 0, size = sizeof v;
+        return RegGetValueW(HKEY_LOCAL_MACHINE, kKey, kValue, RRF_RT_REG_DWORD, nullptr, &v, &size) == ERROR_SUCCESS && v;
+    }
+    static void Mark(bool on) {
+        if (on) {
+            const DWORD v = 1;
+            RegSetKeyValueW(HKEY_LOCAL_MACHINE, kKey, kValue, REG_DWORD, &v, sizeof v);
+        } else {
+            RegDeleteKeyValueW(HKEY_LOCAL_MACHINE, kKey, kValue);
+        }
+    }
+
+    uint64_t nextCheck_ = 0;
+    helper::AsusLighting state_ = helper::AsusLighting::Unknown;
+    const char* lastLog_ = nullptr;
+};
+
 // ---- Shared memory -------------------------------------------------------------------------
 
 // SYSTEM and administrators full access, signed-in users read/write, medium integrity so the
@@ -556,6 +659,7 @@ int wmain() {
     Log("app connected (pid %lu)", s->appPid);
 
     Sensors sensors;
+    AsusLightingService asus;
     Ram ram;
     if (!PawnIoPresent()) {
         Log("the PawnIO driver isn't installed");
@@ -584,6 +688,8 @@ int wmain() {
             Log("no word from the app for 10 s - exiting");
             break;
         }
+        asus.Update(s->pauseAsusLighting != 0, now);  // needs no PawnIO
+        s->asusLighting = asus.state();
         if (s->status != helper::Status::Running) continue;
 
         // Another tool (NZXT CAM, Armoury Crate) can hold the SMBus when we first look; try again.
@@ -613,6 +719,7 @@ int wmain() {
         }
     }
     ram.LetGo();  // LumaBridge is gone: hand the sticks back
+    asus.Restore();
     UnmapViewOfFile(s);
     CloseHandle(mapping);
     Log("hardware helper exiting");

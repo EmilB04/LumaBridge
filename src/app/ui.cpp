@@ -34,6 +34,7 @@
 #include "vendor_detect.h"
 #include "azoth_layout.h"
 #include "azoth_oled_assets.h"
+#include "azoth_oled_effects.h"
 #include "armoury_crate.h"
 #include "logitech_hidpp.h"
 #include "openrgb_protocol.h"
@@ -996,7 +997,7 @@ bool HasAzoth(Controller& ctl) {
     const auto& p = ctl.presence();
     return p.scanned ? p.azoth || ctl.azoth().state() == AzothOutput::State::Active ||
                                     ctl.azoth().oledState() == AzothOutput::OledState::Active
-                     : ctl.prefs().azothKeyboard || ctl.prefs().azothOled.direct;
+                     : ctl.prefs().azothKeyboard;
 }
 
 bool HasDualSense(Controller& ctl) {
@@ -1622,6 +1623,15 @@ void TopGame(DashCtx& c) {
         case games::Feed::FlightSimConnect: return feeds.FlightSimSeen();
         case games::Feed::DcsExport: return feeds.DcsSeen();
         case games::Feed::F1Telemetry: return feeds.F1Seen();
+        case games::Feed::BeamNgOutGauge: return feeds.UdpSeen(GameFeeds::kBeamNg);
+        case games::Feed::DirtRallyUdp: return feeds.UdpSeen(GameFeeds::kDirt);
+        case games::Feed::Ams2Udp: return feeds.UdpSeen(GameFeeds::kAms2);
+        case games::Feed::XPlaneUdp: return feeds.UdpSeen(GameFeeds::kXPlane);
+        case games::Feed::WrcUdp: return feeds.UdpSeen(GameFeeds::kWrc);
+        case games::Feed::EliteStatus: return feeds.EliteSeen();
+        case games::Feed::AcSharedMemory: return feeds.MemorySeen(GameFeeds::kAc);
+        case games::Feed::IRacingSdk: return feeds.MemorySeen(GameFeeds::kIRacing);
+        case games::Feed::RaceRoomSharedMemory: return feeds.MemorySeen(GameFeeds::kRaceRoom);
         default: return false;
         }
     };
@@ -5453,63 +5463,24 @@ struct Screen {
     }
 };
 
-// Stand-ins for the keyboard's six built-in animations (the real ones are drawn by its firmware).
-void Animation(const Screen& s, int index, double t) {
-    switch (index) {
-    case 0:  // a wave
-        for (int x = 0; x < kW; x += 2) {
-            const float y = kH / 2 + std::sin(static_cast<float>(x * 0.045 + t * 3.0)) * 18.f;
-            s.Rect(static_cast<float>(x), y - 1, 2, 3);
+// Draw the same grayscale pixels used for GIF export and the installed ASUS assets.
+void Pixels(const Screen& s, const std::vector<uint8_t>& pixels) {
+    if (pixels.size() != kW * kH) return;
+    // Combine equal neighboring pixels into runs to keep the draw list small.
+    for (int y = 0; y < kH; ++y)
+        for (int x = 0; x < kW;) {
+            const uint8_t level = pixels[y * kW + x];
+            int end = x + 1;
+            while (end < kW && pixels[y * kW + end] == level) ++end;
+            if (level) s.Rect(static_cast<float>(x), static_cast<float>(y), static_cast<float>(end - x), 1, level / 255.f);
+            x = end;
         }
-        break;
-    case 1:  // level bars
-        for (int i = 0; i < 24; ++i) {
-            const float v = 0.5f + 0.5f * std::sin(static_cast<float>(t * (2.1 + (i % 5) * 0.37) + i * 1.3));
-            const float h = 6 + v * 50;
-            s.Rect(6.f + i * 10.4f, kH - 4 - h, 7, h);
-        }
-        break;
-    case 2:  // stars flying past
-        for (int i = 0; i < 46; ++i) {
-            const float speed = 18.f + (i * 37 % 60);
-            const float x = std::fmod(static_cast<float>(i * 97 % kW) - static_cast<float>(t) * speed + kW * 4, static_cast<float>(kW));
-            const float y = static_cast<float>(i * 53 % (kH - 2));
-            const float len = speed / 18.f;
-            s.Rect(x, y, len, 1, 0.35f + 0.65f * (speed - 18.f) / 60.f);
-        }
-        break;
-    case 3: {  // a scanner sweeping back and forth with a trail
-        const float u = static_cast<float>(std::fmod(t * 0.6, 2.0));
-        const float x = (u < 1 ? u : 2 - u) * (kW - 24);
-        for (int k = 0; k < 10; ++k) s.Rect(x - k * 6 * (u < 1 ? 1.f : -1.f), 22, 24, 20, 1.f - k * 0.1f);
-        break;
-    }
-    case 4:  // rings opening from the middle
-        for (int k = 0; k < 4; ++k) {
-            const float r = static_cast<float>(std::fmod(t * 22.0 + k * 22.0, 88.0));
-            const float a = 1.f - r / 88.f;
-            const float w = r * 2.9f, h = std::min(r * 0.72f, 30.f);
-            const float x0 = kW / 2 - w / 2, y0 = kH / 2 - h;
-            s.Rect(x0, y0, w, 2, a);
-            s.Rect(x0, kH / 2 + h - 2, w, 2, a);
-            s.Rect(x0, y0, 2, h * 2, a);
-            s.Rect(x0 + w - 2, y0, 2, h * 2, a);
-        }
-        break;
-    default:  // rain
-        for (int col = 0; col < 32; ++col) {
-            const float speed = 26.f + (col * 29 % 40);
-            const float head = static_cast<float>(std::fmod(t * speed + col * 41, kH + 30.0));
-            for (int k = 0; k < 7; ++k) s.Rect(col * 8.f + 2, head - k * 4.f, 3, 3, 1.f - k * 0.14f);
-        }
-        break;
-    }
 }
 
 }  // namespace oledview
 
-// A mockup of the Azoth's OLED screen showing what LumaBridge asks for: the clock, a built-in
-// animation (a stand-in: the keyboard draws its own), or a note when the screen keeps what it has.
+// ASUS animations use Armoury Crate's installed artwork. LumaBridge animations use the
+// export renderer; the clock remains an illustration of the keyboard's firmware layout.
 void OledMockup(const azoth::OledSettings& s, const Fonts& f, float width) {
     using namespace oledview;
     const float bezel = 12 * S();
@@ -5536,9 +5507,7 @@ void OledMockup(const azoth::OledSettings& s, const Fonts& f, float width) {
         dl->AddText(ImVec2(at.x + (sw - ts.x) / 2, at.y + (sh - ts.y) / 2), Hex(0xE8F0FF, 90), text);
         ImGui::PopFont();
     };
-    if (!s.direct) {
-        note("Armoury Crate's screen");
-    } else if (!s.enabled) {
+    if (!s.enabled) {
         // Off: an OLED that's off is simply black.
     } else if (s.content == azoth::OledContent::Clock) {
         SYSTEMTIME now;
@@ -5568,7 +5537,19 @@ void OledMockup(const azoth::OledSettings& s, const Fonts& f, float width) {
         if (half) screen.Text(half, x + 3 * big, y + 7 * big - 7 * tiny, tiny);
         screen.Text(date, (kW - Screen::Width(date, tiny)) / 2, 47, tiny, 0.7f);
     } else if (s.content == azoth::OledContent::Animation) {
-        Animation(screen, std::clamp(s.animation, 0, 5), t);
+        if (s.animationSource == azoth::OledAnimationSource::LumaBridge) {
+            // Match the exported 20 fps animation, including frame boundaries.
+            const double frameTime = std::floor(t * 20) / 20;
+            Pixels(screen, azoth::RenderOledEffect(s.lumaAnimation, frameTime));
+        } else {
+            const auto& pixels = AsusAzothOledPreview(s.animation, t);
+            if (!pixels.empty()) Pixels(screen, pixels);
+            else {
+                char title[32];
+                snprintf(title, sizeof title, "ASUS preset %d", s.animation + 1);
+                note(title);
+            }
+        }
     } else {
         note("Current screen kept");
     }
@@ -5601,6 +5582,236 @@ void BannerPreview(const std::string& text, int size, bool invert, const Fonts& 
     ImGui::Dummy(ImVec2(sw, sh));
 }
 
+// Small diagrams keep the upload instructions readable at any DPI and window width.
+void OledUploadDiagram(const Fonts& f, int step, int effect) {
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const float u = std::min(S(), avail / 260.f);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 origin(p.x + (avail - 260 * u) / 2, p.y);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    auto at = [&](float x, float y) { return ImVec2(origin.x + x * u, origin.y + y * u); };
+    auto box = [&](float x, float y, float w, float h, unsigned fill, unsigned border = kBorder) {
+        dl->AddRectFilled(at(x, y), at(x + w, y + h), Hex(fill), 5 * u);
+        dl->AddRect(at(x, y), at(x + w, y + h), Hex(border), 5 * u);
+    };
+    auto text = [&](const char* label, float x, float y, unsigned color = kText, bool small = false) {
+        dl->AddText(f.caption, (small ? 10.f : 12.f) * u, at(x, y), Hex(color), label);
+    };
+    auto arrow = [&](float x, float y, float end) {
+        dl->AddLine(at(x, y), at(end, y), Hex(kAccent2), 2 * u);
+        dl->AddLine(at(end - 5, y - 4), at(end, y), Hex(kAccent2), 2 * u);
+        dl->AddLine(at(end - 5, y + 4), at(end, y), Hex(kAccent2), 2 * u);
+    };
+    const char* name = azoth::kLumaAnimationNames[effect] + std::strlen("LumaBridge - ");
+    if (step == 0) {
+        box(0, 3, 105, 76, 0x0B0D12);
+        text("LumaBridge", 9, 10, kMuted, true);
+        box(9, 26, 87, 22, 0x000000);
+        const oledview::Screen screen{dl, at(10, 27), 85 * u / oledview::kW, 1};
+        oledview::Pixels(screen, azoth::RenderOledEffect(effect, 1.25));
+        box(9, 53, 87, 22, kAccent, kAccent);
+        text("Export GIF", 17, 58);
+        arrow(112, 44, 141);
+        box(149, 14, 110, 59, 0x111620);
+        dl->AddRectFilled(at(155, 6), at(192, 19), Hex(0x263145), 4 * u);
+        box(157, 25, 94, 38, 0x1D2331);
+        text(".GIF", 165, 30, kAccent2);
+        text(name, 165, 48, kMuted, true);
+    } else if (step == 1) {
+        box(0, 3, 260, 78, 0x0B0D12);
+        text("Armoury Crate", 10, 10, kMuted, true);
+        box(8, 27, 57, 46, 0x151A24);
+        text("Device", 13, 34, kAccent2, true);
+        text("Azoth", 13, 53, kText, true);
+        arrow(70, 49, 89);
+        box(95, 27, 155, 46, 0x242038, kAccent);
+        text("ROG Azoth", 105, 34);
+        text("OLED", 105, 54, kAccent2);
+        dl->AddRectFilled(at(215, 52), at(242, 66), Hex(kAccent), 7 * u);
+        dl->AddCircleFilled(at(235, 59), 5 * u, Hex(0xFFFFFF));
+    } else if (step == 2) {
+        box(0, 3, 260, 78, 0x0B0D12);
+        text("Image or Animation", 10, 10, kMuted, true);
+        dl->AddCircleFilled(at(15, 35), 5 * u, Hex(kAccent));
+        text("Custom image/animation", 26, 29, kText, true);
+        box(9, 49, 119, 24, kAccent, kAccent);
+        text("Replace File", 18, 55);
+        arrow(135, 61, 156);
+        box(163, 49, 88, 24, 0x1D2331);
+        text("Your GIF", 174, 55, kAccent2);
+    } else {
+        box(0, 13, 74, 32, kAccent, kAccent);
+        text("Apply", 21, 22);
+        arrow(81, 29, 102);
+        box(109, 3, 151, 78, 0x0B0D12);
+        box(121, 10, 108, 27, 0x000000);
+        const oledview::Screen screen{dl, at(123, 11), 104 * u / oledview::kW, 1};
+        oledview::Pixels(screen, azoth::RenderOledEffect(effect, 1.25));
+        for (int row = 0; row < 3; ++row)
+            for (int key = 0; key < 12; ++key)
+                dl->AddRectFilled(at(119 + key * 10, 45 + row * 9), at(126 + key * 10, 51 + row * 9), Hex(0x293042), 1 * u);
+        dl->AddCircleFilled(at(242, 22), 5 * u, Hex(kMuted));
+    }
+    ImGui::Dummy(ImVec2(avail, 88 * u));
+}
+
+void OledUploadGuide(const Fonts& f, int effect, bool exported) {
+    static const char* titles[] = {"Export your GIF", "Open the Azoth page", "Choose the file", "Apply to the keyboard"};
+    static const char* instructions[] = {
+        "Click Export GIF below the effects. The folder opens and the file path is copied.",
+        "Open Armoury Crate. Select ROG Azoth > OLED > Image or Animation, and enable the display.",
+        "Select Custom image/animation > Replace File. Paste the copied path into the file picker and open it.",
+        "Click Apply and wait for the upload to finish. Your Azoth now plays the selected GIF."};
+    const float width = ImGui::GetContentRegionAvail().x;
+    const int cols = width >= 1080 * S() ? 4 : width >= 580 * S() ? 2 : 1;
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6 * S(), 6 * S()));
+    if (ImGui::BeginTable("oled-upload-steps", cols, ImGuiTableFlags_SizingStretchSame)) {
+        for (int step = 0; step < 4; ++step) {
+            ImGui::TableNextColumn();
+            ImGui::PushID(step);
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, Hex(0x10141D));
+            ImGui::PushStyleColor(ImGuiCol_Border, Hex(kBorder));
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10 * S());
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12 * S(), 12 * S()));
+            ImGui::BeginChild("step", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY |
+                              ImGuiChildFlags_AlwaysUseWindowPadding);
+            char number[8];
+            snprintf(number, sizeof number, "%d", step + 1);
+            Pill(step == 0 && exported ? "Saved" : number, step == 0 && exported ? kGreen : kAccent);
+            ImGui::SameLine(0, 8 * S());
+            ImGui::PushFont(f.bold);
+            ImGui::TextWrapped("%s", titles[step]);
+            ImGui::PopFont();
+            ImGui::Dummy(ImVec2(0, 4 * S()));
+            OledUploadDiagram(f, step, effect);
+            ImGui::PushFont(f.caption);
+            ImGui::PushStyleColor(ImGuiCol_Text, Hex(kMuted));
+            // Match the tallest description at this width, so every card has the same height.
+            const float available = ImGui::GetContentRegionAvail().x;
+            float bodyHeight = 0;
+            for (const char* instruction : instructions)
+                bodyHeight = std::max(bodyHeight, ImGui::CalcTextSize(instruction, nullptr, false, available).y);
+            const ImVec2 begin = ImGui::GetCursorScreenPos();
+            ImGui::TextWrapped("%s", instructions[step]);
+            ImGui::SetCursorScreenPos(ImVec2(begin.x, begin.y + bodyHeight));
+            ImGui::Dummy(ImVec2(0, 0));
+            ImGui::PopStyleColor();
+            ImGui::PopFont();
+            ImGui::EndChild();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor(2);
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::PopStyleVar();
+}
+
+bool LumaOledGifGallery(UiState& ui, const Fonts& f, azoth::OledSettings& settings) {
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted("LumaBridge GIFs");
+    ImGui::PopFont();
+    ImGui::SameLine();
+    Pill("Custom animations", kAccent2);
+    Muted("Choose an animation, export it, then upload it with Armoury Crate. Each tile is a live preview.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    bool changed = false;
+    const float available = ImGui::GetContentRegionAvail().x;
+    const int cols = available >= 620 * S() ? 3 : available >= 400 * S() ? 2 : 1;
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6 * S(), 6 * S()));
+    if (ImGui::BeginTable("luma-oled-effects", cols, ImGuiTableFlags_SizingStretchSame)) {
+        for (int i = 0; i < static_cast<int>(azoth::kLumaAnimationNames.size()); ++i) {
+            ImGui::TableNextColumn();
+            ImGui::PushID(i);
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float width = ImGui::GetContentRegionAvail().x;
+            const float pad = 10 * S(), screenWidth = width - 2 * pad;
+            const float screenHeight = screenWidth / 4;
+            const float height = screenHeight + ImGui::GetTextLineHeight() + 3 * pad;
+            if (ImGui::InvisibleButton("effect", ImVec2(width, height)) && settings.lumaAnimation != i) {
+                settings.lumaAnimation = i;
+                changed = true;
+                ui.azothOledGifMessage.clear();
+                ui.azothOledGifPath.clear();
+            }
+            const bool selected = settings.lumaAnimation == i, hovered = ImGui::IsItemHovered();
+            if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (ImGui::IsItemVisible()) {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 end(p.x + width, p.y + height);
+                dl->AddRectFilled(p, end, Hex(selected ? 0x242039 : hovered ? kCardHover : 0x10141D), 10 * S());
+                dl->AddRect(p, end, Hex(selected ? kAccent : hovered ? kAccentHover : kBorder), 10 * S(), 0,
+                            selected ? 2 * S() : S());
+                const ImVec2 screen(p.x + pad, p.y + pad);
+                dl->AddRectFilled(screen, ImVec2(screen.x + screenWidth, screen.y + screenHeight), Hex(0x000000), 4 * S());
+                dl->PushClipRect(screen, ImVec2(screen.x + screenWidth, screen.y + screenHeight), true);
+                const oledview::Screen pixels{dl, screen, screenWidth / oledview::kW, 0.9f};
+                oledview::Pixels(pixels, azoth::RenderOledEffect(i, std::floor(ImGui::GetTime() * 20) / 20));
+                dl->PopClipRect();
+                const char* label = azoth::kLumaAnimationNames[i] + std::strlen("LumaBridge - ");
+                const float labelY = p.y + 2 * pad + screenHeight;
+                dl->AddText(ImVec2(p.x + pad, labelY), Hex(selected ? kText : kMuted), label);
+                if (selected) {
+                    const ImVec2 c(p.x + width - 19 * S(), labelY + ImGui::GetTextLineHeight() / 2);
+                    dl->AddCircleFilled(c, 8 * S(), Hex(kAccent));
+                    dl->AddLine(ImVec2(c.x - 4 * S(), c.y), ImVec2(c.x - 1 * S(), c.y + 3 * S()), Hex(0xFFFFFF), 1.5f * S());
+                    dl->AddLine(ImVec2(c.x - 1 * S(), c.y + 3 * S()), ImVec2(c.x + 4 * S(), c.y - 3 * S()), Hex(0xFFFFFF), 1.5f * S());
+                }
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::PopStyleVar();
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    const auto fileName = Utf8(azoth::kLumaAnimationFiles[settings.lumaAnimation]);
+    ImGui::PushFont(f.caption);
+    Muted("Selected file: %s", fileName.c_str());
+    Muted("256 x 64  /  20 fps  /  7.5-second loop");
+    ImGui::PopFont();
+    const float rowRight = ImGui::GetCursorScreenPos().x + available;
+    if (PrimaryButton("Export GIF and open folder")) {
+        std::wstring path;
+        std::string error;
+        if (ExportAzothOledEffect(settings.lumaAnimation, path, error)) {
+            ui.azothOledGifPath = path;
+            ShellExecuteW(nullptr, L"open", AzothOledAssetDirectory().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            ImGui::SetClipboardText(Utf8(path).c_str());
+            ui.azothOledGifMessage = "GIF saved. Its path is copied for Replace File in Armoury Crate.";
+        } else ui.azothOledGifMessage = error;
+    }
+    // Move secondary actions onto another line when the app is narrow.
+    const float nextWidth = ImGui::CalcTextSize("Open Armoury Crate").x + 2 * ImGui::GetStyle().FramePadding.x;
+    if (ImGui::GetItemRectMax().x + nextWidth + 10 * S() <= rowRight) ImGui::SameLine(0, 10 * S());
+    if (Btn("Open Armoury Crate##gif-upload")) {
+        ui.azothOledGifMessage = LaunchArmouryCrate()
+            ? "Armoury Crate opened. Follow steps 2 to 4 below to upload your GIF."
+            : "Armoury Crate couldn't be opened. Install it to upload your GIF.";
+    }
+    if (!ui.azothOledGifPath.empty()) {
+        const float copyWidth = ImGui::CalcTextSize("Copy GIF path").x + 2 * ImGui::GetStyle().FramePadding.x;
+        if (ImGui::GetItemRectMax().x + copyWidth + 10 * S() <= rowRight) ImGui::SameLine(0, 10 * S());
+        if (Btn("Copy GIF path")) {
+            ImGui::SetClipboardText(Utf8(ui.azothOledGifPath).c_str());
+            ui.azothOledGifMessage = "GIF path copied. Paste it into Armoury Crate's Replace File picker.";
+        }
+    }
+    if (!ui.azothOledGifMessage.empty()) {
+        ImGui::Dummy(ImVec2(0, 3 * S()));
+        ImGui::PushFont(f.caption);
+        Muted("%s", ui.azothOledGifMessage.c_str());
+        ImGui::PopFont();
+    }
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    if (ImGui::CollapsingHeader("How to put this GIF on your Azoth", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::PushFont(f.caption);
+        Muted("Export in LumaBridge; finish the upload in Armoury Crate.");
+        ImGui::PopFont();
+        OledUploadGuide(f, settings.lumaAnimation, !ui.azothOledGifPath.empty());
+    }
+    return changed;
+}
+
 void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
     BeginCard("azoth-oled");
     auto settings = ctl.prefs().azothOled;
@@ -5614,9 +5825,9 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
         ImGui::SameLine();
         Pill("Test", kAccent);
         using OS = AzothOutput::OledState;
-        const char* text = "Armoury Crate";
+        const char* text = "Waiting for keyboard";
         unsigned color = kMuted;
-        if (settings.direct) {
+        {
             const auto connection = ctl.azoth().connection();
             if (connection == azoth::Connection::ReceiverOnly) {
                 text = ctl.azothAsleep() ? "Paused; connection unverified" : "Receiver only";
@@ -5624,7 +5835,16 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
                 text = "Keyboard disconnected";
                 color = kAmber;
             } else switch (ctl.azoth().oledState()) {
-            case OS::Active: text = ctl.azoth().wireless() ? "Confirmed (Omni)" : "Confirmed (USB)"; color = kGreen; break;
+            case OS::Active:
+                if (settings.content == azoth::OledContent::Animation &&
+                    settings.animationSource == azoth::OledAnimationSource::LumaBridge) {
+                    text = "Custom GIF: upload required";
+                    color = kAmber;
+                } else {
+                    text = ctl.azoth().wireless() ? "Confirmed (Omni)" : "Confirmed (USB)";
+                    color = kGreen;
+                }
+                break;
             case OS::Asleep: text = "Paused while asleep"; break;
             case OS::NotFound: text = "Keyboard not found"; color = kAmber; break;
             case OS::Failed: text = "OLED request failed"; color = kAmber; break;
@@ -5638,18 +5858,26 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
     Muted("The original ROG Azoth's 256 x 64 screen, controlled apart from the keys.");
     ImGui::Dummy(ImVec2(0, 4 * S()));
 
-    const float mockW = std::min(ImGui::GetContentRegionAvail().x, 600 * S());
-    OledMockup(settings, f, mockW);
-    ImGui::PushFont(f.caption);
-    Muted(settings.direct && settings.enabled && settings.content == azoth::OledContent::Animation
-              ? "Preview. The keyboard plays its own animation; this stands in for it."
-          : settings.direct && settings.enabled && settings.content == azoth::OledContent::Clock
-              ? "Preview of the clock, from this PC's time. The keyboard draws it in its own style."
-          : settings.direct && !settings.enabled ? "Preview: the screen is off."
-                                                 : "Preview.");
-    ImGui::PopFont();
+    const bool previewInGallery = settings.content == azoth::OledContent::Animation &&
+                                  settings.animationSource == azoth::OledAnimationSource::LumaBridge;
+    if (!previewInGallery) {
+        const float mockW = std::min(ImGui::GetContentRegionAvail().x, 600 * S());
+        OledMockup(settings, f, mockW);
+        ImGui::PushFont(f.caption);
+        Muted(settings.enabled && settings.content == azoth::OledContent::Animation
+                  ? (settings.animationSource == azoth::OledAnimationSource::LumaBridge
+                        ? "LumaBridge preview. Export this GIF and upload it in Armoury Crate to play it on the keyboard."
+                        : AsusAzothOledPreview(settings.animation, ImGui::GetTime()).empty()
+                            ? "ASUS preset. Preview artwork is unavailable; selecting it still plays the keyboard's built-in effect."
+                            : "ASUS preview, using Armoury Crate's original artwork. The keyboard adds its own status icons.")
+              : settings.enabled && settings.content == azoth::OledContent::Clock
+                  ? "Preview of the clock, from this PC's time. The keyboard draws it in its own style."
+              : !settings.enabled ? "Preview: the screen is off."
+                                                     : "Preview.");
+        ImGui::PopFont();
+    }
 
-    if (settings.direct) {
+    {
         if (const auto error = ctl.azoth().oledError()) {
             const char* text =
                 error == ERROR_TIMEOUT
@@ -5700,14 +5928,6 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
 
     section("Screen");
     {
-        static const char* kOwner[] = {"Armoury Crate", "LumaBridge (direct USB)"};
-        int owner = settings.direct ? 1 : 0;
-        if (Segmented("oled-owner", &owner, kOwner, 2, std::min(ImGui::GetContentRegionAvail().x, 420 * S()))) {
-            settings.direct = owner == 1;
-            ctl.SetAzothOled(settings);
-        }
-    }
-    if (settings.direct) {
         bool changed = Toggle("Screen on", &settings.enabled);
         ImGui::BeginDisabled(!settings.enabled);
         ImGui::AlignTextToFramePadding();
@@ -5727,13 +5947,33 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
             changed = true;
         }
         if (settings.content == azoth::OledContent::Animation) {
-            static const char* kAnimations[] = {"1", "2", "3", "4", "5", "6"};
-            ImGui::TextUnformatted("Built-in animation");
-            changed |= Segmented("oled-animation", &settings.animation, kAnimations, 6, std::min(ImGui::GetContentRegionAvail().x, 300 * S()));
-            const int animation = ctl.azoth().oledAnimation();
-            if (animation >= 0) {
+            ImGui::TextUnformatted("Animation collection");
+            static const char* kSources[] = {"ASUS built-in", "LumaBridge GIFs"};
+            int source = static_cast<int>(settings.animationSource);
+            if (Segmented("oled-animation-source", &source, kSources, 2,
+                          std::min(ImGui::GetContentRegionAvail().x, 420 * S()))) {
+                settings.animationSource = static_cast<azoth::OledAnimationSource>(source);
+                ui.azothOledGifMessage.clear();
+                ui.azothOledGifPath.clear();
+                changed = true;
+            }
+            if (settings.animationSource == azoth::OledAnimationSource::Asus) {
+                const auto& names = azoth::kAsusAnimationNames;
+                ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 420 * S()));
+                if (ImGui::BeginCombo("##oled-animation", names[settings.animation])) {
+                    for (int i = 0; i < static_cast<int>(names.size()); ++i) {
+                        if (ImGui::Selectable(names[i], settings.animation == i)) {
+                            settings.animation = i;
+                            changed = true;
+                        }
+                        if (settings.animation == i) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
                 ImGui::PushFont(f.caption);
-                Muted("The keyboard last confirmed animation %d.", animation + 1);
+                Muted("Stored on the keyboard. Selecting one applies it immediately over USB or Omni.");
+                const int animation = ctl.azoth().oledAnimation();
+                if (animation >= 0) Muted("Last confirmed ASUS preset: %d.", animation + 1);
                 ImGui::PopFont();
             }
         } else if (settings.content == azoth::OledContent::Clock) {
@@ -5745,69 +5985,77 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
         ImGui::EndDisabled();
         if (changed) ctl.SetAzothOled(settings);
         ImGui::Dummy(ImVec2(0, 2 * S()));
-        if (Btn("Reapply and retry")) ctl.ReapplyAzothOled();
-        ImGui::PushFont(f.caption);
-        Muted("Armoury Crate's live clock, music and hardware-info modes can overwrite direct control. Choose "
-              "Armoury Crate above to stop LumaBridge's OLED requests, then apply your screen there.");
-        ImGui::PopFont();
-    } else {
-        Muted("Keeps the current display untouched. Armoury Crate can show custom images or GIFs, banners, music, "
-              "hardware information and its other OLED modes while LumaBridge controls the keyboard lighting.");
-    }
-
-    section("Custom images and GIFs");
-    Muted("Armoury Crate uploads them: ROG Azoth > OLED > Image or Animation > Custom image/animation > Replace File > Apply. "
-          "Use a 256 x 64 image; ASUS lists up to 196 GIF frames at 25 fps for this model.");
-    if (Btn("Open Armoury Crate")) {
-        // Stop our display updates before opening the app that will own it.
-        settings.direct = false;
-        ctl.SetAzothOled(settings);
-        ui.azothOledMessage = LaunchArmouryCrate() ? "Armoury Crate opened. Select ROG Azoth, then OLED."
-                                                 : "Armoury Crate couldn't be opened. Install it for custom image/GIF uploads.";
-    }
-
-    section("Make a banner for Armoury Crate");
-    char text[1024]{};
-    const auto savedText = Utf8(ctl.prefs().azothOledBanner);
-    std::snprintf(text, sizeof text, "%s", savedText.c_str());
-    BannerPreview(savedText, ctl.prefs().azothOledBannerSize, ctl.prefs().azothOledBannerInvert, f,
-                  std::min(ImGui::GetContentRegionAvail().x, 512 * S()));
-    ImGui::Dummy(ImVec2(0, 2 * S()));
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Text");
-    ImGui::SameLine(0, 12 * S());
-    ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 320 * S()));
-    if (ImGui::InputText("##banner-text", text, sizeof text)) {
-        const int count = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
-        if (count > 0) {
-            std::wstring wide(static_cast<size_t>(count), L'\0');
-            MultiByteToWideChar(CP_UTF8, 0, text, -1, wide.data(), count);
-            wide.resize(static_cast<size_t>(count - 1));
-            ctl.prefs().azothOledBanner = wide;
-            ctl.Changed();
+        if (settings.content != azoth::OledContent::Animation ||
+            settings.animationSource != azoth::OledAnimationSource::LumaBridge) {
+            if (Btn("Reapply and retry")) ctl.ReapplyAzothOled();
+            ImGui::PushFont(f.caption);
+            Muted("Armoury Crate's live clock, music and hardware-info modes can overwrite what LumaBridge shows. "
+                  "Choose Keep current to leave the screen to them, or turn them off in Armoury Crate.");
+            ImGui::PopFont();
         }
     }
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Size");
-    ImGui::SameLine(0, 12 * S());
-    ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 200 * S()));
-    if (ImGui::SliderInt("##banner-size", &ctl.prefs().azothOledBannerSize, 8, 48)) ctl.Changed();
-    ImGui::SameLine(0, 20 * S());
-    if (Toggle("White background", &ctl.prefs().azothOledBannerInvert)) ctl.Changed();
-    if (PrimaryButton("Export banner and open folder")) {
-        std::string error;
-        if (ExportAzothOledBanner(ctl.prefs().azothOledBanner, ctl.prefs().azothOledBannerSize,
-                                 ctl.prefs().azothOledBannerInvert, error)) {
-            const auto dir = AzothOledAssetDirectory();
-            ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-            ui.azothOledMessage = "Saved banner.bmp. Upload it with Replace File in Armoury Crate, then Apply.";
-        } else ui.azothOledMessage = error;
+
+    const bool showGallery = settings.content == azoth::OledContent::Animation &&
+                             settings.animationSource == azoth::OledAnimationSource::LumaBridge;
+    if (showGallery) {
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+        if (LumaOledGifGallery(ui, f, settings)) ctl.SetAzothOled(settings);
+    } else {
+        section("Custom images and GIFs");
+        Muted("Armoury Crate uploads them: ROG Azoth > OLED > Image or Animation > Custom image/animation > Replace File > Apply. "
+              "Use a 256 x 64 image; ASUS lists up to 196 GIF frames at 25 fps for this model.");
+        if (Btn("Open Armoury Crate")) {
+            ui.azothOledMessage = LaunchArmouryCrate() ? "Armoury Crate opened. Select ROG Azoth, then OLED."
+                                                     : "Armoury Crate couldn't be opened. Install it for custom image/GIF uploads.";
+        }
+
     }
-    ImGui::PushFont(f.caption);
-    Muted("Exports a black-and-white 256 x 64 BMP; long text shrinks to fit. Exporting prepares a file; "
-          "Armoury Crate performs the upload.");
-    ImGui::PopFont();
-    if (!ui.azothOledMessage.empty()) Muted("%s", ui.azothOledMessage.c_str());
+    if (!showGallery || ImGui::CollapsingHeader("Make a text banner instead")) {
+        section("Make a banner for Armoury Crate");
+        char text[1024]{};
+        const auto savedText = Utf8(ctl.prefs().azothOledBanner);
+        std::snprintf(text, sizeof text, "%s", savedText.c_str());
+        BannerPreview(savedText, ctl.prefs().azothOledBannerSize, ctl.prefs().azothOledBannerInvert, f,
+                      std::min(ImGui::GetContentRegionAvail().x, 512 * S()));
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Text");
+        ImGui::SameLine(0, 12 * S());
+        ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 320 * S()));
+        if (ImGui::InputText("##banner-text", text, sizeof text)) {
+            const int count = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
+            if (count > 0) {
+                std::wstring wide(static_cast<size_t>(count), L'\0');
+                MultiByteToWideChar(CP_UTF8, 0, text, -1, wide.data(), count);
+                wide.resize(static_cast<size_t>(count - 1));
+                ctl.prefs().azothOledBanner = wide;
+                ctl.Changed();
+            }
+        }
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Size");
+        ImGui::SameLine(0, 12 * S());
+        ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 200 * S()));
+        if (ImGui::SliderInt("##banner-size", &ctl.prefs().azothOledBannerSize, 8, 48)) ctl.Changed();
+        ImGui::SameLine(0, 20 * S());
+        if (Toggle("White background", &ctl.prefs().azothOledBannerInvert)) ctl.Changed();
+        if (PrimaryButton("Export banner and open folder")) {
+            std::string error;
+            if (ExportAzothOledBanner(ctl.prefs().azothOledBanner, ctl.prefs().azothOledBannerSize,
+                                     ctl.prefs().azothOledBannerInvert, error)) {
+                const auto dir = AzothOledAssetDirectory();
+                ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                ui.azothOledMessage = "Saved banner.bmp. Upload it with Replace File in Armoury Crate, then Apply.";
+            } else ui.azothOledMessage = error;
+        }
+        ImGui::PushFont(f.caption);
+        Muted("Exports a black-and-white 256 x 64 BMP; long text shrinks to fit. Exporting prepares a file; "
+              "Armoury Crate performs the upload.");
+        ImGui::PopFont();
+        if (!ui.azothOledMessage.empty()) Muted("%s", ui.azothOledMessage.c_str());
+    }
     EndCard();
 }
 
@@ -7212,7 +7460,7 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
                             LogitechStatus(ctl)});
         // Shown whenever switched on, found or not: otherwise a device that fails to be found has
         // no row to click for why (the exact diagnostic a "not found" state exists to answer).
-        if (ctl.prefs().azothKeyboard || ctl.prefs().azothOled.direct || HasAzoth(ctl))
+        if (ctl.prefs().azothKeyboard || HasAzoth(ctl))
             rows.push_back({device::kKeyboard, "ASUS ROG Azoth", "Keyboard", Icon::Keyboard, AzothStatus(ctl)});
         if (ctl.prefs().dualsenseController || HasDualSense(ctl))
             rows.push_back({device::kController, "DualSense", "Controller", Icon::Game, DualSenseStatus(ctl)});
@@ -7448,7 +7696,44 @@ void RefreshFeeds(Controller& ctl, UiState& ui) {
     ui.rlEnabled = RocketLeagueStatsEnabled(ui.rlDir);
     ui.dcsFolders = !DcsSavedGames().empty();
     ui.dcsInstalled = DcsSetUp();
+    ui.wrcFolder = !WrcTelemetryDir().empty();
+    ui.wrcConfigPort = WrcConfigPort();
     ctl.RefreshFeedSettings();
+}
+
+// The UDP receiver and the shared memory reader behind a built-in game's page.
+GameFeeds::Udp UdpFeedOf(const std::string& key) {
+    if (key == "dirt" || key == "grid" || key == "f1classic" || key == "wrcg") return GameFeeds::kDirt;
+    if (key == "ams2") return GameFeeds::kAms2;
+    if (key == "xplane") return GameFeeds::kXPlane;
+    if (key == "wrc") return GameFeeds::kWrc;
+    return GameFeeds::kBeamNg;  // BeamNG.drive, Live for Speed
+}
+
+GameFeeds::Memory MemoryFeedOf(const std::string& key) {
+    if (key == "iracing") return GameFeeds::kIRacing;
+    if (key == "raceroom") return GameFeeds::kRaceRoom;
+    return GameFeeds::kAc;
+}
+
+// The port box of a UDP game's page, with what the port is doing.
+void UdpPortRow(Controller& ctl, const std::string& key, int* pref) {
+    const auto& feeds = ctl.feeds();
+    const GameFeeds::Udp u = UdpFeedOf(key);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Port");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(110 * S());
+    int port = *pref;
+    if (ImGui::InputInt(("##port" + key).c_str(), &port, 0, 0) && port > 1024 && port < 65536) {
+        *pref = port;
+        ctl.Changed();
+        ctl.RefreshFeedSettings();
+    }
+    ImGui::SameLine();
+    Muted("%s", feeds.UdpPortBusy(u) ? "Taken by another program (a telemetry app?) - pick another port here and in the game."
+                : feeds.UdpSeen(u) ? "Receiving while you play."
+                                   : "Works while you play, once the telemetry is on.");
 }
 
 // Status of a built-in feed as a pill.
@@ -7473,18 +7758,18 @@ void FeedPill(const Controller& ctl, const UiState& ui, const std::string& key) 
     } else if (key == "f1") {
         if (feeds.F1PortBusy()) Pill("Port busy", kRed);
         else Pill(feeds.F1Seen() ? "Receiving" : "Switch on in the game", feeds.F1Seen() ? kGreen : kAmber);
-    } else if (key == "beamng") {
-        if (feeds.UdpPortBusy(GameFeeds::kBeamNg)) Pill("Port busy", kRed);
-        else Pill(feeds.UdpSeen(GameFeeds::kBeamNg) ? "Receiving" : "Switch on in the game", feeds.UdpSeen(GameFeeds::kBeamNg) ? kGreen : kAmber);
-    } else if (key == "dirt") {
-        if (feeds.UdpPortBusy(GameFeeds::kDirt)) Pill("Port busy", kRed);
-        else Pill(feeds.UdpSeen(GameFeeds::kDirt) ? "Receiving" : "Switch on in the game", feeds.UdpSeen(GameFeeds::kDirt) ? kGreen : kAmber);
-    } else if (key == "ams2") {
-        if (feeds.UdpPortBusy(GameFeeds::kAms2)) Pill("Port busy", kRed);
-        else Pill(feeds.UdpSeen(GameFeeds::kAms2) ? "Receiving" : "Switch on in the game", feeds.UdpSeen(GameFeeds::kAms2) ? kGreen : kAmber);
-    } else if (key == "xplane") {
-        if (feeds.UdpPortBusy(GameFeeds::kXPlane)) Pill("Port busy", kRed);
-        else Pill(feeds.UdpSeen(GameFeeds::kXPlane) ? "Receiving" : "Switch on in the game", feeds.UdpSeen(GameFeeds::kXPlane) ? kGreen : kAmber);
+    } else if (key == "beamng" || key == "lfs" || key == "dirt" || key == "grid" || key == "f1classic" || key == "wrcg" ||
+               key == "ams2" || key == "xplane") {
+        const GameFeeds::Udp u = UdpFeedOf(key);
+        if (feeds.UdpPortBusy(u)) Pill("Port busy", kRed);
+        else Pill(feeds.UdpSeen(u) ? "Receiving" : "Switch on in the game", feeds.UdpSeen(u) ? kGreen : kAmber);
+    } else if (key == "wrc") {
+        if (feeds.UdpPortBusy(GameFeeds::kWrc)) Pill("Port busy", kRed);
+        else if (feeds.UdpSeen(GameFeeds::kWrc)) Pill("Receiving", kGreen);
+        else Pill(ui.wrcConfigPort ? "Set up" : "Not set up", ui.wrcConfigPort ? kGreen : kAmber);
+    } else if (key == "assettocorsa" || key == "iracing" || key == "raceroom") {
+        const GameFeeds::Memory m = MemoryFeedOf(key);
+        Pill(feeds.MemorySeen(m) ? "Receiving" : "Ready", kGreen);
     } else if (key == "elite") {
         Pill(feeds.EliteSeen() ? "Receiving" : "Ready", kGreen);
     } else if (key == "msfs") {
@@ -7588,7 +7873,7 @@ void FeedSetup(Controller& ctl, Integrations& in, UiState& ui, const std::string
                                         : "Works while you drive, once Data Out is on.");
     } else if (key == "f1") {
         Muted("In the game: Settings > Telemetry Settings > UDP Telemetry: On, UDP IP Address: 127.0.0.1, UDP Port: "
-              "the port below.");
+              "the port below (F1 2018 to F1 25; a UDP Format of 2018 or newer).");
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Port");
         ImGui::SameLine();
@@ -7606,68 +7891,78 @@ void FeedSetup(Controller& ctl, Integrations& in, UiState& ui, const std::string
                                      : "Works while you drive, once UDP Telemetry is on.");
     } else if (key == "beamng") {
         Muted("In the game: Options > Other > Protocols (Live for Speed OutGauge) on, IP 127.0.0.1, Port: the port below.");
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Port");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(110 * S());
-        int port = ctl.prefs().beamngPort;
-        if (ImGui::InputInt("##beamngport", &port, 0, 0) && port > 1024 && port < 65536) {
-            ctl.prefs().beamngPort = port;
-            ctl.Changed();
-            ctl.RefreshFeedSettings();
-        }
-        ImGui::SameLine();
-        Muted("%s", feeds.UdpPortBusy(GameFeeds::kBeamNg) ? "Taken by another program (a telemetry app?) - pick another port here and in the game."
-                    : feeds.UdpSeen(GameFeeds::kBeamNg) ? "Receiving while you play."
-                                                       : "Works while you play, once the telemetry is on.");
-    } else if (key == "dirt") {
-        Muted("Close the game, open Documents\\My Games\\DiRT Rally 2.0\\hardwaresettings\\hardware_settings_config.xml (DiRT Rally: the DiRT Rally folder) and set the udp line to: enabled=\"true\" extradata=\"3\" ip=\"127.0.0.1\" port=\"the port below\" delay=\"1\". Needs a different port than F1 uses if both are on.");
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Port");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(110 * S());
-        int port = ctl.prefs().dirtPort;
-        if (ImGui::InputInt("##dirtport", &port, 0, 0) && port > 1024 && port < 65536) {
-            ctl.prefs().dirtPort = port;
-            ctl.Changed();
-            ctl.RefreshFeedSettings();
-        }
-        ImGui::SameLine();
-        Muted("%s", feeds.UdpPortBusy(GameFeeds::kDirt) ? "Taken by another program (a telemetry app?) - pick another port here and in the game."
-                    : feeds.UdpSeen(GameFeeds::kDirt) ? "Receiving while you play."
-                                                       : "Works while you play, once the telemetry is on.");
+        UdpPortRow(ctl, key, &ctl.prefs().beamngPort);
+    } else if (key == "lfs") {
+        Muted("Close the game, open cfg.txt in its folder and set: OutGauge Mode 1, OutGauge Delay 1, OutGauge IP "
+              "127.0.0.1, OutGauge Port: the port below. BeamNG.drive uses the same port.");
+        UdpPortRow(ctl, key, &ctl.prefs().beamngPort);
+    } else if (key == "dirt" || key == "grid") {
+        Muted("Close the game, open Documents\\My Games\\<the game>\\hardwaresettings\\hardware_settings_config.xml "
+              "(the game's own folder there: DiRT Rally 2.0, DiRT 4, GRID Legends, ...) and set the udp line to: "
+              "enabled=\"true\" extradata=\"3\" ip=\"127.0.0.1\" port=\"the port below\" delay=\"1\". Needs a different "
+              "port than F1 uses if both are on.");
+        UdpPortRow(ctl, key, &ctl.prefs().dirtPort);
+    } else if (key == "f1classic") {
+        Muted("F1 2016 and F1 2017: in the game's Telemetry Settings, UDP Telemetry: On, UDP Broadcast Mode: Off, UDP IP "
+              "Address: 127.0.0.1, UDP Port: the port below. F1 2015: close the game, open Documents\\My Games\\<the "
+              "game>\\hardwaresettings\\hardware_settings_config.xml and set the udp line to: enabled=\"true\" "
+              "extradata=\"3\" ip=\"127.0.0.1\" port=\"the port below\" delay=\"1\".");
+        UdpPortRow(ctl, key, &ctl.prefs().dirtPort);
+    } else if (key == "wrcg") {
+        Muted("Close the game, open Documents\\My Games\\WRCG\\UserSettings.cfg and set: WRC.Telemetry.EnableTelemetry "
+              "= true, WRC.Telemetry.TelemetryAdress = \"127.0.0.1\", WRC.Telemetry.TelemetryPort = the port below, "
+              "WRC.Telemetry.TelemetryRate = 60. DiRT and GRID use the same port.");
+        UdpPortRow(ctl, key, &ctl.prefs().dirtPort);
     } else if (key == "ams2") {
-        Muted("In the game: Options > System > Shared Memory: Project CARS 2 UDP, UDP Frequency: 1 or higher. It sends to port 5606; change the port below only if you changed it in the game.");
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Port");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(110 * S());
-        int port = ctl.prefs().ams2Port;
-        if (ImGui::InputInt("##ams2port", &port, 0, 0) && port > 1024 && port < 65536) {
-            ctl.prefs().ams2Port = port;
-            ctl.Changed();
-            ctl.RefreshFeedSettings();
-        }
-        ImGui::SameLine();
-        Muted("%s", feeds.UdpPortBusy(GameFeeds::kAms2) ? "Taken by another program (a telemetry app?) - pick another port here and in the game."
-                    : feeds.UdpSeen(GameFeeds::kAms2) ? "Receiving while you play."
-                                                       : "Works while you play, once the telemetry is on.");
+        Muted("In the game: Options > System: Shared Memory: Project CARS 2, UDP Protocol Version: Project CARS 2, UDP "
+              "Frequency: 1 or higher (the first Project CARS: its UDP option, 1 or higher). It sends to port 5606; change "
+              "the port below only if you changed it in the game. Windows may ask whether LumaBridge may use the network: "
+              "the game broadcasts its telemetry, so allow it.");
+        UdpPortRow(ctl, key, &ctl.prefs().ams2Port);
     } else if (key == "xplane") {
         Muted("In the sim: Settings > Data Output: tick the Network via UDP box for rows 3 (Speeds) and 4 (Mach, VVI, G-load); in Settings > Network set the IP for data output to 127.0.0.1 and the port below.");
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Port");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(110 * S());
-        int port = ctl.prefs().xplanePort;
-        if (ImGui::InputInt("##xplaneport", &port, 0, 0) && port > 1024 && port < 65536) {
-            ctl.prefs().xplanePort = port;
-            ctl.Changed();
-            ctl.RefreshFeedSettings();
+        UdpPortRow(ctl, key, &ctl.prefs().xplanePort);
+    } else if (key == "wrc") {
+        const int port = ctl.prefs().wrcPort;
+        if (!ui.wrcFolder) {
+            Muted("EA SPORTS WRC's telemetry settings (Documents\\My Games\\WRC\\telemetry) weren't found. Start the "
+                  "game once, then come back.");
+        } else if (ui.wrcConfigPort) {
+            Muted("%s", feeds.UdpPortBusy(GameFeeds::kWrc) ? "The port is taken by another program."
+                        : feeds.UdpSeen(GameFeeds::kWrc)   ? "EA SPORTS WRC is sending its telemetry."
+                                                           : "Set up. It lights up on your next stage (restart the game if "
+                                                             "it's running).");
+            if (ui.wrcConfigPort != port && Btn("Use the new port##wrc")) {
+                const std::string err = WrcSetUp(port, false);
+                ui.feedMessageId = "wrc";
+                ui.feedMessage = err.empty() ? "Done: EA SPORTS WRC now sends to port " + std::to_string(port) : "Failed: " + err;
+                ui.feedCheckAt = 0;
+            }
+            if (Btn("Remove##wrc")) {
+                const std::string err = WrcSetUp(port, true);
+                ui.feedMessageId = "wrc";
+                ui.feedMessage = err.empty() ? "Done: EA SPORTS WRC telemetry removed" : "Failed: " + err;
+                ui.feedCheckAt = 0;
+            }
+        } else {
+            if (PrimaryButton("Set up##wrc")) {
+                const std::string err = WrcSetUp(port, false);
+                ui.feedMessageId = "wrc";
+                ui.feedMessage = err.empty() ? "Done: EA SPORTS WRC telemetry set up - restart the game if it's running"
+                                             : "Failed: " + err;
+                ui.feedCheckAt = 0;
+            }
+            ImGui::SameLine();
+            Muted("Adds lumabridge.json and one entry to config.json in Documents\\My Games\\WRC\\telemetry (EA's own "
+                  "telemetry settings; a backup of config.json is kept).");
         }
-        ImGui::SameLine();
-        Muted("%s", feeds.UdpPortBusy(GameFeeds::kXPlane) ? "Taken by another program (a telemetry app?) - pick another port here and in the game."
-                    : feeds.UdpSeen(GameFeeds::kXPlane) ? "Receiving while you play."
-                                                       : "Works while you play, once the telemetry is on.");
+        UdpPortRow(ctl, key, &ctl.prefs().wrcPort);
+    } else if (key == "assettocorsa" || key == "iracing" || key == "raceroom") {
+        const GameFeeds::Memory m = MemoryFeedOf(key);
+        Muted("%s", feeds.MemorySeen(m)    ? "Receiving while you drive."
+                    : feeds.MemoryFound(m) ? "Connected. It lights up once you're on track."
+                                           : "Nothing to set up: it works while you drive (the game's own telemetry for "
+                                             "dashboards and wheel displays).");
     } else if (key == "elite") {
         Muted("%s", feeds.EliteSeen() ? "Elite Dangerous is writing its ship status."
                                       : "Nothing to set up: it works once the game is running (the game's own Status.json in "
@@ -7974,7 +8269,10 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
     ImGui::PopFont();
     Muted("These games light up through their own official data, no vendor software needed. Click one to set it up.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
-    static const char* kBuiltIn[] = {"cs2", "rocketleague", "warthunder", "dota2", "league", "forza", "f1", "beamng", "dirt", "ams2", "xplane", "elite", "msfs", "dcs"};
+    static const char* kBuiltIn[] = {"cs2",       "rocketleague", "warthunder", "dota2",        "league",   "forza",
+                                     "f1",        "f1classic",    "iracing",    "assettocorsa", "raceroom", "wrc",
+                                     "wrcg",      "dirt",         "grid",       "ams2",         "beamng",   "lfs",
+                                     "xplane",    "elite",        "msfs",       "dcs"};
     const float avail = ImGui::GetContentRegionAvail().x;
     const int cols = avail > 700 * S() ? 3 : 1;
     if (ImGui::BeginTable("builtin", cols, ImGuiTableFlags_SizingStretchSame)) {
@@ -8262,6 +8560,44 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
     if (LabeledSlider("Maximum update rate", &hz, 10, 60, "%.0f per second")) {
         cfg.maxUpdateHz = static_cast<int>(hz);
         ctl.Changed();
+    }
+    EndCard();
+
+    BeginCard("armourycrate");
+    CardTitle(f, "Armoury Crate", Icon::Plug);
+    if (Toggle("Pause Armoury Crate's lighting while LumaBridge has the lights", &ctl.prefs().pauseArmouryCrate))
+        ctl.Changed();
+    Muted("Armoury Crate puts its own lighting back whenever a USB device is plugged in or out, so the fans and "
+          "memory go dark or flicker for a few seconds. Pausing its lighting service stops that. It runs again "
+          "when LumaBridge hands the lights back or exits, and while Armoury Crate's window is open.");
+    if (ctl.prefs().pauseArmouryCrate) {
+        using A = helper::AsusLighting;
+        const auto& hw = ctl.hardware();
+        const A st = hw.asusLighting();
+        const char* text = nullptr;
+        unsigned color = kMuted;
+        if (hw.state() != HardwareHelper::State::Running && hw.state() != HardwareHelper::State::NoPawnIO) {
+            text = "Needs Hardware access: set it up on the Integrations page.";
+            color = kAmber;
+        } else if (hw.helperOutdated()) {
+            text = "Hardware access needs an update for this: Integrations > Hardware access > Update.";
+            color = kAmber;
+        } else if (st == A::Paused) {
+            text = "Paused now.";
+            color = kGreen;
+        } else if (st == A::NotInstalled) {
+            text = "Armoury Crate's lighting service isn't installed: nothing to pause.";
+        } else if (st == A::Failed) {
+            text = "Couldn't pause it (details in %ProgramData%\\LumaBridge\\helper.log).";
+            color = kRed;
+        } else if (st == A::Running) {
+            text = "Running now (Armoury Crate is open, or LumaBridge doesn't have the lights).";
+        }
+        if (text) {
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(color));
+            ImGui::TextWrapped("%s", text);
+            ImGui::PopStyleColor();
+        }
     }
     EndCard();
 
@@ -9324,6 +9660,10 @@ FeedFact FeedFactOf(const GameFeeds& fd, const Prefs& p, games::Feed feed) {
     case F::DirtRallyUdp: r = {fd.UdpPortBusy(GameFeeds::kDirt), fd.UdpSeen(GameFeeds::kDirt), true, p.dirtPort}; break;
     case F::Ams2Udp: r = {fd.UdpPortBusy(GameFeeds::kAms2), fd.UdpSeen(GameFeeds::kAms2), true, p.ams2Port}; break;
     case F::XPlaneUdp: r = {fd.UdpPortBusy(GameFeeds::kXPlane), fd.UdpSeen(GameFeeds::kXPlane), true, p.xplanePort}; break;
+    case F::WrcUdp: r = {fd.UdpPortBusy(GameFeeds::kWrc), fd.UdpSeen(GameFeeds::kWrc), true, p.wrcPort}; break;
+    case F::AcSharedMemory: r.seen = fd.MemorySeen(GameFeeds::kAc); break;
+    case F::IRacingSdk: r.seen = fd.MemorySeen(GameFeeds::kIRacing); break;
+    case F::RaceRoomSharedMemory: r.seen = fd.MemorySeen(GameFeeds::kRaceRoom); break;
     case F::DcsExport: r = {fd.DcsPortBusy(), fd.DcsSeen(), true, 49717}; break;
     case F::FlightSimConnect: r.seen = fd.FlightSimSeen(); break;
     case F::EliteStatus: r.seen = fd.EliteSeen(); break;

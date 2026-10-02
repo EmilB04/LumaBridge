@@ -49,10 +49,14 @@ and desk in 3D, live.
   LibreHardwareMonitor if it runs.
 - **Auto mode:** games drive your lights. LumaBridge answers the game's lighting SDK as
   if that brand's software were installed, and follows the game that's currently active.
-  Counter-Strike 2, Rocket League, War Thunder, Dota 2, League of Legends, Forza, F1,
-  BeamNG.drive, DiRT Rally, Automobilista 2 / Project CARS 2, X-Plane, Elite Dangerous,
-  Microsoft Flight Simulator and DCS World light up through their own data feeds, and games
-  without lighting can mirror the screen's colors ([docs/games.md](docs/games.md)).
+  Counter-Strike 2, Rocket League, War Thunder, Dota 2, League of Legends, Forza, F1 2015
+  to F1 25, iRacing, Assetto Corsa / Competizione / EVO, RaceRoom, EA SPORTS WRC, WRC
+  Generations, DiRT Rally, DiRT 4, GRID, Automobilista 2 / Project CARS, BeamNG.drive, Live
+  for Speed, X-Plane, Elite Dangerous, Microsoft Flight Simulator and DCS World light up
+  through their own data feeds. The Games List knows about 460 more games that light up
+  through Razer Chroma, Logitech LIGHTSYNC, Corsair iCUE, SteelSeries GameSense or
+  Alienware AlienFX (or drive ASUS Aura themselves), and games without
+  lighting can mirror the screen's colors ([docs/games.md](docs/games.md)).
 - **Manual mode:** effects (static, breathing, strobe, color cycle, and per-LED rainbow
   wave, gradient, comet and twinkle that run around each ARGB fan), presets, a customizable
   rainbow and the same color wheel, hex input and swatches for both colors. Give any device
@@ -85,13 +89,22 @@ and desk in 3D, live.
   (count, LEDs per fan, test pattern), choose memory slots and view cooler / GPU readings.
 - **Logitech devices** (mice, ...) follow along through G HUB's own LED SDK.
 - **ROG Azoth OLED (test):** **Devices > ROG Azoth > OLED display** offers direct screen
-  on/off, brightness, six built-in animations and a local clock over USB or the Omni
-  receiver. Display control is opt-in and independent of RGB; it pauses while the keyboard
+  on/off, brightness, six **ASUS built-in** animations and a local clock over USB or the Omni
+  receiver. LumaBridge runs the screen, independent of RGB; it pauses while the keyboard
   sleeps. Connection status updates when you plug/unplug USB; the cable takes priority,
   and the Omni receiver counts as wireless only after the keyboard answers a power query.
-  The default keeps the current screen. With Armoury Crate, open its OLED page for
+  **Keep current** (the default) leaves what the screen shows alone. With Armoury Crate, open its OLED page for
   custom images/GIFs, banners and live modes; LumaBridge can export a 256 x 64 banner BMP
-  ready for its importer. Direct custom image uploads are not implemented. Real keyboard
+  ready for its importer. The animation selector separates **ASUS built-in** presets from
+  **LumaBridge GIFs**: Wave, Level bars, Stars, Scanner, Rings and Rain. ASUS previews use
+  the original GIFs from the local Armoury Crate installation; unavailable artwork shows
+  a preset label. LumaBridge effects export as 256 x 64 GIFs (150 frames, 20 fps), using
+  the same renderer as their preview. Browse the six effects as animated tiles, with the
+  selected file and export controls together. An illustrated four-step guide walks through
+  exporting, opening the Azoth OLED page, choosing **Replace File**, and clicking **Apply**.
+  The gallery and guide stay visible after opening Armoury Crate, and **Copy GIF path**
+  lets you paste the exported file into its picker. Choosing a LumaBridge effect only
+  previews it until uploaded. Direct custom image uploads are not implemented. Real keyboard
   animation/clock and hotplug validation is pending; USB status, screen power and brightness
   replies are confirmed ([protocol and Armoury Crate methods](docs/azoth-oled-research.md)).
 - **RAM** (HyperX / Kingston FURY RGB DDR4, experimental) follows along, and the dashboard
@@ -130,8 +143,9 @@ and desk in 3D, live.
   LCDs and pump/fan curves stay with CAM. Newer LCD models such as USB `1E71:300E` have
   no supported RGB channel on that USB connection: RGB fans use their motherboard header
   or a separate lighting controller. Their existing temperature/RPM readings still work.
-- **Games List:** every game on the PC; open one to set up its built-in lighting or choose
-  what it shows without lighting, including its own color.
+- **Games List:** every game on the PC, with which lighting it has (built in, or the vendor
+  SDK it speaks, before you ever play it); open one to set up its built-in lighting or
+  choose what it shows without lighting, including its own color.
 - **Setup guide:** on first start, LumaBridge finds your RGB hardware and lighting software,
   asks you to confirm it and your fans, and sets up its connections to match.
 - **Integrations:** one-click setup per SDK, with live status.
@@ -141,6 +155,12 @@ and desk in 3D, live.
   Chroma, Alienware's AlienFX) sits where LumaBridge's would go, its notice can replace it
   in one click (backed up first; Remove puts it back). Dismiss one with its cross; dismissed
   notices can be shown again, and come back by themselves if the problem returns.
+- **Armoury Crate stays out of the way:** Armoury Crate puts its own lighting back whenever
+  a USB device is plugged in or out (the fans and memory went dark or flickered for seconds).
+  With Hardware access set up, LumaBridge pauses Armoury Crate's lighting service while it
+  has the lights, and starts it again when it hands them back, exits, or while Armoury
+  Crate's window is open (Settings > Armoury Crate; existing installations need **Hardware
+  access > Update** once). Without it, LumaBridge takes the lights back within a second.
 - **Calibration:** per-channel gains and gamma so Aura matches your other gear.
 - Starts with Windows if you want; the tray icon glows in the current color. Closing the
   window exits LumaBridge (minimize it to keep it running, or have closing keep it in the

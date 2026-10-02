@@ -188,6 +188,34 @@ For direct custom content, capture one small image upload and one changing telem
 value from the official client. Determine framing, pixel/value encoding, acknowledgments,
 storage writes and completion before implementing uploads or continuous updates.
 
+## Animation previews and LumaBridge effects (2026-10-02)
+
+The original Azoth's installed Armoury Crate view modules (6787, 6789 and 6791) map
+firmware indices 0..5 to `rog_ani_1`, `rog_ani_6`, `firework`, `rog_ani_4`, `heartbeat`
+and `rog_ani_8`. The selector now labels these as ASUS built-in effects. The preview
+decodes these local GIF assets with Windows Imaging Component, preserving frame delays,
+offsets, transparency and disposal. Their 208 x 64 artwork is centered on the 256 x 64
+screen; firmware status icons are not simulated. These ASUS files are read from the
+installation, not bundled. Missing artwork shows a preset label instead of an unrelated
+animation. The index mapping comes from `View/6789/index.js`'s `preloadAnime` list.
+
+The former preview stand-ins are now a separate LumaBridge GIF collection: Wave, Level
+bars, Stars, Scanner, Rings and Rain. Their shared renderer creates both the preview
+pixels and 256 x 64 grayscale GIF exports, with 150 frames at 20 fps and a 7.5-second
+loop. The animation source and each collection's selection are saved independently in
+the INI. Choosing a LumaBridge effect does not send `0x61`, select a substitute ASUS
+preset or imply that the GIF has been uploaded. Screen power and brightness still work.
+Export the GIF, then open Armoury Crate and use Custom image/animation > Replace File >
+Apply. The GIF collection uses six animated selection tiles, with export, launch and
+copy-path actions together. An illustrated four-step guide covers export, the Azoth OLED
+page, Replace File and Apply. The gallery and guide stay visible while Armoury Crate is
+open, so the file path can still be copied during import. Direct uploads remain pending
+protocol validation.
+
+Later the same day the Armoury Crate / LumaBridge choice was removed: LumaBridge always
+runs the screen (power and brightness), and **Keep current** leaves the content to Armoury
+Crate's uploads and modes. Opening Armoury Crate no longer releases the screen.
+
 These changes need an independent implementation; upstream source is a reference,
 not code imported into LumaBridge. No firmware replacement is needed for the basic
 commands above.

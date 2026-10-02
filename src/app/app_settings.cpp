@@ -184,8 +184,6 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (!v.empty()) p.azothSleepIgnoreDynamic = v != L"0";
     v = Read(ini, L"App", L"AzothKeyboard");
     if (!v.empty()) p.azothKeyboard = v != L"0";
-    v = Read(ini, L"AzothOLED", L"Direct");
-    if (!v.empty()) p.azothOled.direct = v == L"1";
     v = Read(ini, L"AzothOLED", L"Enabled");
     if (!v.empty()) p.azothOled.enabled = v != L"0";
     v = Read(ini, L"AzothOLED", L"Brightness");
@@ -194,6 +192,10 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (!v.empty()) p.azothOled.content = static_cast<azoth::OledContent>(_wtoi(v.c_str()));
     v = Read(ini, L"AzothOLED", L"Animation");
     if (!v.empty()) p.azothOled.animation = _wtoi(v.c_str());
+    v = Read(ini, L"AzothOLED", L"AnimationSource");
+    if (!v.empty()) p.azothOled.animationSource = static_cast<azoth::OledAnimationSource>(_wtoi(v.c_str()));
+    v = Read(ini, L"AzothOLED", L"LumaAnimation");
+    if (!v.empty()) p.azothOled.lumaAnimation = _wtoi(v.c_str());
     v = Read(ini, L"AzothOLED", L"Clock12Hour");
     if (!v.empty()) p.azothOled.clock12Hour = v == L"1";
     p.azothOled = azoth::NormalizeOled(p.azothOled);
@@ -225,6 +227,8 @@ Prefs LoadPrefs(const std::wstring& ini) {
             pad::DecodeBinding(Narrow(Read(ini, L"Controller", (L"Map." + Widen(pad::ButtonName(b))).c_str())));
     v = Read(ini, L"App", L"RamLighting");
     if (!v.empty()) p.ramLighting = v != L"0";
+    v = Read(ini, L"App", L"PauseArmouryCrate");
+    if (!v.empty()) p.pauseArmouryCrate = v != L"0";
     v = Read(ini, L"App", L"NzxtLighting");
     if (!v.empty()) p.nzxtLighting = v != L"0";
     p.setupDone = Read(ini, L"App", L"SetupDone") == L"1";
@@ -268,7 +272,7 @@ Prefs LoadPrefs(const std::wstring& ini) {
     v = Read(ini, L"Games", L"ForzaPort");
     if (!v.empty() && _wtoi(v.c_str()) > 0 && _wtoi(v.c_str()) < 65536) p.forzaPort = _wtoi(v.c_str());
     for (auto [key, port] : {std::pair<const wchar_t*, int*>{L"BeamngPort", &p.beamngPort}, {L"DirtPort", &p.dirtPort},
-                             {L"Ams2Port", &p.ams2Port}, {L"XplanePort", &p.xplanePort}}) {
+                             {L"Ams2Port", &p.ams2Port}, {L"XplanePort", &p.xplanePort}, {L"WrcPort", &p.wrcPort}}) {
         v = Read(ini, L"Games", key);
         if (!v.empty() && _wtoi(v.c_str()) > 0 && _wtoi(v.c_str()) < 65536) *port = _wtoi(v.c_str());
     }
@@ -372,14 +376,16 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"Games", L"DirtPort", Num(p.dirtPort));
     WriteConfigValue(ini, L"Games", L"Ams2Port", Num(p.ams2Port));
     WriteConfigValue(ini, L"Games", L"XplanePort", Num(p.xplanePort));
+    WriteConfigValue(ini, L"Games", L"WrcPort", Num(p.wrcPort));
     WriteConfigValue(ini, L"App", L"LogitechDevices", p.logitechDevices ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"LogitechKeepInGames", p.logitechForce ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"AzothKeyboard", p.azothKeyboard ? L"1" : L"0");
-    WriteConfigValue(ini, L"AzothOLED", L"Direct", p.azothOled.direct ? L"1" : L"0");
     WriteConfigValue(ini, L"AzothOLED", L"Enabled", p.azothOled.enabled ? L"1" : L"0");
     WriteConfigValue(ini, L"AzothOLED", L"Brightness", Num(p.azothOled.brightness));
     WriteConfigValue(ini, L"AzothOLED", L"Content", Num(static_cast<int>(p.azothOled.content)));
     WriteConfigValue(ini, L"AzothOLED", L"Animation", Num(p.azothOled.animation));
+    WriteConfigValue(ini, L"AzothOLED", L"AnimationSource", Num(static_cast<int>(p.azothOled.animationSource)));
+    WriteConfigValue(ini, L"AzothOLED", L"LumaAnimation", Num(p.azothOled.lumaAnimation));
     WriteConfigValue(ini, L"AzothOLED", L"Clock12Hour", p.azothOled.clock12Hour ? L"1" : L"0");
     WriteConfigValue(ini, L"AzothOLED", L"Banner", p.azothOledBanner);
     WriteConfigValue(ini, L"AzothOLED", L"BannerSize", Num(p.azothOledBannerSize));
@@ -403,6 +409,7 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"Sleep", L"AzothSeconds", Num(p.azothSleepSec));
     WriteConfigValue(ini, L"Sleep", L"AzothIgnoreDynamic", p.azothSleepIgnoreDynamic ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"RamLighting", p.ramLighting ? L"1" : L"0");
+    WriteConfigValue(ini, L"App", L"PauseArmouryCrate", p.pauseArmouryCrate ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"NzxtLighting", p.nzxtLighting ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"RamSlots", p.ramSlots < 0 ? L"auto" : Num(p.ramSlots));
     WriteConfigValue(ini, L"App", L"RamRelease", p.ramRelease == 1 ? L"off" : p.ramRelease == 2 ? L"keep" : L"rainbow");

@@ -9,11 +9,14 @@
 //   League of Legends Riot's Live Client Data API, https://127.0.0.1:2999 (always on in a match).
 //   Forza             the games' "Data Out" UDP telemetry, to 127.0.0.1:forzaPort (switched on
 //                     in the game's settings).
-//   F1 24 / F1 25     the games' own UDP telemetry, to 127.0.0.1:f1Port (switched on in the
+//   F1 2018 to F1 25  the games' own UDP telemetry, to 127.0.0.1:f1Port (switched on in the
 //                     game's settings), reading only the Car Telemetry packet.
-//   BeamNG.drive      OutGauge UDP to 127.0.0.1:beamngPort; DiRT Rally (2.0) and Automobilista 2 /
-//                     Project CARS 2: their UDP telemetry; X-Plane: its UDP data output; all
-//                     only while their game runs.
+//   BeamNG.drive      OutGauge UDP to 127.0.0.1:beamngPort (Live for Speed too); DiRT Rally,
+//                     DiRT 4, GRID, F1 2015-2017 and WRC Generations (Codemasters' format),
+//                     Automobilista 2 / Project CARS and EA SPORTS WRC: their UDP telemetry;
+//                     X-Plane: its UDP data output; all only while their game runs.
+//   Assetto Corsa,    the shared memory blocks these games publish for telemetry apps
+//   iRacing, RaceRoom (opened read-only by name, while the game runs).
 //   Elite Dangerous   its Status.json in Saved Games (always written by the game).
 //   Flight Simulator  SimConnect, the sim's own add-on interface (SimConnect.dll from Microsoft's
 //                     free Flight Simulator SDK, or next to LumaBridge.exe).
@@ -30,6 +33,7 @@
 #include <thread>
 #include <vector>
 
+#include "ac_lighting.h"
 #include "ams2_lighting.h"
 #include "beamng_lighting.h"
 #include "cs2_lighting.h"
@@ -40,10 +44,13 @@
 #include "f1_lighting.h"
 #include "flight_sim_lighting.h"
 #include "forza_lighting.h"
+#include "iracing_lighting.h"
 #include "league_lighting.h"
 #include "effects.h"
+#include "raceroom_lighting.h"
 #include "rocket_league_lighting.h"
 #include "war_thunder_lighting.h"
+#include "wrc_lighting.h"
 #include "xplane_lighting.h"
 
 namespace luma::app {
@@ -63,16 +70,21 @@ public:
     void SetF1Port(int port) { f1Port_ = port; }
     int f1Port() const { return f1Port_; }
     // The racing and flight games' UDP feeds, one generic receiver each (UdpLoop).
-    enum Udp { kBeamNg, kDirt, kAms2, kXPlane, kUdpCount };
+    enum Udp { kBeamNg, kDirt, kAms2, kXPlane, kWrc, kUdpCount };
     void SetUdpPort(Udp u, int port) { udp_[u].port = port; }
     int UdpPort(Udp u) const { return udp_[u].port; }
     bool UdpSeen(Udp u) const { return udp_[u].seen; }
     bool UdpPortBusy(Udp u) const { return udp_[u].busy; }
     bool EliteSeen() const { return eliteSeen_; }
+    // The racing games' shared memory blocks (Assetto Corsa, iRacing, RaceRoom).
+    enum Memory { kAc, kIRacing, kRaceRoom, kMemoryCount };
+    bool MemorySeen(Memory m) const { return memory_[m].seen; }    // a car on track this session
+    bool MemoryFound(Memory m) const { return memory_[m].found; }  // the game's block is open now
     // Which of the polled games are running (from the game detector).
     struct Running {
         bool rocketLeague = false, warThunder = false, league = false, forza = false, flightSim = false, dcs = false,
-             f1 = false, beamng = false, dirt = false, ams2 = false, xplane = false, elite = false;
+             f1 = false, beamng = false, dirt = false, ams2 = false, xplane = false, elite = false, wrc = false,
+             ac = false, iracing = false, raceroom = false;
     };
     void SetRunning(const Running& r) {
         rlRunning_ = r.rocketLeague;
@@ -86,6 +98,10 @@ public:
         udp_[kDirt].running = r.dirt;
         udp_[kAms2].running = r.ams2;
         udp_[kXPlane].running = r.xplane;
+        udp_[kWrc].running = r.wrc;
+        memory_[kAc].running = r.ac;
+        memory_[kIRacing].running = r.iracing;
+        memory_[kRaceRoom].running = r.raceroom;
         eliteRunning_ = r.elite;
     }
 
@@ -107,6 +123,10 @@ public:
     Feed Ams2(uint64_t now);
     Feed XPlane(uint64_t now);
     Feed Elite(uint64_t now);
+    Feed Wrc(uint64_t now);
+    Feed Ac(uint64_t now);
+    Feed IRacing(uint64_t now);
+    Feed RaceRoom(uint64_t now);
 
     bool Cs2Listening() const { return cs2Listen_ != INVALID_SOCKET; }
     bool Cs2Seen() const { return cs2Seen_; }            // CS2 has sent at least once
@@ -137,6 +157,7 @@ private:
     void DcsLoop();
     void UdpLoop(Udp u);
     void EliteLoop();
+    void MemoryLoop();
     void RlHandle(std::string* buffer);
 
     std::atomic<bool> stop_{false};
@@ -159,6 +180,11 @@ private:
     UdpGame udp_[kUdpCount];
     std::thread eliteThread_;
     std::atomic<bool> eliteRunning_{false}, eliteSeen_{false};
+    struct MemoryGame {
+        std::atomic<bool> running{false}, seen{false}, found{false};
+    };
+    MemoryGame memory_[kMemoryCount];
+    std::thread memoryThread_;
 
     std::mutex mutex_;  // guards the engines
     games::Cs2Lighting cs2_;
@@ -176,6 +202,10 @@ private:
     games::Ams2Lighting ams2_;
     games::XPlaneLighting xplane_;
     games::EliteLighting elite_;
+    games::WrcLighting wrc_;
+    games::AcLighting ac_;
+    games::IRacingLighting iracing_;
+    games::RaceRoomLighting raceroom_;
 };
 
 // Setup helpers (Integrations page). `gameDir` is the game's install folder. They return an
@@ -204,6 +234,14 @@ bool DcsSetUp();
 // Adds (or with `remove`, takes out) LumaBridge.lua and its line in Export.lua, in every DCS
 // Saved Games folder. "" on success, else what went wrong.
 std::string DcsSetUpScripts(bool remove);
+
+// EA SPORTS WRC: Documents\My Games\WRC\telemetry (empty when the game hasn't made it yet), and
+// whether its config.json sends LumaBridge's packets (and to which port: 0 when not).
+std::wstring WrcTelemetryDir();
+int WrcConfigPort();
+// Adds (or with `remove`, takes out) lumabridge.json and LumaBridge's entry in config.json,
+// sending to `port`. "" on success, else what went wrong.
+std::string WrcSetUp(int port, bool remove);
 
 // Writes `text` to `path` (UTF-8, no BOM). False with GetLastError() set on failure
 // (ERROR_ACCESS_DENIED under Program Files: the caller then retries elevated).

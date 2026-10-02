@@ -71,8 +71,8 @@ public:
     ~Device() { Close(); }
 
     // Opens it and reads what it is and where its lamps sit. False (with info().problem set)
-    // when it can't be lit.
-    bool Open(const std::wstring& path) {
+    // when it can't be lit. `log`: say so in the log when it opens.
+    bool Open(const std::wstring& path, bool log = true) {
         path_ = path;
         info_.path = Narrow(path.c_str());
         info_.id = lighting::Identity({info_.path});
@@ -155,8 +155,9 @@ public:
             minX_ = std::min(minX_, l.x);
             maxX_ = std::max(maxX_, l.x);
         }
-        LUMA_INFO("LampArray: %s (%04X:%04X, %s, %u lamps, %u per update)", info_.name.c_str(), info_.vid, info_.pid,
-                  la::KindName(info_.kind), info_.lamps, perReport_);
+        if (log)
+            LUMA_INFO("LampArray: %s (%04X:%04X, %s, %u lamps, %u per update)", info_.name.c_str(), info_.vid, info_.pid,
+                      la::KindName(info_.kind), info_.lamps, perReport_);
         return true;
     }
 
@@ -188,6 +189,7 @@ public:
     const LampArrayDevice& info() const { return info_; }
     const std::wstring& path() const { return path_; }
     bool controlling = false;
+    bool lit = false;  // has taken a frame since it was opened
 
 private:
     struct Lamp {
@@ -337,6 +339,10 @@ void LampArrayOutput::Run() {
     std::vector<std::unique_ptr<Device>> devs;   // can be lit
     std::vector<std::pair<std::wstring, LampArrayDevice>> unusable;  // found, but can't be lit (with why)
     std::vector<std::wstring> seen;              // paths looked at already
+    // Devices that open but never take a frame (seen: G HUB's virtual "Microsoft HID VHF
+    // Driver" LampArray for a Logitech mouse). They're tried again at the normal rescan, without
+    // a log line each time.
+    std::vector<std::wstring> mute;
     uint64_t nextScan = 0;
     auto publish = [&] {
         std::vector<LampArrayDevice> list;
@@ -363,12 +369,15 @@ void LampArrayOutput::Run() {
             seen.erase(std::remove_if(seen.begin(), seen.end(),
                                       [&](const std::wstring& p) { return std::find(paths.begin(), paths.end(), p) == paths.end(); }),
                        seen.end());
+            mute.erase(std::remove_if(mute.begin(), mute.end(),
+                                      [&](const std::wstring& p) { return std::find(paths.begin(), paths.end(), p) == paths.end(); }),
+                       mute.end());
             bool changed = devs.size() != devicesBefore || !previousFailures.empty();
             for (const std::wstring& p : paths) {
                 if (std::find(seen.begin(), seen.end(), p) != seen.end()) continue;
                 seen.push_back(p);
                 auto d = std::make_unique<Device>();
-                if (d->Open(p)) {
+                if (d->Open(p, std::find(mute.begin(), mute.end(), p) == mute.end())) {
                     devs.push_back(std::move(d));
                 } else {
                     const bool sameProblem = std::any_of(previousFailures.begin(), previousFailures.end(), [&](const auto& previous) {
@@ -410,12 +419,24 @@ void LampArrayOutput::Run() {
                 d.controlling = ok;
                 if (ok) ok = d.Frame(effect, t, level, first);
                 wait = std::max<DWORD>(wait, d.minIntervalMs());
+                if (ok && !d.lit) {
+                    d.lit = true;
+                    mute.erase(std::remove(mute.begin(), mute.end(), d.path()), mute.end());
+                }
             }
             if (!ok) {
-                LUMA_WARN("LampArray: %s stopped answering - unplugged?", d.info().name.c_str());
+                const bool muted = std::find(mute.begin(), mute.end(), d.path()) != mute.end();
+                if (d.lit) {
+                    LUMA_WARN("LampArray: %s stopped answering - unplugged?", d.info().name.c_str());
+                    nextScan = now + 3000;
+                } else if (!muted) {
+                    // Never took a frame: tried again at the normal rescan, quietly.
+                    LUMA_WARN("LampArray: %s doesn't take colors (another app may hold it) - trying again every %llu s",
+                              d.info().name.c_str(), static_cast<unsigned long long>(kRescanMs / 1000));
+                    mute.push_back(d.path());
+                }
                 seen.erase(std::remove(seen.begin(), seen.end(), d.path()), seen.end());  // tried again next scan
                 it = devs.erase(it);
-                nextScan = now + 3000;
                 publish();
                 continue;
             }

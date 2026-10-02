@@ -95,6 +95,7 @@ std::vector<sensors::Sensor> HardwareHelper::Sensors() const {
 void HardwareHelper::Run() {
     HANDLE mapping = nullptr;
     helper::Shared* sh = nullptr;
+
     uint64_t nextStart = 0, connectedAt = 0, helperBeat = 0, helperBeatAt = 0, appBeat = 0;
     uint32_t seq = 0, lastSensorSeq = 0;
     std::array<Rgb, ram::kMaxLeds> last{};
@@ -102,8 +103,11 @@ void HardwareHelper::Run() {
     auto disconnect = [&] {
         if (sh) {
             sh->ramOwn = 0;
+            sh->pauseAsusLighting = 0;
             UnmapViewOfFile(sh);
         }
+        asus_ = helper::AsusLighting::Unknown;
+        outdated_ = false;
         if (mapping) CloseHandle(mapping);
         sh = nullptr;
         mapping = nullptr;
@@ -134,7 +138,9 @@ void HardwareHelper::Run() {
             if (retry_.exchange(false)) nextStart = 0;
             mapping = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, helper::kSharedName);
             if (mapping) {
-                sh = static_cast<helper::Shared*>(MapViewOfFile(mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(helper::Shared)));
+                // The whole mapping: an older helper's is smaller than helper::Shared, but it's
+                // one page either way, so the later fields read zero (Unknown) from such a helper.
+                sh = static_cast<helper::Shared*>(MapViewOfFile(mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0));
                 if (!sh || sh->magic != helper::kMagic || sh->version != helper::kVersion) {
                     disconnect();  // not ready yet, or a helper from another version
                     continue;
@@ -211,6 +217,11 @@ void HardwareHelper::Run() {
                 chip_ = chip;
             }
         }
+
+        // Armoury Crate's lighting service. A helper that never reports it is too old to know it.
+        sh->pauseAsusLighting = pauseAsus_ ? 1 : 0;
+        asus_ = sh->asusLighting;
+        outdated_ = asus_ == helper::AsusLighting::Unknown && now - connectedAt > 5000;
 
         // RAM.
         sh->ramRelease = static_cast<uint32_t>(release);

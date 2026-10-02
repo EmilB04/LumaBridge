@@ -63,6 +63,8 @@ struct UiState {
     int devicesTab = 0;          // 0 Lighting and readings, 1 All hardware
     char deviceFilter[128] = "";
     std::string azothOledMessage;
+    std::string azothOledGifMessage;
+    std::wstring azothOledGifPath;
     // Notification center: dismissed notices (by id), and a pending "Open" from one of them.
     std::vector<std::string> noticesDismissed;
     bool openPending = false;
@@ -73,6 +75,8 @@ struct UiState {
     unsigned long long feedCheckAt = 0;
     bool cs2Installed = false, rlIniFound = false, rlEnabled = false, dotaInstalled = false;
     bool dcsFolders = false, dcsInstalled = false;  // DCS World: Saved Games folder found, export set up
+    bool wrcFolder = false;  // EA SPORTS WRC: its telemetry folder exists
+    int wrcConfigPort = 0;   // the port its config.json sends LumaBridge's packets to (0: not set up)
     std::wstring cs2Dir, rlDir, dotaDir;
     std::string feedMessage, feedMessageId;  // result of the last direct (non-elevated) write
     bool integrationsLoaded = false;

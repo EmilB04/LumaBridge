@@ -234,9 +234,9 @@ void Integrations::Refresh(bool gsRunning, int gsPort, bool gsOk, bool foundGG, 
 
     {
         Integration it{"helper", "Hardware access",
-                       "Lets LumaBridge light HyperX / Kingston FURY RGB memory and read fan speeds and CPU / board "
-                       "temperatures itself (no LibreHardwareMonitor). Installs the bundled, signed PawnIO driver "
-                       "and LumaBridge's helper.",
+                       "Lets LumaBridge light HyperX / Kingston FURY RGB memory, read fan speeds and CPU / board "
+                       "temperatures itself (no LibreHardwareMonitor), and pause Armoury Crate's lighting while "
+                       "LumaBridge has the lights. Installs the bundled, signed PawnIO driver and LumaBridge's helper.",
                        IntegrationState::NotInstalled, ""};
         if (HelperTaskInstalled()) {
             DWORD version = 0, size = sizeof version;

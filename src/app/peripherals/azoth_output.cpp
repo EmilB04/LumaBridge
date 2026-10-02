@@ -399,7 +399,8 @@ void AzothOutput::Run() {
                 if (ok) {
                     appliedRevision = revision;
                     lastClock = clock;
-                    if (oled.enabled && oled.content == azoth::OledContent::Animation) oledAnimation_ = oled.animation;
+                    if (oled.enabled && oled.content == azoth::OledContent::Animation &&
+                        oled.animationSource == azoth::OledAnimationSource::Asus) oledAnimation_ = oled.animation;
                     oledError_ = 0;
                     oledState_ = OledState::Active;
                     {

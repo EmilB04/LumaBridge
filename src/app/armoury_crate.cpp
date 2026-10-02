@@ -152,6 +152,21 @@ bool LaunchArmouryCrate() {
 
 bool HandbackTaskInstalled() { return RunHidden(Schtasks(L"/query"), 10000) == 0; }
 
+bool ArmouryCrateWindowOpen() {
+    bool open = false;
+    EnumWindows(
+        [](HWND w, LPARAM found) -> BOOL {
+            if (!IsWindowVisible(w)) return TRUE;
+            wchar_t title[64] = {};
+            GetWindowTextW(w, title, 64);
+            if (_wcsicmp(title, L"Armoury Crate") != 0) return TRUE;
+            *reinterpret_cast<bool*>(found) = true;
+            return FALSE;
+        },
+        reinterpret_cast<LPARAM>(&open));
+    return open;
+}
+
 void HandBackLighting() {
     const std::wstring log = HandbackLogPath();
     const long long before = FileSize(log);

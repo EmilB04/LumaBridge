@@ -59,6 +59,7 @@ bool Controller::Init() {
     feeds_.SetUdpPort(GameFeeds::kDirt, prefs_.dirtPort);
     feeds_.SetUdpPort(GameFeeds::kAms2, prefs_.ams2Port);
     feeds_.SetUdpPort(GameFeeds::kXPlane, prefs_.xplanePort);
+    feeds_.SetUdpPort(GameFeeds::kWrc, prefs_.wrcPort);
     feeds_.Start();
     monitor_.Start(prefs_.lhmPort);
     if (prefs_.logitechDevices) logitech_.Start(AppDirectory() + L"\\integrations\\LumaBridge_x64.dll");
@@ -260,6 +261,7 @@ void Controller::RefreshFeedSettings() {
     feeds_.SetUdpPort(GameFeeds::kDirt, prefs_.dirtPort);
     feeds_.SetUdpPort(GameFeeds::kAms2, prefs_.ams2Port);
     feeds_.SetUdpPort(GameFeeds::kXPlane, prefs_.xplanePort);
+    feeds_.SetUdpPort(GameFeeds::kWrc, prefs_.wrcPort);
 }
 
 void Controller::RescanLibrary() {
@@ -651,27 +653,43 @@ void Controller::UpdateFeeds(uint64_t now) {
             running.ams2 |= g.profile->feed == games::Feed::Ams2Udp;
             running.xplane |= g.profile->feed == games::Feed::XPlaneUdp;
             running.elite |= g.profile->feed == games::Feed::EliteStatus;
+            running.wrc |= g.profile->feed == games::Feed::WrcUdp;
+            running.ac |= g.profile->feed == games::Feed::AcSharedMemory;
+            running.iracing |= g.profile->feed == games::Feed::IRacingSdk;
+            running.raceroom |= g.profile->feed == games::Feed::RaceRoomSharedMemory;
         }
     feeds_.SetRunning(running);
+    // A feed several games share (OutGauge, the Codemasters telemetry, ...) carries the name of
+    // the one running, so its lighting is matched to it on the Games pages.
+    auto gameFor = [&](games::Feed feed, const char* fallback) {
+        for (const GameStatus& g : games_)
+            if (g.profile && g.profile->feed == feed) return g.game.name;
+        return std::string(fallback);
+    };
+    using F = games::Feed;
     struct {
         GameFeeds::Feed feed;
         const char* sdk;
-        const char* game;
+        std::string game;
     } feeds[] = {
         {feeds_.Cs2(now), "Game State Integration", "Counter-Strike 2"},
         {feeds_.RocketLeague(now), "Stats API", "Rocket League"},
         {feeds_.WarThunder(now), "local status page", "War Thunder"},
         {feeds_.Dota2(now), "Game State Integration", "Dota 2"},
         {feeds_.League(now), "Live Client Data API", "League of Legends"},
-        {feeds_.Forza(now), "Data Out telemetry", "Forza"},
+        {feeds_.Forza(now), "Data Out telemetry", gameFor(F::ForzaDataOut, "Forza")},
         {feeds_.FlightSim(now), "SimConnect", "Microsoft Flight Simulator"},
         {feeds_.Dcs(now), "export script", "DCS World"},
-        {feeds_.F1(now), "UDP telemetry", "F1"},
-        {feeds_.BeamNg(now), "OutGauge", "BeamNG.drive"},
-        {feeds_.Dirt(now), "UDP telemetry", "DiRT Rally"},
-        {feeds_.Ams2(now), "UDP telemetry", "Automobilista 2"},
+        {feeds_.F1(now), "UDP telemetry", gameFor(F::F1Telemetry, "F1")},
+        {feeds_.BeamNg(now), "OutGauge", gameFor(F::BeamNgOutGauge, "BeamNG.drive")},
+        {feeds_.Dirt(now), "Codemasters telemetry", gameFor(F::DirtRallyUdp, "DiRT Rally")},
+        {feeds_.Ams2(now), "UDP telemetry", gameFor(F::Ams2Udp, "Automobilista 2")},
         {feeds_.XPlane(now), "UDP data output", "X-Plane"},
         {feeds_.Elite(now), "Status.json", "Elite Dangerous"},
+        {feeds_.Wrc(now), "WRC telemetry", "EA SPORTS WRC"},
+        {feeds_.Ac(now), "shared memory telemetry", gameFor(F::AcSharedMemory, "Assetto Corsa")},
+        {feeds_.IRacing(now), "iRacing SDK", "iRacing"},
+        {feeds_.RaceRoom(now), "R3E shared memory", "RaceRoom Racing Experience"},
     };
     static_assert(sizeof(feeds) / sizeof(feeds[0]) == sizeof(feedActive_) / sizeof(feedActive_[0]), "one flag per feed");
     for (size_t i = 0; i < std::size(feeds); ++i) {
@@ -826,6 +844,19 @@ void Controller::Tick() {
                    prefs_.dualsenseController && !output_.stopped && !DeviceNative(prefs_, device::kController));
     hardware_.SetRam(DeviceEffect(device::kRam), cfg_.auraCorrection.brightness * DeviceBrightness(prefs_, device::kRam), prefs_.ramLighting,
                      !output_.stopped && !DeviceNative(prefs_, device::kRam), prefs_.ramRelease);
+    // Armoury Crate's lighting service re-applies its own lighting whenever a USB device comes
+    // or goes (dark, flickering fans and a stalled RAM effect): kept paused while LumaBridge has
+    // ASUS lights, unless Armoury Crate's window is open (then it's being used).
+    if (now >= armouryCheckAt_) {
+        armouryCheckAt_ = now + 2000;
+        const bool open = ArmouryCrateWindowOpen();
+        if (open != armouryOpen_ && prefs_.pauseArmouryCrate)
+            LUMA_INFO("Armoury Crate's window %s - its lighting service %s", open ? "is open" : "closed",
+                      open ? "runs meanwhile" : "is paused again");
+        armouryOpen_ = open;
+    }
+    const bool asusLights = !output_.stopped && (mirror_.IsRunning() || (prefs_.ramLighting && !DeviceNative(prefs_, device::kRam)));
+    hardware_.SetPauseAsusLighting(prefs_.pauseArmouryCrate && asusLights && !armouryOpen_);
     if (now - sensorsPushedAt_ >= 500) {
         sensorsPushedAt_ = now;
         monitor_.SetBuiltInSensors(hardware_.Sensors(), hardware_.chip());

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "effects.h"
+#include "helper_ipc.h"
 #include "lhm.h"
 
 namespace luma::app {
@@ -46,6 +47,13 @@ public:
     // `brightness` 0..1; `wanted`: RAM lighting switched on; `own = false` lets go of the
     // sticks, which then show `release` (helper::RamRelease: their own rainbow, off, last color).
     void SetRam(const fx::Params& effect, double brightness, bool wanted, bool own, int release);
+    // Keep Armoury Crate's lighting service (ASUS LightingService) stopped while `on`; the
+    // helper starts it again when this goes false or LumaBridge exits.
+    void SetPauseAsusLighting(bool on) { pauseAsus_ = on; }
+    // That service's state, as the helper sees it (Unknown without a helper, or an older one).
+    helper::AsusLighting asusLighting() const { return asus_; }
+    // The running helper is too old to pause the service (Hardware access needs an update).
+    bool helperOutdated() const { return outdated_; }
 
     State state() const { return state_; }
     RamState ramState() const { return ramState_; }
@@ -63,6 +71,8 @@ private:
     std::atomic<State> state_{State::Off};
     std::atomic<RamState> ramState_{RamState::Off};
     std::atomic<int> sticks_{0};
+    std::atomic<bool> pauseAsus_{false}, outdated_{false};
+    std::atomic<helper::AsusLighting> asus_{helper::AsusLighting::Unknown};
     mutable std::mutex mutex_;
     fx::Params effect_;
     double brightness_ = 1.0;

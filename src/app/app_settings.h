@@ -76,7 +76,8 @@ struct Prefs {
     int dirtPort = 20777;    // DiRT Rally / DiRT Rally 2.0's telemetry
     int ams2Port = 5606;     // Automobilista 2 / Project CARS 2's UDP
     int xplanePort = 49003;  // X-Plane's data output
-    int f1Port = 20777;    // where F1 24 / F1 25's telemetry sends (set the same in the game)
+    int f1Port = 20777;    // where the F1 games' telemetry sends (set the same in the game)
+    int wrcPort = 49718;   // where EA SPORTS WRC sends LumaBridge's packets (written into its config.json)
     // Light Logitech devices (G HUB) along with Aura.
     bool logitechDevices = true;
     // Keep Logitech devices with LumaBridge even while a game lights them itself (through
@@ -109,6 +110,9 @@ struct Prefs {
     bool dualsenseController = true;
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper.
     bool ramLighting = true;
+    // Keep Armoury Crate's lighting service paused while LumaBridge has the lights (through the
+    // hardware helper): it re-applies its own lighting when USB devices change.
+    bool pauseArmouryCrate = true;
     // Experimental documented Kraken X3 pump / Z3 accessory lighting. LCDs stay with CAM.
     bool nzxtLighting = false;
     // Light devices with Windows' lighting standard built in (HID LampArray), directly.

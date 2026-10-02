@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "game_catalog.h"
+#include "game_profiles.h"
 #include "log.h"
 
 namespace luma::app {
@@ -134,7 +135,11 @@ void GameDetector::Inspect(uint32_t pid, Entry* e) {
     const std::wstring lower = games::Lower(path);
     const bool windowsGame = windowsGames_.count(lower) != 0;
     const bool added = extraGames_.count(lower) != 0;
-    if (!where.inLibrary && !windowsGame && !added) return;
+    // Games with built-in lighting that install outside the store libraries (iRacing, X-Plane,
+    // DCS, Live for Speed) count by their exe.
+    const games::GameProfile* known = games::FindProfile(Utf8(e->exeName), "");
+    const bool builtIn = known && known->kind == games::ProfileKind::BuiltIn;
+    if (!where.inLibrary && !windowsGame && !added && !builtIn) return;
     if (!added && games::IsHelperExe(e->exeName)) return;  // what the user added always counts
 
     e->candidate = true;

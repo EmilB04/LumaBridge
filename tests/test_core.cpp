@@ -9,9 +9,11 @@
 
 #include "color.h"
 #include "effects.h"
+#include "azoth_oled_effects.h"
 #include "lighting_state.h"
 #include "chroma_translate.h"
 #include "aura_usb_protocol.h"
+#include "direct_mode_reclaim.h"
 #include "core_props.h"
 #include "fake_devices.h"
 #include "gamesense_engine.h"
@@ -37,6 +39,10 @@
 #include "ams2_lighting.h"
 #include "xplane_lighting.h"
 #include "elite_lighting.h"
+#include "ac_lighting.h"
+#include "iracing_lighting.h"
+#include "raceroom_lighting.h"
+#include "wrc_lighting.h"
 #include "scene3d.h"
 #include "controller_model.h"
 #include "scene_mesh.h"
@@ -634,7 +640,7 @@ static void TestGameProfiles() {
     CHECK(FindProfile("civilizationvi.exe", "")->kind == ProfileKind::VendorSdk && !FindProfile("civilizationvi.exe", "")->blocked);
     CHECK(FindProfile("gta5.exe", "")->kind == ProfileKind::VendorSdk);
     CHECK(FindProfile("", "American Truck Simulator")->kind == ProfileKind::VendorSdk);
-    CHECK(FindProfile("iracingsim64dx11.exe", "")->kind == ProfileKind::VendorSdk);
+    CHECK(FindProfile("iracingsim64dx11.exe", "")->feed == Feed::IRacingSdk);
 }
 
 static void TestCs2() {
@@ -1609,6 +1615,250 @@ static void TestNotifications() {
     CHECK(Visible(Collect(f), &dismissed).empty() && dismissed.empty());
     f.windowsProblems = 1;
     CHECK(Visible(Collect(f), &dismissed).size() == 1);
+}
+
+static void TestRacingFeeds() {
+    using namespace luma::app::games;
+    using luma::fx::Kind;
+    // F1: every year's layout, from the packet format in the first two bytes.
+    {
+        struct Year {
+            uint16_t format;
+            size_t header, packetId, playerIndex, carSize, rpm = 16, rev = 19;
+        };
+        for (const Year& y : {Year{2018, 21, 3, 20, 53, 7, 10}, Year{2019, 23, 5, 22, 66}, Year{2020, 24, 5, 22, 58},
+                              Year{2021, 24, 5, 22, 60}, Year{2022, 24, 5, 22, 60}, Year{2023, 29, 6, 27, 60},
+                              Year{2025, 29, 6, 27, 60}}) {
+            F1Lighting f;
+            std::vector<uint8_t> p(y.header + 22 * y.carSize, 0);
+            std::memcpy(&p[0], &y.format, 2);
+            p[y.packetId] = F1Lighting::kCarTelemetryPacketId;
+            p[y.playerIndex] = 3;
+            const size_t car = y.header + 3 * y.carSize;
+            const uint16_t rpm = 11000;
+            std::memcpy(&p[car + y.rpm], &rpm, 2);
+            p[car + y.rev] = 100;  // shift lights full
+            CHECK(f.OnPacket(p.data(), p.size(), 1000) && f.Active(1000) && f.Current().kind == Kind::Strobe);
+            p[y.packetId] = 2;  // another packet
+            CHECK(!f.OnPacket(p.data(), p.size(), 1000));
+        }
+        CHECK(FindProfile("F1_23.exe", "")->feed == Feed::F1Telemetry && FindProfile("F1_2019_dx12.exe", "")->feed == Feed::F1Telemetry);
+        CHECK(FindProfile("F1_2018.exe", "")->feed == Feed::F1Telemetry && FindProfile("F1_2017.exe", "")->feed == Feed::DirtRallyUdp);
+        F1Lighting f;
+        std::vector<uint8_t> shortPacket(24, 0);
+        shortPacket[0] = 0xE7, shortPacket[1] = 0x07;  // 2023 layout, but too short for its header
+        CHECK(!f.OnPacket(shortPacket.data(), shortPacket.size(), 1000));
+        CHECK(FindProfile("x.exe", "EA SPORTS\xE2\x84\xA2 F1\xC2\xAE 24")->feed == Feed::F1Telemetry);
+    }
+    // Games that share a feed with another.
+    CHECK(FindProfile("LFS.exe", "")->feed == Feed::BeamNgOutGauge && std::strcmp(FindProfile("LFS.exe", "")->key, "lfs") == 0);
+    CHECK(FindProfile("dirt4.exe", "")->feed == Feed::DirtRallyUdp && FindProfile("x.exe", "GRID Legends")->feed == Feed::DirtRallyUdp);
+    CHECK(FindProfile("pCARS3.exe", "")->feed == Feed::Ams2Udp && FindProfile("pCARS64.exe", "")->feed == Feed::Ams2Udp);
+    CHECK(FindProfile("x.exe", "WRC Generations")->feed == Feed::DirtRallyUdp);
+    // Project CARS (the first one): its own 1367-byte telemetry packet.
+    {
+        Ams2Lighting a;
+        std::vector<uint8_t> p(Ams2Lighting::kPcars1Size, 0);
+        const uint16_t rpm = 7800, maxRpm = 8000;
+        std::memcpy(&p[124], &rpm, 2);
+        std::memcpy(&p[126], &maxRpm, 2);
+        p[110] = Ams2Lighting::kEngineActive;
+        CHECK(a.OnPacket(p.data(), p.size(), 1000) && a.Active(1000) && a.Current().kind == luma::fx::Kind::Strobe);
+        p[2] = 1;  // another packet type
+        CHECK(!a.OnPacket(p.data(), p.size(), 1100));
+    }
+    CHECK(FindProfile("forza_steamworks_release_final.exe", "")->feed == Feed::ForzaDataOut);
+    // Assetto Corsa / Competizione: physics (rpm at 20, pit limiter at 248), graphics (status at
+    // 4), static (max rpm at 412).
+    {
+        AcLighting a;
+        std::vector<uint8_t> phys(800, 0), gfx(1500, 0), stat(800, 0);
+        auto set = [](std::vector<uint8_t>& b, size_t at, int32_t v) { std::memcpy(&b[at], &v, 4); };
+        set(phys, 0, 1);
+        set(phys, 20, 4000);
+        set(stat, 412, 8000);
+        set(gfx, 4, 0);  // in the menus
+        CHECK(!a.OnBlocks(phys.data(), phys.size(), gfx.data(), gfx.size(), stat.data(), stat.size(), 1000) && !a.Active(1000));
+        set(gfx, 4, AcLighting::kLive);
+        CHECK(a.OnBlocks(phys.data(), phys.size(), gfx.data(), gfx.size(), stat.data(), stat.size(), 1000) && a.Active(1000));
+        CHECK((a.Current().kind == Kind::Static && a.Current().color1 == luma::Rgb{0, 90, 255}));  // half the redline
+        set(phys, 0, 2);
+        set(phys, 20, 7900);
+        a.OnBlocks(phys.data(), phys.size(), gfx.data(), gfx.size(), stat.data(), stat.size(), 1100);
+        CHECK(a.Current().kind == Kind::Strobe);  // at the limit
+        set(phys, 248, 1);
+        a.OnBlocks(phys.data(), phys.size(), gfx.data(), gfx.size(), stat.data(), stat.size(), 1200);
+        CHECK(a.Current().kind == Kind::Breathing);  // pit limiter
+        // The physics block stops counting (the game went away): not active after a second.
+        a.OnBlocks(phys.data(), phys.size(), gfx.data(), gfx.size(), stat.data(), stat.size(), 1100 + AcLighting::kStaleMs + 50);
+        CHECK(!a.Active(1100 + AcLighting::kStaleMs + 50));
+        CHECK(!a.OnBlocks(phys.data(), 100, gfx.data(), gfx.size(), nullptr, 0, 3000));  // too small
+        CHECK(FindProfile("acs.exe", "")->feed == Feed::AcSharedMemory &&
+              FindProfile("AC2-Win64-Shipping.exe", "")->feed == Feed::AcSharedMemory);
+        // Assetto Corsa EVO: the redline is in the physics block (588), no static block.
+        AcLighting evo;
+        set(phys, 0, 5);
+        set(phys, 20, 4500);
+        set(phys, 248, 0);
+        set(phys, 588, 9000);
+        CHECK(!evo.OnBlocks(phys.data(), 400, gfx.data(), gfx.size(), nullptr, 0, 5000, true));  // too small for EVO
+        CHECK(evo.OnBlocks(phys.data(), phys.size(), gfx.data(), gfx.size(), nullptr, 0, 5000, true) && evo.Active(5000));
+        CHECK((evo.Current().kind == Kind::Static && evo.Current().color1 == luma::Rgb{0, 90, 255}));  // half of 9000
+        CHECK(FindProfile("", "Assetto Corsa EVO")->feed == Feed::AcSharedMemory);
+    }
+    // iRacing: a header, var headers and one buffer, built as the SDK lays them out.
+    {
+        struct V {
+            const char* name;
+            int32_t type, offset;
+        };
+        const V vars[] = {{"SessionTime", IRacingLighting::kDouble, 0}, {"IsOnTrack", IRacingLighting::kBool, 8},
+                          {"RPM", IRacingLighting::kFloat, 12},          {"PlayerCarSLFirstRPM", IRacingLighting::kFloat, 16},
+                          {"PlayerCarSLShiftRPM", IRacingLighting::kFloat, 20}, {"PlayerCarSLBlinkRPM", IRacingLighting::kFloat, 24},
+                          {"EngineWarnings", IRacingLighting::kBitField, 28}, {"SessionFlags", IRacingLighting::kBitField, 32}};
+        const int32_t numVars = 8, varOffset = 112, bufOffset = 112 + numVars * 144;
+        std::vector<uint8_t> b(bufOffset + 64, 0);
+        auto i32 = [&](size_t at, int32_t v) { std::memcpy(&b[at], &v, 4); };
+        auto f32 = [&](size_t at, float v) { std::memcpy(&b[bufOffset + at], &v, 4); };
+        i32(4, 1);  // connected
+        i32(24, numVars);
+        i32(28, varOffset);
+        i32(32, 1);
+        i32(48, 10);  // tick
+        i32(52, bufOffset);
+        for (int i = 0; i < numVars; ++i) {
+            const size_t h = static_cast<size_t>(varOffset + i * 144);
+            i32(h, vars[i].type);
+            i32(h + 4, vars[i].offset);
+            i32(h + 8, 1);
+            std::memcpy(&b[h + 16], vars[i].name, std::strlen(vars[i].name));
+        }
+        IRacingLighting r;
+        CHECK(r.OnBlock(b.data(), b.size(), 1000) && !r.Active(1000));  // in the garage
+        b[bufOffset + 8] = 1;  // on track
+        f32(12, 3000);
+        f32(16, 5000);
+        f32(20, 7000);
+        f32(24, 7300);
+        i32(48, 11);
+        CHECK(r.OnBlock(b.data(), b.size(), 1100) && r.Active(1100));
+        CHECK((r.Current().kind == Kind::Static && r.Current().color1 == luma::Rgb{0, 90, 255}));  // below the first light
+        f32(12, 7400);  // past the blink point
+        r.OnBlock(b.data(), b.size(), 1200);
+        CHECK(r.Current().kind == Kind::Strobe && r.Current().color1 == (luma::Rgb{255, 0, 0}));
+        i32(bufOffset + 32, 0x20);  // blue flag
+        r.OnBlock(b.data(), b.size(), 1300);
+        CHECK(r.Current().kind == Kind::Breathing && r.Current().color1 == (luma::Rgb{0, 80, 255}));
+        i32(bufOffset + 32, 0x8);  // yellow
+        r.OnBlock(b.data(), b.size(), 1400);
+        CHECK(r.Current().kind == Kind::Strobe && r.Current().color1 == (luma::Rgb{255, 200, 0}));
+        i32(bufOffset + 32, 0);
+        i32(bufOffset + 28, 0x10);  // pit limiter
+        r.OnBlock(b.data(), b.size(), 1500);
+        CHECK(r.Current().kind == Kind::Breathing && r.Current().color1 == (luma::Rgb{255, 170, 0}));
+        i32(4, 0);  // the sim left
+        CHECK(!r.OnBlock(b.data(), b.size(), 1600) && !r.Active(1600));
+        CHECK(!r.OnBlock(b.data(), 50, 1700));
+    }
+    // RaceRoom: version 3, engine speeds at 1396 / 1400 / 1404, pit limiter at 1572.
+    {
+        RaceRoomLighting r;
+        std::vector<uint8_t> b(2000, 0);
+        auto i32 = [&](size_t at, int32_t v) { std::memcpy(&b[at], &v, 4); };
+        auto f32 = [&](size_t at, float v) { std::memcpy(&b[at], &v, 4); };
+        i32(0, 3);
+        f32(1396, 300);
+        f32(1400, 900);
+        f32(1404, 850);
+        i32(24, 1);  // in the menus
+        CHECK(!r.OnBlock(b.data(), b.size(), 1000) && !r.Active(1000));
+        i32(24, 0);
+        CHECK(r.OnBlock(b.data(), b.size(), 1000) && r.Active(1000));
+        CHECK(r.Current().kind == Kind::Static);
+        f32(1396, 860);  // past the upshift point
+        r.OnBlock(b.data(), b.size(), 1100);
+        CHECK(r.Current().kind == Kind::Strobe);
+        i32(1572, 1);
+        r.OnBlock(b.data(), b.size(), 1200);
+        CHECK(r.Current().kind == Kind::Breathing);
+        i32(0, 2);  // an older block layout
+        CHECK(!r.OnBlock(b.data(), b.size(), 1300));
+        CHECK(FindProfile("RRRE64.exe", "")->feed == Feed::RaceRoomSharedMemory);
+    }
+    // EA SPORTS WRC: LumaBridge's own 9-byte packet, and its entry in config.json.
+    {
+        WrcLighting w;
+        uint8_t p[9] = {3};
+        const float rpm = 3000, maxRpm = 8000;
+        std::memcpy(p + 1, &rpm, 4);
+        std::memcpy(p + 5, &maxRpm, 4);
+        CHECK(!w.OnPacket(p, 8, 1000));
+        CHECK(w.OnPacket(p, 9, 1000) && w.Active(1000) && w.Current().kind == Kind::Static);
+        CHECK(!w.Active(1000 + WrcLighting::kStaleMs + 1));
+        const std::string config = "{\n\t\"udp\":\n\t{\n\t\t\"packets\": [\n\t\t\t{\n\t\t\t\t\"structure\": \"wrc\",\n"
+                                   "\t\t\t\t\"packet\": \"session_update\",\n\t\t\t\t\"port\": 20777,\n\t\t\t\t\"bEnabled\": false\n"
+                                   "\t\t\t}\n\t\t]\n\t}\n}\n";
+        const std::string added = WrcConfigText(config, 49718, false);
+        CHECK(WrcConfigHasLumaBridge(added) && WrcConfigPortIn(added) == 49718 && WrcConfigPortIn(config) == 0);
+        CHECK(added.find("\"bEnabled\": true\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"structure\": \"wrc\"") != std::string::npos);
+        luma::Json j;
+        CHECK(luma::Json::Parse(added, &j));
+        CHECK(WrcConfigText(added, 49718, false) == added);  // once only
+        CHECK(WrcConfigText(added, 0, true) == config);       // and out again, as it was
+        const std::string empty = "{ \"udp\": { \"packets\": [] } }";
+        const std::string addedToEmpty = WrcConfigText(empty, 40000, false);
+        CHECK(luma::Json::Parse(addedToEmpty, &j) && WrcConfigPortIn(addedToEmpty) == 40000);
+        CHECK(WrcConfigText(addedToEmpty, 0, true) == empty);
+        CHECK(WrcConfigText("{}", 1, false).empty());
+        CHECK(luma::Json::Parse(WrcStructureText(), &j));
+        CHECK(FindProfile("WRC.exe", "")->feed == Feed::WrcUdp);
+    }
+}
+
+static void TestSdkCatalog() {
+    using namespace luma::app::games;
+    // The vendor-SDK games become profiles: by exe, by name, by another name.
+    const GameProfile* cp = FindProfile("Cyberpunk2077.exe", "");
+    CHECK(cp && cp->kind == ProfileKind::VendorSdk && std::strcmp(cp->how, "Razer Chroma") == 0);
+    CHECK(FindProfile("", "Baldur's Gate 3") && FindProfile("", "Baldurs Gate 3") == FindProfile("bg3.exe", ""));
+    const GameProfile* fn = FindProfile("FortniteClient-Win64-Shipping.exe", "");
+    CHECK(fn && std::strstr(fn->how, "Razer Chroma") && std::strstr(fn->how, "Logitech"));  // hands Logitech gear over
+    CHECK(FindProfile("", "Tom Clancy's The Division\xC2\xAE 2") == FindProfile("TheDivision2.exe", ""));
+    CHECK(std::strstr(FindProfile("", "The Division 2")->how, "Corsair iCUE"));
+    CHECK(std::strstr(FindProfile("", "Mortal Kombat 11")->how, "SteelSeries GameSense"));
+    CHECK(std::strstr(FindProfile("", "Kingdom Come: Deliverance")->how, "Alienware AlienFX"));
+    CHECK(std::strstr(FindProfile("", "Kingdom Come: Deliverance")->note, "Integrations"));
+    // From Razer's own list, and the games that light ASUS Aura themselves.
+    CHECK(std::strstr(FindProfile("", "Control Resonant")->how, "Razer Chroma"));
+    CHECK(std::strstr(FindProfile("", "Tropico 6")->how, "ASUS Aura Sync") && !std::strstr(FindProfile("", "Tropico 6")->note, "Screen colors"));
+    CHECK(std::strstr(FindProfile("bf6.exe", "")->how, "Razer Chroma") && std::strstr(FindProfile("bf6.exe", "")->how, "Logitech"));
+    CHECK(FindProfile("VALORANT-Win64-Shipping.exe", "")->kind == ProfileKind::NoSupport);
+    // Hand-written profiles win over the catalog: no second Apex, no vendor profile for a built-in game.
+    CHECK(std::strcmp(FindProfile("r5apex.exe", "")->key, "apex") == 0);
+    CHECK(FindProfile("", "iRacing")->kind == ProfileKind::BuiltIn);
+    // Keys are unique and each profile is found by its key.
+    size_t count = 0;
+    const GameProfile* all = Profiles(&count);
+    CHECK(count > 350);
+    for (size_t i = 0; i < count; ++i) CHECK(ProfileByKey(all[i].key) == &all[i]);
+    CHECK(ProfileByKey("sdk-cyberpunk2077") == cp && ProfileByKey("nope") == nullptr);
+}
+
+static void TestDirectModeReclaim() {
+    using luma::aurausb::DirectModeReclaim;
+    DirectModeReclaim r;
+    CHECK(!r.Active() && !r.Due(100000));  // nothing happened: never
+    CHECK(r.OnEvent(1000) && r.Active());
+    CHECK(!r.Due(1000) && !r.Due(1499));
+    CHECK(r.Due(1500) && !r.Due(1600));     // once per moment
+    CHECK(!r.OnEvent(2000));                // the rest of a burst (another device node): no change
+    CHECK(!r.Due(2499) && r.Due(2500));     // 1.5 s after the first event, not the last
+    CHECK(r.Due(20000) && !r.Due(20001));   // a late check catches up in one go
+    CHECK(!r.Active());
+    int count = 0;
+    r.OnEvent(0);
+    for (uint64_t t = 0; t <= 20000; t += 100) count += r.Due(t) ? 1 : 0;
+    CHECK(count == static_cast<int>(DirectModeReclaim::kSteps) && DirectModeReclaim::kAfterMs[DirectModeReclaim::kSteps - 1] <= 15000);
 }
 
 static void TestMoreGames() {
@@ -2657,8 +2907,7 @@ static void TestAzothOled() {
     using namespace luma::app::azoth;
     const OledTime evening{2026, 10, 2, 23, 59};
     OledSettings s;
-    CHECK(OledCommands(s, Link::Wired, evening).empty()); // Default sends nothing to the display.
-    s.direct = true;
+    CHECK(s.direct);  // LumaBridge runs the screen: power and brightness, the content kept
     auto reports = OledCommands(s, Link::Wired, evening);
     CHECK(reports.size() == 2 && reports[0][1] == 0x69 && reports[0][5] == 1);
     CHECK(reports[1][1] == 0x68 && reports[1][5] == 50); // Keep content never selects an animation.
@@ -2675,6 +2924,20 @@ static void TestAzothOled() {
         CHECK(r[0] == 2 && !IsSave(r));
         for (size_t i = 6; i < r.size(); ++i) CHECK(r[i] == 0);
     }
+    const auto asusSettings = s;
+    s.animationSource = OledAnimationSource::LumaBridge;
+    s.lumaAnimation = 4;
+    CHECK(s != asusSettings);
+    for (const auto link : {Link::Wired, Link::Wireless}) {
+        const auto custom = OledCommands(s, link, evening);
+        CHECK(custom.size() == 2);
+        for (const auto& command : custom) CHECK(command[1] != 0x61 && !IsSave(command));
+    }
+    s.lumaAnimation = 999;
+    CHECK(NormalizeOled(s).lumaAnimation == 5);
+    s.animationSource = static_cast<OledAnimationSource>(999);
+    CHECK(NormalizeOled(s).animationSource == OledAnimationSource::Asus);
+    s = asusSettings;
     s.animation = -10;
     s.brightness = -1;
     CHECK(NormalizeOled(s).animation == 0 && NormalizeOled(s).brightness == 0);
@@ -2717,6 +2980,58 @@ static void TestAzothOled() {
     CHECK(bmp[10] == 54 && bmp[18] == 0 && bmp[19] == 1 && bmp[22] == 64 && bmp[28] == 24);
     CHECK(bmp[54] == 77 && bmp[55] == 77 && bmp[56] == 77); // Bottom row first, BGR.
     CHECK(bmp[54 + kOledWidth * (kOledHeight - 1) * 3] == 255);
+}
+
+static void TestAzothOledEffects() {
+    using namespace luma::app::azoth;
+    CHECK(std::wstring(kAsusAnimationFiles[2]) == L"firework");
+    CHECK(std::wstring(kAsusAnimationFiles[4]) == L"heartbeat");
+    CHECK(kOledEffectFrames <= 196 && 100 / kOledEffectDelay <= 25 && kOledEffectSeconds <= 8);
+    std::vector<std::vector<uint8_t>> examples;
+    for (int effect = 0; effect < 6; ++effect) {
+        const auto first = RenderOledEffect(effect, 1.25);
+        CHECK(first.size() == kOledWidth * kOledHeight);
+        CHECK(first == RenderOledEffect(effect, 1.25));
+        CHECK(first == RenderOledEffect(effect, 1.25 + kOledEffectSeconds));
+        CHECK(first == RenderOledEffect(effect, 1.25 - kOledEffectSeconds));
+        CHECK(first != RenderOledEffect(effect, 2.5));
+        CHECK(std::any_of(first.begin(), first.end(), [](uint8_t p) { return p != 0; }));
+        CHECK(std::any_of(first.begin(), first.end(), [](uint8_t p) { return p == 0; }));
+        for (const auto& previous : examples) CHECK(first != previous);
+        examples.push_back(first);
+    }
+    const auto invalid = RenderOledEffect(-1, 0);
+    CHECK(std::all_of(invalid.begin(), invalid.end(), [](uint8_t p) { return p == 0; }));
+    CHECK(RenderOledEffect(0, std::numeric_limits<double>::infinity()) == invalid);
+    CHECK(OledEffectGif(-1).empty() && OledEffectGif(6).empty());
+    const auto gif = OledEffectGif(0);
+    CHECK(gif.size() > 1000 && std::memcmp(gif.data(), "GIF89a", 6) == 0 && gif.back() == 0x3B);
+    CHECK(gif[6] == 0 && gif[7] == 1 && gif[8] == 64 && gif[9] == 0);
+    // Walk the actual block lengths, so image data cannot masquerade as frame headers.
+    size_t at = 13 + 256 * 3;
+    int frames = 0, delay = 0;
+    while (at + 1 < gif.size()) {
+        const auto type = gif[at++];
+        if (type == 0x21) {
+            const auto extension = gif[at++];
+            if (extension == 0xF9) {
+                CHECK(at + 5 < gif.size() && gif[at] == 4);
+                delay = gif[at + 2] | (gif[at + 3] << 8);
+            }
+        } else if (type == 0x2C) {
+            CHECK(at + 9 < gif.size());
+            CHECK(gif[at + 4] == 0 && gif[at + 5] == 1 && gif[at + 6] == 64 && gif[at + 7] == 0);
+            CHECK(gif[at + 8] == 0 && gif[at + 9] == 8 && delay == kOledEffectDelay);
+            at += 10; ++frames;
+        } else { CHECK(false); break; }
+        while (at < gif.size()) {
+            const auto length = gif[at++];
+            if (!length) break;
+            CHECK(at + length < gif.size());
+            at += length;
+        }
+    }
+    CHECK(frames == kOledEffectFrames && at == gif.size() - 1);
 }
 
 static void TestAzothConnection() {
@@ -2791,6 +3106,7 @@ int main() {
     TestFriendlyNames();
     TestAzoth();
     TestAzothOled();
+    TestAzothOledEffects();
     TestAzothConnection();
     TestDualSense();
     TestAzothKeys();
@@ -2807,6 +3123,9 @@ int main() {
     TestForza();
     TestF1();
     TestMoreGames();
+    TestDirectModeReclaim();
+    TestRacingFeeds();
+    TestSdkCatalog();
     TestInventoryKinds();
     TestPadInput();
     TestNotifications();

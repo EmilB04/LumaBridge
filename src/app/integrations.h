@@ -75,7 +75,7 @@ private:
 // HKLM\SOFTWARE\LumaBridge\HandbackTaskVersion); an older task needs setting up again.
 constexpr DWORD kHandbackTaskVersion = 6;
 // Same for the hardware helper (Install-Helper.ps1, HKLM\SOFTWARE\LumaBridge\HelperTaskVersion).
-constexpr DWORD kHelperTaskVersion = 4;  // 4: RAM sticks found by SPD presence, bus retry; 3: Intel SMBus RAM lighting module
+constexpr DWORD kHelperTaskVersion = 5;  // 5: pauses Armoury Crate's lighting service; 4: RAM sticks found by SPD presence, bus retry; 3: Intel SMBus RAM lighting module
 
 std::wstring AppDirectory();
 // Folder picker; empty when cancelled.

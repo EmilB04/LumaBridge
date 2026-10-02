@@ -64,6 +64,10 @@ public:
     // Devices (by exact Aura name) that must not be written, on top of the config filters.
     void SetDisabledDevices(const std::vector<std::wstring>& names);
     void Rescan();  // re-enumerate devices on the next worker iteration
+    // A USB device came or went, or the PC woke up: Armoury Crate may re-apply its lighting
+    // and take the lights out of direct mode, so take them back a few times over the next
+    // seconds (aurausb::DirectModeReclaim).
+    void Reclaim();
 
     Status GetStatus() const;
 
@@ -101,6 +105,7 @@ private:
     std::vector<std::wstring> disabledDevices_;
     uint64_t settingsVersion_ = 0;
     bool rescan_ = false;
+    bool reclaim_ = false;
     Status status_;
 };
 

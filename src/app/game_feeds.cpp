@@ -110,12 +110,13 @@ void GameFeeds::Start() {
     dcsThread_ = std::thread(&GameFeeds::DcsLoop, this);
     for (int i = 0; i < kUdpCount; ++i) udp_[i].thread = std::thread(&GameFeeds::UdpLoop, this, static_cast<Udp>(i));
     eliteThread_ = std::thread(&GameFeeds::EliteLoop, this);
+    memoryThread_ = std::thread(&GameFeeds::MemoryLoop, this);
 }
 
 void GameFeeds::Stop() {
     if (!cs2Thread_.joinable() && !rlThread_.joinable() && !wtThread_.joinable() && !leagueThread_.joinable() &&
         !forzaThread_.joinable() && !f1Thread_.joinable() && !msfsThread_.joinable() && !dcsThread_.joinable() &&
-        !eliteThread_.joinable())
+        !eliteThread_.joinable() && !memoryThread_.joinable())
         return;
     stop_ = true;
     if (cs2Listen_ != INVALID_SOCKET) {
@@ -128,6 +129,7 @@ void GameFeeds::Stop() {
     for (UdpGame& u : udp_)
         if (u.thread.joinable()) u.thread.join();
     if (eliteThread_.joinable()) eliteThread_.join();
+    if (memoryThread_.joinable()) memoryThread_.join();
     if (wsa_) WSACleanup();
     wsa_ = false;
 }
@@ -191,6 +193,26 @@ GameFeeds::Feed GameFeeds::Elite(uint64_t now) {
     (void)now;
     std::lock_guard<std::mutex> lock(mutex_);
     return Feed{elite_.Active(), elite_.Current()};
+}
+
+GameFeeds::Feed GameFeeds::Wrc(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{wrc_.Active(now), wrc_.Current()};
+}
+
+GameFeeds::Feed GameFeeds::Ac(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{ac_.Active(now), ac_.Current()};
+}
+
+GameFeeds::Feed GameFeeds::IRacing(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{iracing_.Active(now), iracing_.Current()};
+}
+
+GameFeeds::Feed GameFeeds::RaceRoom(uint64_t now) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Feed{raceroom_.Active(now), raceroom_.Current()};
 }
 
 GameFeeds::Feed GameFeeds::FlightSim(uint64_t now) {
@@ -425,10 +447,16 @@ void GameFeeds::F1Loop() {
     if (s != INVALID_SOCKET) closesocket(s);
 }
 
-// ---- BeamNG.drive, DiRT Rally, Automobilista 2, X-Plane (UDP) --------------------------------
+// ---- BeamNG.drive, DiRT Rally, Automobilista 2, X-Plane, EA SPORTS WRC (UDP) ----------------
 
 void GameFeeds::UdpLoop(Udp u) {
-    static const char* const kNames[] = {"BeamNG.drive", "DiRT Rally", "Automobilista 2", "X-Plane"};
+    static const char* const kNames[] = {"BeamNG.drive / Live for Speed", "the Codemasters-format game", "Automobilista 2 / Project CARS",
+                                         "X-Plane", "EA SPORTS WRC"};
+    static_assert(sizeof kNames / sizeof kNames[0] == kUdpCount, "one name per UDP feed");
+    // Automobilista 2 and Project CARS only broadcast their telemetry (no address to set in the
+    // game), which a socket bound to 127.0.0.1 never sees: that one listens on every address and
+    // shares the port, as other telemetry apps do. The rest stay on loopback, exclusively.
+    const bool broadcast = u == kAms2;
     UdpGame& g = udp_[u];
     SOCKET s = INVALID_SOCKET;
     int boundPort = 0;
@@ -447,11 +475,12 @@ void GameFeeds::UdpLoop(Udp u) {
         }
         if (s == INVALID_SOCKET) {
             s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-            BOOL exclusive = TRUE;
-            setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&exclusive), sizeof exclusive);
+            BOOL on = TRUE;
+            setsockopt(s, SOL_SOCKET, broadcast ? SO_REUSEADDR : SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&on),
+                       sizeof on);
             sockaddr_in a{};
             a.sin_family = AF_INET;
-            a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            a.sin_addr.s_addr = htonl(broadcast ? INADDR_ANY : INADDR_LOOPBACK);
             a.sin_port = htons(static_cast<u_short>(g.port.load()));
             if (bind(s, reinterpret_cast<sockaddr*>(&a), sizeof a) != 0) {
                 if (!g.busy.exchange(true))
@@ -480,6 +509,7 @@ void GameFeeds::UdpLoop(Udp u) {
             case kDirt: ok = dirt_.OnPacket(buf, len, now); break;
             case kAms2: ok = ams2_.OnPacket(buf, len, now); break;
             case kXPlane: ok = xplane_.OnPacket(buf, len, now); break;
+            case kWrc: ok = wrc_.OnPacket(buf, len, now); break;
             default: break;
             }
             if (ok && !g.seen.exchange(true)) LUMA_INFO("games: %s is sending its telemetry", kNames[u]);
@@ -514,6 +544,150 @@ void GameFeeds::EliteLoop() {
         }
         Sleep(250);
     }
+}
+
+// ---- Assetto Corsa, iRacing, RaceRoom (shared memory) ----------------------------------------
+// These games publish their telemetry as named memory blocks for dashboards and wheel displays.
+// LumaBridge opens them read-only by name while the game runs, and closes them again when it
+// stops (a block lives on while anyone has it open, and would keep showing the last lap).
+
+namespace {
+
+struct Block {
+    HANDLE map = nullptr;
+    const uint8_t* view = nullptr;
+    size_t size = 0;
+};
+
+bool OpenBlock(Block* b, const wchar_t* name) {
+    if (b->view) return true;
+    b->map = OpenFileMappingW(FILE_MAP_READ, FALSE, name);
+    if (!b->map) return false;
+    b->view = static_cast<const uint8_t*>(MapViewOfFile(b->map, FILE_MAP_READ, 0, 0, 0));
+    MEMORY_BASIC_INFORMATION info{};
+    if (!b->view || !VirtualQuery(b->view, &info, sizeof info)) {
+        if (b->view) UnmapViewOfFile(b->view);
+        CloseHandle(b->map);
+        *b = Block();
+        return false;
+    }
+    b->size = info.RegionSize;
+    return true;
+}
+
+void CloseBlock(Block* b) {
+    if (b->view) UnmapViewOfFile(b->view);
+    if (b->map) CloseHandle(b->map);
+    *b = Block();
+}
+
+}  // namespace
+
+void GameFeeds::MemoryLoop() {
+    static const char* const kNames[] = {"Assetto Corsa", "iRacing", "RaceRoom"};
+    Block acPhysics, acGraphics, acStatic, iracing, raceroom;
+    bool acEvo = false;  // the open Assetto Corsa blocks are EVO's
+    while (!stop_) {
+        bool any = false;
+        for (int m = 0; m < kMemoryCount; ++m) {
+            MemoryGame& g = memory_[m];
+            bool open = false, ok = false;
+            if (!g.running) {
+                if (m == kAc) {
+                    CloseBlock(&acPhysics);
+                    CloseBlock(&acGraphics);
+                    CloseBlock(&acStatic);
+                } else {
+                    CloseBlock(m == kIRacing ? &iracing : &raceroom);
+                }
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (m == kAc) ac_.Reset();
+                else if (m == kIRacing) iracing_.Reset();
+                else raceroom_.Reset();
+            } else {
+                any = true;
+                const uint64_t now = GetTickCount64();
+                if (m == kAc) {
+                    // Assetto Corsa and Competizione, else Assetto Corsa EVO's own names.
+                    if (!acPhysics.view) acEvo = false;
+                    open = !acEvo && OpenBlock(&acPhysics, L"Local\\acpmf_physics") &&
+                           OpenBlock(&acGraphics, L"Local\\acpmf_graphics");
+                    if (open) {
+                        OpenBlock(&acStatic, L"Local\\acpmf_static");
+                    } else if (OpenBlock(&acPhysics, L"Local\\acevo_pmf_physics") &&
+                               OpenBlock(&acGraphics, L"Local\\acevo_pmf_graphics")) {
+                        open = acEvo = true;
+                    }
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (open)
+                        ok = ac_.OnBlocks(acPhysics.view, acPhysics.size, acGraphics.view, acGraphics.size, acStatic.view,
+                                          acStatic.size, now, acEvo);
+                } else if (m == kIRacing) {
+                    open = OpenBlock(&iracing, L"Local\\IRSDKMemMapFileName");
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (open) ok = iracing_.OnBlock(iracing.view, iracing.size, now);
+                } else {
+                    open = OpenBlock(&raceroom, L"$R3E");
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (open) ok = raceroom_.OnBlock(raceroom.view, raceroom.size, now);
+                }
+            }
+            if (open && !g.found.exchange(true)) LUMA_INFO("games: found %s's telemetry", kNames[m]);
+            if (!open) g.found = false;
+            if (ok && !g.seen.exchange(true)) LUMA_INFO("games: %s is on track", kNames[m]);
+        }
+        if (any) Sleep(33);
+        else Nap(stop_, 1000);
+    }
+    CloseBlock(&acPhysics);
+    CloseBlock(&acGraphics);
+    CloseBlock(&acStatic);
+    CloseBlock(&iracing);
+    CloseBlock(&raceroom);
+}
+
+// ---- EA SPORTS WRC (telemetry settings) ------------------------------------------------------
+
+std::wstring WrcTelemetryDir() {
+    PWSTR docs = nullptr;
+    std::wstring dir;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &docs)) && docs) {
+        dir = std::wstring(docs) + L"\\My Games\\WRC\\telemetry";
+        CoTaskMemFree(docs);
+    }
+    if (dir.empty() || GetFileAttributesW((dir + L"\\config.json").c_str()) == INVALID_FILE_ATTRIBUTES) return L"";
+    return dir;
+}
+
+int WrcConfigPort() {
+    const std::wstring dir = WrcTelemetryDir();
+    return dir.empty() ? 0 : games::WrcConfigPortIn(ReadText(dir + L"\\config.json"));
+}
+
+std::string WrcSetUp(int port, bool remove) {
+    const std::wstring dir = WrcTelemetryDir();
+    if (dir.empty()) return "EA SPORTS WRC's telemetry folder wasn't found. Start the game once, then try again.";
+    const std::wstring config = dir + L"\\config.json", structure = dir + L"\\udp\\lumabridge.json";
+    const std::string text = ReadText(config);
+    // Taken out first, so a new port replaces the old entry.
+    std::string next = games::WrcConfigText(text, port, true);
+    if (!remove && !next.empty()) next = games::WrcConfigText(next, port, false);
+    if (next.empty()) return "config.json has no udp packets list to add to (" + Narrow(config) + ").";
+    if (remove) {
+        DeleteFileW(structure.c_str());
+    } else {
+        CreateDirectoryW((dir + L"\\udp").c_str(), nullptr);
+        if (!WriteTextFile(structure, games::WrcStructureText()))
+            return "Couldn't write " + Narrow(structure) + " (error " + std::to_string(GetLastError()) + ").";
+    }
+    if (next != text) {
+        const std::wstring backup = config + L".lumabridge-backup";
+        if (GetFileAttributesW(backup.c_str()) == INVALID_FILE_ATTRIBUTES) CopyFileW(config.c_str(), backup.c_str(), TRUE);
+        if (!WriteTextFile(config, next))
+            return "Couldn't write " + Narrow(config) + " (error " + std::to_string(GetLastError()) + ").";
+    }
+    LUMA_INFO("games: EA SPORTS WRC telemetry %s (port %d)", remove ? "removed" : "set up", port);
+    return "";
 }
 
 // ---- Microsoft Flight Simulator (SimConnect) ------------------------------------------------

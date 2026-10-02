@@ -47,6 +47,10 @@ public:
             if (!f.empty()) return SetAll(ToAuraColor(f[0]));
         return SetAll(0);
     }
+
+    // Take the hardware over again with the next frame, in case Armoury Crate changed its
+    // mode meanwhile (see DirectModeReclaim). Nothing to do for backends without a mode.
+    virtual void ReenterDirectMode() {}
 };
 
 }  // namespace luma

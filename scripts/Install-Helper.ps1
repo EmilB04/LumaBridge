@@ -35,7 +35,7 @@ $TaskPath = '\LumaBridge\'
 $TaskName = 'Hardware helper'
 # Bumped whenever the task or the helper changes; LumaBridge asks to set it up again when
 # the recorded version is older (kHelperTaskVersion in src/app/integrations.h).
-$TaskVersion = 4
+$TaskVersion = 5
 $VersionKey = 'HKLM:\SOFTWARE\LumaBridge'
 $InstallDir = Join-Path $env:ProgramFiles 'LumaBridge'
 $Modules = 'SmbusPIIX4.bin', 'SmbusI801.bin', 'LpcIO.bin', 'AMDFamily17.bin', 'IntelMSR.bin'
@@ -138,7 +138,7 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
     -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -Action $action -Principal $principal `
     -Settings $settings -Force `
-    -Description 'LumaBridge: RAM lighting and fan / temperature sensors while LumaBridge runs.' |
+    -Description 'LumaBridge: RAM lighting, fan / temperature sensors and pausing Armoury Crate''s lighting service while LumaBridge runs.' |
     Out-Null
 
 # Let the current user start (not change) the task: read + execute on the task's DACL.

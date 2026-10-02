@@ -36,6 +36,7 @@ public:
     void SetSelected(size_t index, bool selected) override;
     bool SetAll(uint32_t auraColor) override;
     bool SetFrames(const std::vector<std::vector<Rgb>>& frames) override;
+    void ReenterDirectMode() override { directMode_ = false; }
 
 private:
     bool EnterDirectMode();

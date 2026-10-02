@@ -2,11 +2,17 @@
 // LumaBridge-Helper.exe (a scheduled task running as SYSTEM, set up once from the Devices
 // page). The helper creates it with access for signed-in users; the app opens it.
 //
-//   app -> helper: its pid and heartbeat, whether it wants RAM lighting, the RAM colors;
-//   helper -> app: its status, the RAM status, and the sensors it reads (about once a second,
-//                  published seqlock-style: sensorSeq is odd while being written).
+//   app -> helper: its pid and heartbeat, whether it wants RAM lighting, the RAM colors,
+//                  whether to keep Armoury Crate's lighting service paused;
+//   helper -> app: its status, the RAM status, the sensors it reads (about once a second,
+//                  published seqlock-style: sensorSeq is odd while being written), and the
+//                  state of Armoury Crate's lighting service.
+// Fields are only ever added at the end, without changing kVersion: an older app maps the
+// part it knows, and a helper from before task version 5 shares only up to kSizeV2. The whole
+// struct fits one page, so the later fields of such a helper's mapping read zero.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace luma::app::helper {
@@ -37,6 +43,15 @@ enum class RamStatus : uint32_t {
 
 // What the RAM shows when LumaBridge lets go of it (switched off, Armoury Crate's turn, exit).
 enum class RamRelease : uint32_t { OwnRainbow = 0, Off = 1, KeepLast = 2 };
+
+// ASUS LightingService, the part of Armoury Crate that runs its lighting.
+enum class AsusLighting : uint32_t {
+    Unknown = 0,   // not looked yet (or a helper without this)
+    NotInstalled,  // no such service
+    Running,       // running: it re-applies Armoury Crate's lighting when USB devices change
+    Paused,        // stopped while LumaBridge has the lights
+    Failed,        // couldn't be stopped or started (see helper.log)
+};
 
 enum class SensorKind : uint32_t { Cpu = 0, Board = 1 };
 enum class SensorType : uint32_t { Temperature = 0, Fan = 1, Power = 2 };  // Power: since 0.15.1, same layout
@@ -71,6 +86,12 @@ struct Shared {
     uint32_t sensorCount;
     SensorEntry sensors[kMaxSensors];
     char chip[32];       // the monitoring chip found ("NCT6798D"), or ""
+    // ---- Since helper task version 5 (zero from an older helper) ----
+    uint32_t pauseAsusLighting;  // app -> helper. 1: keep ASUS LightingService stopped
+    AsusLighting asusLighting;   // helper -> app
 };
+
+constexpr size_t kSizeV2 = offsetof(Shared, pauseAsusLighting);
+static_assert(sizeof(Shared) <= 4096, "one page, so an older helper's mapping covers every field");
 
 }  // namespace luma::app::helper

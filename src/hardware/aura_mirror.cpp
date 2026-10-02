@@ -6,6 +6,7 @@
 #include <memory>
 #include <cwctype>
 
+#include "direct_mode_reclaim.h"
 #include "ipc.h"
 #include "usb_aura.h"
 #include "log.h"
@@ -232,6 +233,14 @@ void AuraMirror::Rescan() {
     Wake();
 }
 
+void AuraMirror::Reclaim() {
+    {
+        std::lock_guard<std::mutex> lock(settingsMutex_);
+        reclaim_ = true;
+    }
+    Wake();
+}
+
 AuraMirror::Status AuraMirror::GetStatus() const {
     std::lock_guard<std::mutex> lock(settingsMutex_);
     Status s = status_;
@@ -288,6 +297,7 @@ void AuraMirror::Run() {
     bool wasRouted = false;
     bool toldNoApp = false;
     HWND app = nullptr;
+    aurausb::DirectModeReclaim reclaim;
 
     auto publish = [&] {
         std::lock_guard<std::mutex> lock(settingsMutex_);
@@ -359,19 +369,27 @@ void AuraMirror::Run() {
         }
 
         // ---- Direct: talk to Aura ourselves. ----
-        bool rescan;
+        bool rescan, reclaimEvent;
         uint64_t settingsVersion;
         ColorCorrection cc;
         {
             std::lock_guard<std::mutex> lock(settingsMutex_);
             rescan = rescan_;
             rescan_ = false;
+            reclaimEvent = reclaim_;
+            reclaim_ = false;
             settingsVersion = settingsVersion_;
             cc = correction_;
         }
         if (rescan && backend->IsConnected()) {
             backend->Disconnect(false);
             nextConnectAt = 0;
+        }
+        if (reclaimEvent && backend->IsConnected() && reclaim.OnEvent(now))
+            LUMA_INFO("Aura mirror: devices changed - taking the lights back from Armoury Crate over the next seconds");
+        if (backend->IsConnected() && reclaim.Due(now)) {
+            backend->ReenterDirectMode();
+            havePushed = false;  // repaint right away
         }
 
         if (!backend->IsConnected() && now >= nextConnectAt) {

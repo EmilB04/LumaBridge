@@ -4,8 +4,12 @@
 // telemetry packet (type 0):
 //   PacketBase (12 bytes, u8 packetType at 10), ... u8 carFlags (17), ... u16 rpm (40),
 //   u16 maxRpm (42)
-// carFlags: 2 engine active, 4 engine warning, 8 speed limiter. Pure C++, tested; the layout
-// follows the public Project CARS 2 UDP documentation and isn't checked against the games.
+// carFlags: 2 engine active, 4 engine warning, 8 speed limiter.
+// Project CARS (the first one, and Project CARS 3 set to the "Project CARS 1" protocol) sends its
+// own format instead, recognised by its telemetry packet's size (1367 bytes, packet type in the
+// low two bits of byte 2): u8 carFlags (110), u16 rpm (124), u16 maxRpm (126), same flags.
+// Pure C++, tested; the layouts follow the public Project CARS UDP documentation and aren't
+// checked against the games.
 #pragma once
 
 #include <cstdint>
@@ -21,16 +25,18 @@ public:
     static constexpr uint16_t kDefaultPort = 5606;
     static constexpr uint64_t kStaleMs = 1000;
     static constexpr size_t kMinSize = 44;
+    static constexpr size_t kPcars1Size = 1367;
     static constexpr uint8_t kEngineActive = 2, kEngineWarning = 4, kLimiter = 8;
 
     bool OnPacket(const uint8_t* p, size_t n, uint64_t now) {
-        if (n < kMinSize || p[10] != 0) return false;
+        const bool pcars1 = n == kPcars1Size;
+        if (n < kMinSize || (pcars1 ? (p[2] & 3) != 0 : p[10] != 0)) return false;
         uint16_t rpm, maxRpm;
-        std::memcpy(&rpm, p + 40, 2);
-        std::memcpy(&maxRpm, p + 42, 2);
+        std::memcpy(&rpm, p + (pcars1 ? 124 : 40), 2);
+        std::memcpy(&maxRpm, p + (pcars1 ? 126 : 42), 2);
         if (maxRpm == 0) return false;
         lastSeen_ = now;
-        flags_ = p[17];
+        flags_ = p[pcars1 ? 110 : 17];
         revs_ = Clamp01(static_cast<double>(rpm) / maxRpm);
         return true;
     }

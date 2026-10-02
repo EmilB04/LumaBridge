@@ -22,4 +22,8 @@ bool HandbackTaskInstalled();
 // Hands the lights back: runs the hand-back task if installed, else opens Armoury Crate.
 void HandBackLighting();
 
+// Is Armoury Crate's window open (visible)? Then the user is working in it, and its lighting
+// service shouldn't be kept paused.
+bool ArmouryCrateWindowOpen();
+
 }  // namespace luma::app
