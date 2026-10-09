@@ -282,6 +282,7 @@ private:
     bool auraNativeApplied_ = false;  // Apply() handed the Aura devices back to Armoury Crate
     uint64_t handbackDoneAt_ = 0;  // GetTickCount64() when the current hand-back should be done
     uint64_t armouryCheckAt_ = 0;  // when to look for Armoury Crate's window again
+    uint32_t asusStops_ = 0;       // hardware_.asusStops() last seen
     bool armouryOpen_ = false;     // its window is open: its lighting service runs
     bool shutDown_ = false;
     Output output_;

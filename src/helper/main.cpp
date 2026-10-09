@@ -164,36 +164,39 @@ private:
 
 constexpr uint64_t kSmbusWrite = 0, kSmbusRead = 1, kProtoByte = 1, kProtoByteData = 2;
 
-bool KingstonMemory() {
+// How many sticks the firmware lists, if any of them is Kingston / HyperX memory (else 0).
+int KingstonSticks() {
     constexpr DWORD kRsmb = 0x52534D42;
     const UINT size = GetSystemFirmwareTable(kRsmb, 0, nullptr, 0);
-    if (!size) return false;
+    if (!size) return 0;
     std::vector<uint8_t> raw(size);
-    if (GetSystemFirmwareTable(kRsmb, 0, raw.data(), size) != size) return false;
+    if (GetSystemFirmwareTable(kRsmb, 0, raw.data(), size) != size) return 0;
     auto lower = [](std::string x) {
         for (auto& c : x) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
         return x;
     };
-    for (const auto& m : sensors::ParseSmbios(raw).memory) {
+    const auto memory = sensors::ParseSmbios(raw).memory;
+    for (const auto& m : memory) {
         const std::string maker = lower(m.manufacturer), part = lower(m.part);
         // Kingston's JEDEC id (0x0198) shows up as a hex string on some boards.
         if (maker.find("kingston") != std::string::npos || maker.find("hyperx") != std::string::npos ||
             maker.find("0198") != std::string::npos || maker.find("9801") != std::string::npos ||
             part.rfind("hx4", 0) == 0 || part.rfind("kf", 0) == 0)
-            return true;
+            return static_cast<int>(memory.size());
     }
-    return false;
+    return 0;
 }
 
 class Ram {
 public:
     helper::RamStatus status() const { return status_; }
+    // The sticks for the app to count (ram::SticksShown).
     uint8_t sticks() const { return sticks_; }
 
     // Finds the controller and the sticks (read only).
     void Start() {
         status_ = helper::RamStatus::Starting;
-        sticks_ = 0;
+        sticks_ = light_ = 0;
         // The signed modules expose the same transfer API. Each validates the chipset
         // before loading, so Intel machines can use the same RGB-only register allow-list.
         const auto amd = smbus_.Load(L"SmbusPIIX4.bin");
@@ -206,7 +209,8 @@ public:
             }
             Log("RAM: using Intel I801 SMBus (experimental)");
         } else Log("RAM: using AMD PIIX4 SMBus");
-        if (!KingstonMemory()) {
+        const int listed = KingstonSticks();
+        if (!listed) {
             status_ = helper::RamStatus::NotKingston;
             return;
         }
@@ -214,24 +218,27 @@ public:
             status_ = helper::RamStatus::BusBusy;
             return;
         }
+        // Another program using the bus without its lock can make a device miss a single
+        // read, so each address gets a few tries.
         const bool controller = Answers(ram::kController);
+        uint8_t found = 0;
         for (int slot = 0; slot < ram::kSlots; ++slot) {
             const uint8_t spd = static_cast<uint8_t>(ram::kSpdFirst + slot);
             int type = -1;
             const bool answers = Answers(spd);
             const bool read = answers && ReadByteData(spd, 2, &type);
-            if (ram::IsStick(answers, type)) sticks_ |= 1 << slot;
+            if (ram::IsStick(answers, type)) found |= 1 << slot;
             Log("RAM: SPD 0x%02X %s, type byte %d%s", spd, answers ? "answers" : "silent", type, read ? "" : " (unread)");
         }
-        // The SMBIOS says these are Kingston sticks and their controller answers, but no SPD
-        // does (some boards keep the SPD on another bus): the controller covers every slot, so
-        // light all four (the registers of an empty slot are only written, never read back).
-        if (controller && !sticks_) {
-            sticks_ = (1 << ram::kSlots) - 1;
-            Log("RAM: no SPD answered - assuming all %d slots", ram::kSlots);
-        }
         lock_.Unlock();
-        Log("RAM: controller at 0x27 %s, DDR4 sticks 0x%X", controller ? "answers" : "doesn't answer", sticks_);
+        // Fewer SPDs answered than the firmware lists sticks (some boards keep the SPD on
+        // another bus, or a read was missed): the controller covers every slot, so light all
+        // four (the registers of an empty slot are only written, never read back).
+        light_ = ram::SlotsToLight(found, listed);
+        sticks_ = ram::SticksShown(found, listed);
+        if (controller && light_ != found)
+            Log("RAM: %d stick(s) listed by the firmware, SPD found 0x%X - lighting all %d slots", listed, found, ram::kSlots);
+        Log("RAM: controller at 0x27 %s, DDR4 sticks 0x%X", controller ? "answers" : "doesn't answer", found);
         status_ = !controller ? helper::RamStatus::NoController
                   : !sticks_  ? helper::RamStatus::NoSticks
                               : helper::RamStatus::Ready;
@@ -257,7 +264,7 @@ public:
         std::array<luma::Rgb, ram::kMaxLeds> colors{};
         for (int i = 0; i < ram::kMaxLeds; ++i)
             colors[static_cast<size_t>(i)] = luma::Rgb{sh->ramColors[i][0], sh->ramColors[i][1], sh->ramColors[i][2]};
-        const auto writes = ram::Frame(sticks_, colors);
+        const auto writes = ram::Frame(light_, colors);
         if (!lock_.Lock()) {
             status_ = helper::RamStatus::BusBusy;
             return;
@@ -284,7 +291,7 @@ public:
         owning_ = false;
         if (release_ == helper::RamRelease::KeepLast) return;
         std::vector<ram::Write> writes;
-        if (release_ == helper::RamRelease::Off) writes = ram::Frame(sticks_, std::array<luma::Rgb, ram::kMaxLeds>{});
+        if (release_ == helper::RamRelease::Off) writes = ram::Frame(light_, std::array<luma::Rgb, ram::kMaxLeds>{});
         else writes = ram::OwnRainbow();
         if (!lock_.Lock()) return;
         for (const auto& w : writes) Write(w.reg, w.value);
@@ -299,7 +306,13 @@ private:
         if (value) *value = static_cast<int>(out[0] & 0xFF);
         return true;
     }
-    bool Answers(uint8_t addr) { return Read(addr, kProtoByte, 0, nullptr); }
+    bool Answers(uint8_t addr) {
+        for (int i = 0; i < 3; ++i) {
+            if (Read(addr, kProtoByte, 0, nullptr)) return true;
+            Sleep(2);
+        }
+        return false;
+    }
     bool ReadByteData(uint8_t addr, uint8_t reg, int* value) { return Read(addr, kProtoByteData, reg, value); }
     // The only write there is: a register of the RAM's RGB controller, from the allow-list.
     bool Write(uint8_t reg, uint8_t value) {
@@ -310,7 +323,7 @@ private:
     PawnModule smbus_;
     NamedLock lock_{L"Global\\Access_SMBUS.HTP.Method"};
     helper::RamStatus status_ = helper::RamStatus::Off;
-    uint8_t sticks_ = 0;
+    uint8_t sticks_ = 0, light_ = 0;  // shown to the app; the slots written
     uint32_t lastSeq_ = 0;
     uint64_t lastWrite_ = 0;
     int failures_ = 0;
@@ -539,6 +552,7 @@ public:
                 const bool again = state_ == helper::AsusLighting::Paused;
                 Mark(true);  // before stopping: whatever happens next, it's started again later
                 if (ControlService(svc, SERVICE_CONTROL_STOP, &s)) {
+                    ++stops_;
                     if (again) Log("LightingService was started again by something else - paused again");
                     Set(helper::AsusLighting::Paused, "Armoury Crate's lighting service paused while LumaBridge has the lights");
                 } else
@@ -574,6 +588,8 @@ public:
     }
 
     helper::AsusLighting state() const { return state_; }
+    // How many times it was stopped (each time after it had run and taken the lights).
+    uint32_t stops() const { return stops_; }
 
 private:
     static constexpr wchar_t kName[] = L"LightingService";
@@ -600,6 +616,7 @@ private:
     }
 
     uint64_t nextCheck_ = 0;
+    uint32_t stops_ = 0;
     helper::AsusLighting state_ = helper::AsusLighting::Unknown;
     const char* lastLog_ = nullptr;
 };
@@ -670,6 +687,7 @@ int wmain() {
         s->status = helper::Status::Running;
     }
 
+    int ramRetries = 0;
     uint64_t nextSensors = 0, nextRamRetry = 0, appBeat = s->appBeat, appBeatAt = GetTickCount64();
     helper::RamStatus lastRam = helper::RamStatus::Off;
     while (true) {
@@ -690,11 +708,17 @@ int wmain() {
         }
         asus.Update(s->pauseAsusLighting != 0, now);  // needs no PawnIO
         s->asusLighting = asus.state();
+        s->asusStops = asus.stops();
         if (s->status != helper::Status::Running) continue;
 
-        // Another tool (NZXT CAM, Armoury Crate) can hold the SMBus when we first look; try again.
-        const bool retryRam = ram.status() == helper::RamStatus::BusBusy && !ram.sticks() && now >= nextRamRetry;
+        // Another tool (NZXT CAM, Armoury Crate) can hold the SMBus when we first look, or
+        // make the controller miss its turn (seen: nothing answered on one start, everything on
+        // the next); try again, the silent controller for a minute.
+        const bool retryRam = now >= nextRamRetry &&
+                              ((ram.status() == helper::RamStatus::BusBusy && !ram.sticks()) ||
+                               (ram.status() == helper::RamStatus::NoController && ramRetries < 12));
         if (s->ramWanted && (ram.status() == helper::RamStatus::Off || retryRam)) {
+            if (ram.status() == helper::RamStatus::NoController) ++ramRetries;
             nextRamRetry = now + 5000;
             ram.Start();
         }

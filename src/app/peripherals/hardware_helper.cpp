@@ -221,6 +221,7 @@ void HardwareHelper::Run() {
         // Armoury Crate's lighting service. A helper that never reports it is too old to know it.
         sh->pauseAsusLighting = pauseAsus_ ? 1 : 0;
         asus_ = sh->asusLighting;
+        asusStops_ = sh->asusStops;
         outdated_ = asus_ == helper::AsusLighting::Unknown && now - connectedAt > 5000;
 
         // RAM.

@@ -401,7 +401,7 @@ void AuraMirror::Run() {
             nextConnectAt = 0;
         }
         if (reclaimEvent && backend->IsConnected() && reclaim.OnEvent(now))
-            LUMA_INFO("Aura mirror: devices changed - taking the lights back from Armoury Crate over the next seconds");
+            LUMA_INFO("Aura mirror: devices changed or Armoury Crate ran - taking the lights back over the next seconds");
         if (backend->IsConnected() && reclaim.Due(now)) {
             backend->ReenterDirectMode();
             havePushed = false;  // repaint right away

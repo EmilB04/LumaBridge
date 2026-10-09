@@ -80,7 +80,7 @@ struct Shared {
     uint32_t helperPid;
     Status status;
     RamStatus ram;
-    uint32_t sticks;     // bit i: a RAM stick in SPD slot i
+    uint32_t sticks;     // bit i: a RAM stick in SPD slot i (ram::SticksShown: read for the count)
     uint64_t helperBeat; // bumped by the helper every loop (the app watches it change)
     uint32_t sensorSeq;
     uint32_t sensorCount;
@@ -89,6 +89,10 @@ struct Shared {
     // ---- Since helper task version 5 (zero from an older helper) ----
     uint32_t pauseAsusLighting;  // app -> helper. 1: keep ASUS LightingService stopped
     AsusLighting asusLighting;   // helper -> app
+    // ---- Since helper task version 6 (zero from an older helper) ----
+    // Helper -> app: bumped each time the helper stopped LightingService. Starting it puts the
+    // motherboard's channels in Armoury Crate's own mode, so the app takes them back.
+    uint32_t asusStops;
 };
 
 constexpr size_t kSizeV2 = offsetof(Shared, pauseAsusLighting);

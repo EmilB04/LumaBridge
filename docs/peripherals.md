@@ -201,7 +201,10 @@ is 107. The table is [`azoth_layout.h`](../src/app/peripherals/azoth_layout.h).
 
 LumaBridge draws every effect across the keys, sending only the keys that changed: up to
 about 25 times a second by cable, and about 10 through the Omni receiver (report ID 2, as for
-the effects), to spare the 2.4 GHz link and the battery.
+the effects), to spare the 2.4 GHz link and the battery. By cable, each report waits for
+the keyboard's answer (at most 20 ms) before the next goes out, as OpenRGB does for ASUS
+keyboards: sent back to back, they locked up the lighting interface within a second of
+plugging in (a write failed with Windows error 31, and only a replug brought it back).
 
 ### Wireless (ROG Omni receiver `0B05:1ACE`)
 
@@ -288,7 +291,10 @@ when the app exits.
 - Finding the sticks only reads: "receive byte" from `0x27` and from the SPD chips
   `0x50`-`0x53`, and the memory-type byte (DDR4 = `0x0C`) of each SPD. The firmware's
   memory list must name Kingston / HyperX. None of this happens until RAM lighting is
-  switched on.
+  switched on. Each address gets up to three tries, since another program on the bus can
+  make a chip miss one. When fewer SPD chips answer than the firmware lists sticks (seen:
+  one of three on one start, all three on the next), all four slots get the colors: the
+  controller covers every slot, and an empty slot's registers are only written.
 - Writes go only to `0x27`, and only to the registers above: every write passes
   `ram::IsAllowed()` (tested), whatever the app asks. The SPD chips are never written.
 - Each frame holds the system-wide SMBus lock (`Access_SMBUS.HTP.Method`) that Armoury

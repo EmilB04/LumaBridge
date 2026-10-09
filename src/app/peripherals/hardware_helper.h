@@ -52,6 +52,8 @@ public:
     void SetPauseAsusLighting(bool on) { pauseAsus_ = on; }
     // That service's state, as the helper sees it (Unknown without a helper, or an older one).
     helper::AsusLighting asusLighting() const { return asus_; }
+    // Bumped each time the helper stopped that service after it had started (helper::Shared).
+    uint32_t asusStops() const { return asusStops_; }
     // The running helper is too old to pause the service (Hardware access needs an update).
     bool helperOutdated() const { return outdated_; }
 
@@ -73,6 +75,7 @@ private:
     std::atomic<int> sticks_{0};
     std::atomic<bool> pauseAsus_{false}, outdated_{false};
     std::atomic<helper::AsusLighting> asus_{helper::AsusLighting::Unknown};
+    std::atomic<uint32_t> asusStops_{0};
     mutable std::mutex mutex_;
     fx::Params effect_;
     double brightness_ = 1.0;

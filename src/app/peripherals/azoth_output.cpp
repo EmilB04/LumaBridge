@@ -111,6 +111,24 @@ bool WriteReport(HANDLE dev, const azoth::Report& report, azoth::Link link) {
     return true;
 }
 
+// By cable the keyboard answers each lighting report. Sending the next one before that
+// answer came locked up its lighting interface on the owner's Azoth (a write failed with
+// error 31 within a second of plugging in, and only a replug brought it back), so each
+// report waits for an answer first, at most kAckMs, as OpenRGB does for ASUS keyboards.
+// The Omni receiver takes them as they come (it echoes and passes them on itself).
+constexpr DWORD kAckMs = 20;
+bool PacedWrite(HANDLE dev, const azoth::Report& report, azoth::Link link) {
+    if (link != azoth::Link::Wired) return WriteReport(dev, report, link);
+    const DWORD size = static_cast<DWORD>(azoth::ReportSize(link));
+    azoth::Report reply{};
+    DWORD done = 0;
+    for (int i = 0; i < 64; ++i)  // older answers and notifications still queued
+        if (!Transfer(dev, false, reply.data(), size, 0, done)) break;
+    if (!WriteReport(dev, report, link)) return false;
+    Transfer(dev, false, reply.data(), size, kAckMs, done);  // its answer, or the time is up
+    return true;
+}
+
 bool OledExchange(HANDLE dev, const azoth::Report& command, azoth::Link link, azoth::Report& reply,
                   DWORD* replySize = nullptr, DWORD timeout = 300) {
     const DWORD size = static_cast<DWORD>(azoth::ReportSize(link));
@@ -280,6 +298,7 @@ void AzothOutput::Run() {
     uint64_t settleUntil = 0;
     bool screenOff = false;
     int silentChecks = 0;
+    std::string lastNotReady;
     azoth::IdleTimeoutOverride idleTimeout;
     uint64_t nextIdleApply = 0;
     auto applyIdleTimeout = [&](bool control) {
@@ -428,7 +447,7 @@ void AzothOutput::Run() {
                     std::vector<azoth::KeyColor> black;
                     for (const auto& key : azoth::IsoKeys()) black.push_back({static_cast<uint8_t>(key.led), Rgb{}});
                     for (const auto& report : azoth::KeyColors(black, link))
-                        if (!WriteReport(dev, report, link)) {
+                        if (!PacedWrite(dev, report, link)) {
                             LUMA_WARN("ROG Azoth: couldn't send the final sleep RGB frame (error %lu)", GetLastError());
                             break;
                         }
@@ -496,12 +515,15 @@ void AzothOutput::Run() {
                 if (link == azoth::Link::Wired && silentChecks == 3)
                     LUMA_WARN("ROG Azoth: the lighting interface stopped answering; unplugging the cable and plugging it back in resets it");
                 stuck_ = link == azoth::Link::Wired && silentChecks >= 3;
-                LUMA_WARN("ROG Azoth: control interface not ready: %s", detail.c_str());
+                // Logged once while it repeats (it's asked every 2 s until it answers).
+                if (detail != lastNotReady) LUMA_WARN("ROG Azoth: control interface not ready: %s", detail.c_str());
+                lastNotReady = detail;
                 nextFind = now + 2000;
                 continue;
             }
             versionChecked = true;
             silentChecks = 0;
+            lastNotReady.clear();
             stuck_ = false;
             if (link == azoth::Link::Wired) LUMA_INFO("ROG Azoth: connected (wired USB, interface confirmed)");
         }
@@ -812,7 +834,7 @@ void AzothOutput::Run() {
                 kc.push_back({static_cast<uint8_t>(layout[i].led), keys[i]});
         bool ok = true;
         for (const azoth::Report& r : azoth::KeyColors(kc, link)) {
-            if (!WriteReport(dev, r, link)) {
+            if (!PacedWrite(dev, r, link)) {
                 ok = false;
                 break;
             }

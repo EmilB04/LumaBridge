@@ -916,6 +916,14 @@ void Controller::Tick() {
     }
     const bool asusLights = !output_.stopped && (mirror_.IsRunning() || (prefs_.ramLighting && !DeviceNative(prefs_, device::kRam)));
     hardware_.SetPauseAsusLighting(prefs_.pauseArmouryCrate && asusLights && !armouryOpen_);
+    // Something (Armoury Crate, when an ASUS keyboard is plugged in by cable) can start the
+    // service again every few seconds. Each time it runs it takes the motherboard's channels
+    // out of direct mode, and LumaBridge's frames are then ignored without an error (black
+    // fans and board), so once the helper has stopped it again, take them back.
+    if (const uint32_t stops = hardware_.asusStops(); stops != asusStops_) {
+        asusStops_ = stops;
+        if (mirror_.IsRunning()) mirror_.Reclaim();
+    }
     if (now - sensorsPushedAt_ >= 500) {
         sensorsPushedAt_ = now;
         monitor_.SetBuiltInSensors(hardware_.Sensors(), hardware_.chip());

@@ -2919,6 +2919,14 @@ static void TestHyperXRam() {
     // slots, DDR3 and DDR5 don't.
     CHECK(IsStick(true, 0x0C) && IsStick(true, 0) && IsStick(true, -1));
     CHECK(!IsStick(false, -1) && !IsStick(true, 0x0B) && !IsStick(true, 0x12));
+    // Fewer SPDs answered than the firmware lists (a busy bus): every slot is lit, and the app
+    // is told the firmware's count. All found, or no count known: just the ones found.
+    CHECK(SlotsToLight(0b0001, 3) == 0xF && SticksShown(0b0001, 3) == 0b0111);
+    CHECK(SlotsToLight(0b1101, 3) == 0b1101 && SticksShown(0b1101, 3) == 0b1101);
+    CHECK(SlotsToLight(0b0010, 0) == 0b0010 && SticksShown(0b0010, 0) == 0b0010);
+    CHECK(SlotsToLight(0, 0) == 0xF && SticksShown(0, 0) == 0xF);  // no SPD answers at all
+    CHECK(SlotsToLight(0, 2) == 0xF && SticksShown(0, 2) == 0b0011);
+    CHECK(SticksShown(0b0001, 6) == 0xF);
 }
 
 static void TestHwSensors() {
