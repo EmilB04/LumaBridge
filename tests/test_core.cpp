@@ -1,6 +1,7 @@
 // Unit tests for the platform-independent core. Builds on any OS:
 //   g++ -std=c++17 -I src/core -I src/integrations/razer -I src/integrations/corsair -I src/integrations/alienware -I src/integrations/steelseries tests/test_core.cpp -o test_core && ./test_core
 #include <cmath>
+#include "integration_plan.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,6 +19,8 @@
 #include "chroma_translate.h"
 #include "aura_usb_protocol.h"
 #include "direct_mode_reclaim.h"
+#include "service_start_guard.h"
+#include "asus_lighting_workers.h"
 #include "power_suspend.h"
 #include "core_props.h"
 #include "fake_devices.h"
@@ -712,7 +715,9 @@ static void TestCs2Bomb() {
     CHECK(!cs.Bomb(24000).active);
     cs.OnState(planted, 25000, "ok");
     cs.OnState(J(R"({"map":{"name":"de_dust2","round":4},"round":{"bomb":"exploded"}})"), 26000);
-    CHECK(!cs.Bomb(26000).active);
+    CHECK(cs.Bomb(26000).active && cs.Bomb(26000).exploded);
+    CHECK(cs.Bomb(26000).seconds == 0 && cs.Bomb(26000).explosionFrame == 0);
+    CHECK(cs.Bomb(26500).explosionFrame == 1);
     cs.OnState(planted, 27000, "ok");
     cs.OnState(J(R"({"map":{"name":"de_dust2","round":5},"round":{"phase":"freezetime"}})"), 28000);
     CHECK(!cs.Bomb(28000).active);
@@ -753,6 +758,28 @@ static void TestCs2Bomb() {
     CHECK(RenderBomb({true, true, 39}) != pixels);
     CHECK(RenderBomb({true, false, 40}) != pixels);
     CHECK(RenderBomb({true, true, 120}).size() == pixels.size());
+    const auto laterPixels = RenderBomb({true, true, 39});
+    int kitPixels = 0, noKitPixels = 0;
+    for (int y = 0; y < 64; ++y)
+        for (int x = 125; x < 208; ++x) {
+            CHECK(pixels[y * 208 + x] == laterPixels[y * 208 + x]); // defuse references stay visible as the fuse changes
+            if (pixels[y * 208 + x]) (y < 34 ? kitPixels : noKitPixels)++;
+        }
+    CHECK(kitPixels > 100 && noKitPixels > 100);
+    BombCountdown explosion{true, false, 0, false, true, 0};
+    CHECK(!SameBombDisplay(explosion, {true, false, 0}));
+    auto previousExplosion = RenderBomb(explosion);
+    CHECK(previousExplosion != pixels);
+    for (int frame = 1; frame < 4; ++frame) {
+        auto next = explosion;
+        next.explosionFrame = frame;
+        CHECK(!SameBombDisplay(explosion, next) && SameBombDisplay(next, next));
+        const auto rendered = RenderBomb(next);
+        CHECK(rendered.size() == 208 * 64 && rendered != previousExplosion);
+        CHECK(std::count(rendered.begin(), rendered.end(), 255) > 100);
+        previousExplosion = rendered;
+        explosion = next;
+    }
     CHECK(std::count(pixels.begin(), pixels.end(), 255) > 500);
     const auto blank = RenderBomb({});
     CHECK(std::count(blank.begin(), blank.end(), 0) == 208 * 64);
@@ -775,6 +802,53 @@ static void TestCs2Bomb() {
     CHECK(BombRestoreCommands(settings, Link::Wired, {}, -1, 2)[0][1] == 0x63);
     settings.enabled = false;
     CHECK(BombRestoreCommands(settings, Link::Wired, {}, 3, 2).empty());
+}
+
+static void TestCs2ExplosionLifecycle() {
+    using namespace luma::app::games;
+    const auto plant = J(R"({"map":{"name":"de_dust2","round":4},"round":{"phase":"live","bomb":"planted"}})");
+    const auto detonate = J(R"({"map":{"name":"de_dust2","round":4},"round":{"phase":"over","bomb":"exploded"}})");
+    const auto over = J(R"({"map":{"name":"de_dust2","round":4},"round":{"phase":"over"}})");
+    Cs2BombTimer timer;
+    timer.OnState(detonate, 500);
+    CHECK(!timer.Current(500).active); // joining after a detonation must not invent a new explosion
+    timer.OnState(plant, 1000);
+    timer.OnState(plant, 30000);
+    CHECK(!timer.Current(41000).active); // elapsed estimate alone is not a detonation event
+    timer.OnState(detonate, 41100);
+    CHECK(timer.Current(41100).exploded && timer.Current(41100).explosionFrame == 0);
+    timer.OnState(detonate, 41600);
+    CHECK(timer.Current(41600).explosionFrame == 1); // duplicate terminal states do not restart the animation
+    timer.OnState(over, 42100);
+    CHECK(timer.Current(42100).exploded && timer.Current(42100).explosionFrame == 2);
+    CHECK(timer.Current(43099).active && !timer.Current(43100).active);
+    timer.OnState(detonate, 44000);
+    CHECK(!timer.Current(44000).active);
+
+    timer.OnState(plant, 45000);
+    timer.OnState(J(R"({"map":{"name":"de_dust2","round":4},"bomb":{"state":"defused"}})"), 46000);
+    timer.OnState(detonate, 46100);
+    CHECK(!timer.Current(46100).active); // a confirmed defuse wins over a contradictory terminal state
+    timer.OnState(plant, 47000);
+    timer.OnState(J(R"({"map":{"name":"de_dust2","round":4},"bomb":{"state":"exploded"}})"), 48000);
+    CHECK(timer.Current(48000).exploded);
+    timer.OnState(J(R"({"map":{"name":"de_dust2","round":5},"round":{"phase":"freezetime"}})"), 48100);
+    CHECK(!timer.Current(48100).active);
+    timer.OnState(plant, 49000);
+    timer.OnState(detonate, 50000);
+    timer.OnState(J(R"({"player":{"activity":"menu"}})"), 50100);
+    CHECK(!timer.Current(50100).active);
+
+    timer.OnState(plant, 51000);
+    timer.OnState(J(R"({"map":{"name":"de_dust2","round":5},"round":{"phase":"over","bomb":"exploded"}})"), 52000);
+    CHECK(timer.Current(52000).exploded); // terminal payload may already count the completed round
+    timer.OnState(J(R"({"map":{"name":"de_dust2","round":5},"round":{"phase":"freezetime"}})"), 52100);
+    CHECK(!timer.Current(52100).active);
+
+    Cs2Lighting authenticated;
+    CHECK(authenticated.OnState(plant, 1000, ""));
+    CHECK(!authenticated.OnState(detonate, 2000, "required-token"));
+    CHECK(authenticated.Bomb(2000).active && !authenticated.Bomb(2000).exploded);
 }
 
 static void TestRocketLeague() {
@@ -1946,21 +2020,101 @@ static void TestSdkCatalog() {
     CHECK(ProfileByKey("sdk-cyberpunk2077") == cp && ProfileByKey("nope") == nullptr);
 }
 
+static void TestServiceStartGuard() {
+    using namespace luma::app::service;
+    struct Service {
+        uint32_t start = 2;
+        int writes = 0;
+        bool readable = true, writable = true;
+        bool Read(uint32_t* value) { *value = start; return readable; }
+        bool Write(uint32_t value) { ++writes; if (!writable) return false; start = value; return true; }
+    };
+    struct Store {
+        uint32_t original = 0;
+        SavedStart state = SavedStart::Missing;
+        bool writable = true, clearable = true;
+        SavedStart Read(uint32_t* value) { *value = original; return state; }
+        bool Write(uint32_t value) {
+            if (!writable) return false;
+            original = value; state = SavedStart::Found; return true;
+        }
+        bool Clear() { if (!clearable) return false; state = SavedStart::Missing; return true; }
+    };
+    for (uint32_t original : {2u, 3u}) {
+        Service svc; svc.start = original;
+        Store store;
+        CHECK(HoldStarts(svc, store) && svc.start == kDisabled && store.original == original);
+        CHECK(HoldStarts(svc, store) && svc.writes == 1);  // repeated ticks leave it alone
+        svc.start = 3;  // ASUS changed the setting: do not overwrite the saved original
+        CHECK(HoldStarts(svc, store) && store.original == original);
+        svc.writable = false;
+        CHECK(!RestoreStarts(svc, store) && store.state == SavedStart::Found);
+        svc.writable = true;
+        CHECK(RestoreStarts(svc, store) && svc.start == original && store.state == SavedStart::Missing);
+        CHECK(RestoreStarts(svc, store) && svc.start == original);
+    }
+    {
+        Service svc; svc.start = kDisabled;
+        Store store;
+        CHECK(HoldStarts(svc, store) && store.state == SavedStart::Missing && svc.writes == 0);
+        CHECK(RestoreStarts(svc, store) && svc.start == kDisabled && svc.writes == 0);
+    }
+    {
+        Service svc;
+        Store store; store.writable = false;
+        CHECK(!HoldStarts(svc, store) && svc.start == 2 && svc.writes == 0);
+        store.writable = true; svc.writable = false;
+        CHECK(!HoldStarts(svc, store) && store.original == 2 && store.state == SavedStart::Found);
+        svc.writable = true;
+        CHECK(RestoreStarts(svc, store) && svc.start == 2);  // failed hold is recoverable
+        store.state = SavedStart::Failed;
+        const int before = svc.writes;
+        CHECK(!HoldStarts(svc, store) && !RestoreStarts(svc, store) && svc.writes == before);
+        store.state = SavedStart::Missing; svc.readable = false;
+        CHECK(!HoldStarts(svc, store) && svc.writes == before);
+    }
+    {
+        Service svc;
+        Store store;
+        CHECK(HoldStarts(svc, store));
+        store.clearable = false;
+        CHECK(!RestoreStarts(svc, store) && svc.start == 2 && store.state == SavedStart::Found);
+        store.clearable = true;
+        CHECK(RestoreStarts(svc, store) && store.state == SavedStart::Missing);
+    }
+}
+
+static void TestAsusLightingWorkers() {
+    using luma::app::asus::IsRamLightingWorker;
+    const std::wstring pf = L"C:\\Program Files", pf86 = L"C:\\Program Files (x86)";
+    CHECK(IsRamLightingWorker(pf + L"\\ASUS\\KINGSTON_Aac_DRAM\\AacKingstonDramHal_x86.exe", pf, pf86));
+    CHECK(IsRamLightingWorker(pf86 + L"\\ASUS\\KINGSTON_Aac_DRAM\\AacKingstonDramHal_x64.exe", pf, pf86));
+    CHECK(IsRamLightingWorker(L"c:\\program files\\asus\\asus_aac_dram\\aac3572dramhal_x86.exe", pf, pf86));
+    CHECK(!IsRamLightingWorker(L"C:\\Downloads\\AacKingstonDramHal_x86.exe", pf, pf86));
+    CHECK(!IsRamLightingWorker(pf + L"\\ASUS\\KINGSTON_Aac_DRAM\\other.exe", pf, pf86));
+    CHECK(!IsRamLightingWorker(pf + L"\\ASUS\\KINGSTON_Aac_DRAM.backup\\AacKingstonDramHal_x86.exe", pf, pf86));
+    CHECK(!IsRamLightingWorker(pf + L"\\ASUS\\AsusFanControlService\\AsusFanControlService.exe", pf, pf86));
+    CHECK(!IsRamLightingWorker(L"\\asus\\kingston_aac_dram\\aackingstondramhal_x86.exe", L"", L""));
+}
+
 static void TestDirectModeReclaim() {
     using luma::aurausb::DirectModeReclaim;
     DirectModeReclaim r;
     CHECK(!r.Active() && !r.Due(100000));  // nothing happened: never
     CHECK(r.OnEvent(1000) && r.Active());
     CHECK(!r.Due(1000) && !r.Due(1499));
+    CHECK(!r.OnEvent(1200));               // several device nodes in one burst: one recovery
     CHECK(r.Due(1500) && !r.Due(1600));     // once per moment
-    CHECK(!r.OnEvent(2000));                // the rest of a burst (another device node): no change
-    CHECK(!r.Due(2499) && r.Due(2500));     // 1.5 s after the first event, not the last
-    CHECK(r.Due(20000) && !r.Due(20001));   // a late check catches up in one go
     CHECK(!r.Active());
+    CHECK(!r.Due(2500) && !r.Due(4000) && !r.Due(6000) && !r.Due(8500) &&
+          !r.Due(11000) && !r.Due(14000));  // no scheduled mode resets after recovery
+    CHECK(r.OnEvent(20000));              // a later service restart still gets recovered
+    CHECK(!r.Due(20499) && r.Due(20500));
+    CHECK(!r.Due(40000) && !r.Active());
     int count = 0;
     r.OnEvent(0);
     for (uint64_t t = 0; t <= 20000; t += 100) count += r.Due(t) ? 1 : 0;
-    CHECK(count == static_cast<int>(DirectModeReclaim::kSteps) && DirectModeReclaim::kAfterMs[DirectModeReclaim::kSteps - 1] <= 15000);
+    CHECK(count == 1);                    // one event must never produce repeated blanking
 }
 
 static void TestMoreGames() {
@@ -3340,6 +3494,18 @@ static void TestAzothConnection() {
     CHECK(SelectConnection(true, false, false, true) == Connection::Wired);
     CHECK(!KeyboardConnected(Connection::ReceiverOnly) && !KeyboardConnected(Connection::Disconnected));
     CHECK(KeyboardConnected(Connection::Wired) && KeyboardConnected(Connection::Wireless));
+    CHECK(CanUseOled(Connection::Wired, false, false));
+    CHECK(CanUseOled(Connection::Wireless, false, false));
+    CHECK(CanUseUsbOled(Connection::Wired, false, false));
+    CHECK(!CanUseUsbOled(Connection::Wireless, false, false));
+    for (const auto connection : {Connection::Unknown, Connection::Disconnected, Connection::ReceiverOnly}) {
+        CHECK(!CanUseOled(connection, false, false));
+        CHECK(!CanUseUsbOled(connection, false, false));
+    }
+    for (const auto connection : {Connection::Wired, Connection::Wireless}) {
+        CHECK(!CanUseOled(connection, true, false) && !CanUseOled(connection, false, true));
+        CHECK(!CanUseUsbOled(connection, true, false) && !CanUseUsbOled(connection, false, true));
+    }
     CHECK(ControlPath(Link::Wired, L"hid#vid_0b05&pid_1a83&mi_01#abc"));
     CHECK(ControlPath(Link::Wireless, L"HID#VID_0B05&PID_1ACE&MI_02&COL02#ABC"));
     CHECK(!ControlPath(Link::Wireless, L"hid#vid_0b05&pid_1ace&mi_02&col01#abc"));
@@ -3386,7 +3552,30 @@ static void TestPowerSuspend() {
     CHECK(power.Wait(0));
 }
 
+void TestIntegrationBatch() {
+    using namespace luma::app;
+    for (const auto* id : {"logitech", "chroma", "lightfx"}) {
+        CHECK(IncludeInIntegrationBatch(id, IntegrationState::NotInstalled, true));
+        CHECK(IncludeInIntegrationBatch(id, IntegrationState::Conflict, true));
+        CHECK(!IncludeInIntegrationBatch(id, IntegrationState::Active, true));
+        CHECK(IncludeInIntegrationBatch(id, IntegrationState::Active, false));
+        CHECK(!IncludeInIntegrationBatch(id, IntegrationState::Conflict, false));
+    }
+    for (const auto* id : {"helper", "handback"}) {
+        CHECK(IncludeInIntegrationBatch(id, IntegrationState::Problem, true));
+        CHECK(!IncludeInIntegrationBatch(id, IntegrationState::Active, false));
+        CHECK(!IncludeInIntegrationBatch(id, IntegrationState::Problem, false));
+    }
+    CHECK(IncludeInIntegrationBatch("gamesense", IntegrationState::NotInstalled, true));
+    CHECK(IncludeInIntegrationBatch("gamesense", IntegrationState::Problem, true));
+    CHECK(!IncludeInIntegrationBatch("gamesense", IntegrationState::Active, false));
+    CHECK(!IncludeInIntegrationBatch("gamesense", IntegrationState::Conflict, true));
+    CHECK(!IncludeInIntegrationBatch("corsair", IntegrationState::PerGame, true));
+    CHECK(!IncludeInIntegrationBatch("corsair", IntegrationState::Active, false));
+}
+
 int main() {
+    TestIntegrationBatch();
     TestPowerSuspend();
     TestSceneDepth();
     TestDeskModels();
@@ -3413,6 +3602,7 @@ int main() {
     TestGameProfiles();
     TestCs2();
     TestCs2Bomb();
+    TestCs2ExplosionLifecycle();
     TestRocketLeague();
     TestWarThunder();
     TestScreenColors();
@@ -3442,6 +3632,8 @@ int main() {
     TestF1();
     TestMoreGames();
     TestDirectModeReclaim();
+    TestServiceStartGuard();
+    TestAsusLightingWorkers();
     TestRacingFeeds();
     TestSdkCatalog();
     TestInventoryKinds();

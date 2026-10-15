@@ -35,7 +35,7 @@ $TaskPath = '\LumaBridge\'
 $TaskName = 'Hardware helper'
 # Bumped whenever the task or the helper changes; LumaBridge asks to set it up again when
 # the recorded version is older (kHelperTaskVersion in src/app/integrations.h).
-$TaskVersion = 6
+$TaskVersion = 7
 $VersionKey = 'HKLM:\SOFTWARE\LumaBridge'
 $InstallDir = Join-Path $env:ProgramFiles 'LumaBridge'
 $Modules = 'SmbusPIIX4.bin', 'SmbusI801.bin', 'LpcIO.bin', 'AMDFamily17.bin', 'IntelMSR.bin'
@@ -53,9 +53,28 @@ function Remove-OldRamHelper {
     Remove-ItemProperty -Path $VersionKey -Name RamTaskVersion -ErrorAction SilentlyContinue
 }
 
+# A forced helper replacement bypasses its normal exit cleanup. Restore the saved service
+# setting before removing its files, so a downgrade or failed install cannot leave it disabled.
+function Restore-AsusLighting {
+    $saved = Get-ItemProperty -LiteralPath $VersionKey -ErrorAction SilentlyContinue
+    if ($null -ne $saved.LightingServiceOriginalStart) {
+        $start = [int] $saved.LightingServiceOriginalStart
+        $mode = switch ($start) { 2 { 'auto' } 3 { 'demand' } default { throw 'Invalid saved ASUS lighting startup setting.' } }
+        & "$env:SystemRoot\System32\sc.exe" config LightingService start= $mode | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not restore the ASUS lighting startup setting; the saved value was kept.' }
+        Remove-ItemProperty -LiteralPath $VersionKey -Name LightingServiceOriginalStart
+    }
+    if ($saved.LightingServicePausedByLumaBridge) {
+        Start-Service -Name LightingService
+        Remove-ItemProperty -LiteralPath $VersionKey -Name LightingServicePausedByLumaBridge
+    }
+}
+
 if ($Uninstall) {
     Unregister-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     Get-Process -Name 'LumaBridge-Helper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Wait-Process -Name 'LumaBridge-Helper' -Timeout 15 -ErrorAction SilentlyContinue
+    Restore-AsusLighting
     Remove-OldRamHelper
     Remove-Item -Path (Join-Path $InstallDir 'LumaBridge-Helper.exe') -Force -ErrorAction SilentlyContinue
     foreach ($m in $Modules + 'SmbusPIIX4.bin') { Remove-Item -Path (Join-Path $InstallDir $m) -Force -ErrorAction SilentlyContinue }
@@ -111,6 +130,7 @@ if ($existing) { Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -
 try {
     Get-Process -Name 'LumaBridge-Helper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Wait-Process -Name 'LumaBridge-Helper' -Timeout 15 -ErrorAction SilentlyContinue
+    Restore-AsusLighting
     Remove-OldRamHelper
     New-Item -ItemType Directory -Force $InstallDir | Out-Null
     # The file can stay locked a moment after the process ends.
@@ -134,10 +154,13 @@ Copy-Item -Path (Join-Path $pawnDir 'modules\COPYING') -Destination (Join-Path $
 # limit: the helper lives as long as LumaBridge and exits by itself.
 $action = New-ScheduledTaskAction -Execute (Join-Path $InstallDir 'LumaBridge-Helper.exe') -WorkingDirectory $InstallDir
 $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+# Recover a saved ASUS startup setting after an unexpected shutdown, even if the app's
+# own startup is disabled. With no app connected the helper only restores it and exits.
+$recoveryTrigger = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -Action $action -Principal $principal `
-    -Settings $settings -Force `
+    -Settings $settings -Trigger $recoveryTrigger -Force `
     -Description 'LumaBridge: RAM lighting, fan / temperature sensors and pausing Armoury Crate''s lighting service while LumaBridge runs.' |
     Out-Null
 

@@ -3,6 +3,7 @@
 //   LumaBridge.exe              open the window
 //   LumaBridge.exe --minimized  start in the tray (used by "Start with Windows")
 #include <windows.h>
+#include <dbt.h>
 #include <d3d11.h>
 #include <dbghelp.h>
 #include <dwmapi.h>
@@ -390,7 +391,8 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         OnRawInput(lp);
         break;  // DefWindowProc cleans up
     case WM_DEVICECHANGE:
-        g_ctl.OnHardwareChanged();
+        if (wp == DBT_DEVNODES_CHANGED || wp == DBT_DEVICEARRIVAL || wp == DBT_DEVICEREMOVECOMPLETE)
+            g_ctl.OnHardwareChanged();
         break;
     case WM_POWERBROADCAST:
         if (wp == PBT_APMSUSPEND) g_ctl.OnSystemSuspend();

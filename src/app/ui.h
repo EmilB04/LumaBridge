@@ -80,6 +80,7 @@ struct UiState {
     std::wstring cs2Dir, rlDir, dotaDir;
     std::string feedMessage, feedMessageId;  // result of the last direct (non-elevated) write
     bool integrationsLoaded = false;
+    bool integrationsEdit = false;
     bool autostart = false;
     bool autostartLoaded = false;
     double splashStart = -1;  // when the loading screen appeared (ImGui time), -1 before the first frame

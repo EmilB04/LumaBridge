@@ -278,6 +278,47 @@ void Integrations::Install(const std::string& id, const std::wstring& gameDir, b
     }
 }
 
+void Integrations::SetAll(bool enabled) {
+    if (Busy()) return;
+    pending_.clear();
+    for (const auto& it : items_) {
+        if (IncludeInIntegrationBatch(it.id, it.state, enabled))
+            pending_.push_back(it.id);
+    }
+    batchEnabled_ = enabled;
+    batchRunning_ = !pending_.empty();
+    batchWaiting_ = false;
+    {
+        std::lock_guard<std::mutex> lock(msgMutex_);
+        lastId_ = "all";
+        message_ = batchRunning_ ? (enabled ? "Connecting your games..." : "Disconnecting game lighting...")
+                                : "Done: Connections updated";
+    }
+}
+
+void Integrations::Tick() {
+    if (!batchRunning_ || busy_) return;
+    if (batchWaiting_ && LastMessage().rfind("Done:", 0) != 0) {
+        // A declined prompt or failed step must not launch more administrator prompts.
+        pending_.clear();
+        batchRunning_ = false;
+        return;
+    }
+    if (pending_.empty()) {
+        batchRunning_ = false;
+        std::lock_guard<std::mutex> lock(msgMutex_);
+        lastId_ = "all";
+        message_ = batchEnabled_ ? "Done: Connections updated. Restart any games that were already open."
+                                : "Done: Game connections turned off. Hardware access and Armoury Crate hand-back are kept.";
+        return;
+    }
+    const std::string id = pending_.front();
+    pending_.erase(pending_.begin());
+    batchWaiting_ = true;
+    if (batchEnabled_) Install(id, L"", true);
+    else Remove(id);
+}
+
 void Integrations::Remove(const std::string& id, const std::wstring& gameDir) {
     if (id == "logitech") {
         Run(id, "Logitech LIGHTSYNC removed", L"Install-LogiLedProxy.ps1", L"-Uninstall", false);

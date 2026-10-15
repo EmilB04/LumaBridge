@@ -9,16 +9,9 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "integration_plan.h"
 
 namespace luma::app {
-
-enum class IntegrationState {
-    Active,        // installed and pointing at LumaBridge
-    NotInstalled,  // can be installed
-    Conflict,      // the vendor's own runtime is there (would be replaced)
-    PerGame,       // installed per game folder (Corsair)
-    Problem,       // built-in but not working (e.g. GameSense folder not writable)
-};
 
 struct Integration {
     std::string id;  // "logitech", "chroma", "gamesense", "corsair", "lightfx"
@@ -40,6 +33,10 @@ public:
     // replaces a vendor runtime.
     void Install(const std::string& id, const std::wstring& gameDir = L"", bool force = false);
     void Remove(const std::string& id, const std::wstring& gameDir = L"");
+    // The UI pumps the queue every frame, including while another page is open.
+    void SetAll(bool enabled);
+    void Tick();
+    bool BatchBusy() const { return batchRunning_; }
 
     // Writes (or removes) a game config file with administrator rights, through
     // scripts\Write-GameFile.ps1 (only for built-in game feed files).
@@ -48,7 +45,7 @@ public:
 
     // Parent window for the administrator prompt (so it opens in front of the app).
     void SetOwner(HWND owner) { owner_ = owner; }
-    bool Busy() const { return busy_; }
+    bool Busy() const { return busy_ || batchRunning_; }
     // Id of the integration the last action was for ("" before any).
     std::string LastId() const;
     // One-line result of the last action ("" while none); thread-safe.
@@ -69,13 +66,15 @@ private:
     std::string lastId_;
     std::thread worker_;
     HWND owner_ = nullptr;
+    std::vector<std::string> pending_;
+    bool batchRunning_ = false, batchEnabled_ = false, batchWaiting_ = false;
 };
 
 // Version of the hand-back task Install-HandbackTask.ps1 registers (it records it in
 // HKLM\SOFTWARE\LumaBridge\HandbackTaskVersion); an older task needs setting up again.
-constexpr DWORD kHandbackTaskVersion = 6;
+constexpr DWORD kHandbackTaskVersion = 7;
 // Same for the hardware helper (Install-Helper.ps1, HKLM\SOFTWARE\LumaBridge\HelperTaskVersion).
-constexpr DWORD kHelperTaskVersion = 6;  // 6: RAM sticks retried, every slot lit when the SPD misses some; 5: pauses Armoury Crate's lighting service; 4: RAM sticks found by SPD presence, bus retry; 3: Intel SMBus RAM lighting module
+constexpr DWORD kHelperTaskVersion = 7;  // 7: prevents ASUS lighting service restarts while paused
 
 std::wstring AppDirectory();
 // Folder picker; empty when cancelled.

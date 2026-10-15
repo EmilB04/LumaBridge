@@ -51,7 +51,7 @@ with an administrator prompt.
 | **Lighting** | Build a look with static color, breathing, strobe, color cycle, rainbow wave, gradient, comet or twinkle. Set brightness, direction and individual device overrides. |
 | **Games List** | Find installed games, set up their data feeds and choose screen colors or a fallback look for games without supported lighting. |
 | **Devices** | Control lighting, view readings and browse everything Windows reports in the searchable **All hardware** inventory. |
-| **Integrations** | Set up game SDKs, Windows lighting devices and OpenRGB, with connection status and recovery controls. |
+| **Integrations** | One master switch sets up Logitech, Razer, SteelSeries and Alienware game lighting, Windows lighting and OpenRGB. Edit individual connections, add Corsair game folders or repair setup. Hardware access and Armoury Crate hand-back stay installed when game connections are switched off. |
 
 ### Live system readings
 
@@ -66,7 +66,7 @@ with an administrator prompt.
 ![Windows Azoth device page showing screen controls and six LumaBridge GIF previews](docs/images/app-azoth.png)
 
 Choose from eighteen compact animation previews and click **Upload to Azoth (USB)** to send
-the animation directly from LumaBridge, with progress and cancellation. This experimental
+the animation directly from LumaBridge, with progress and cancellation. The
 upload uses the original Azoth's HID connection and requires no Armoury Crate installation.
 The firmware's artwork area is **208 × 64**, beside its status icons; LumaBridge fits the
 animation into that area. Wireless GIF uploads and importing your own GIF files are not
@@ -74,21 +74,27 @@ implemented yet. You can still export a **256 × 64 GIF** and use the Armoury Cr
 guide. Direct screen power, brightness,
 ASUS built-in animations and a local clock are also available as experimental controls.
 Direct GIF uploads have been confirmed on the owner's original Azoth by cable.
+Unavailable OLED actions are greyed out for the current connection. Bluetooth cannot
+control the OLED; Omni supports basic screen controls, while music, countdowns and custom
+GIF uploads require wired USB. Previews and file exports remain available without a
+supported connection. Controls also pause while the keyboard sleeps or an upload runs.
 
 Enable **CS2 bomb countdown on Azoth** on the CS2 game page or under Devices > Azoth >
 OLED display. Connect the USB cable and set the keyboard switch to **wired USB**; the
 Omni / 2.4 GHz receiver does not support this countdown. Enabling the option keeps your
-normal screen until a bomb is planted. **Test countdown on keyboard** runs a 10-second
-check without a match, then restores the screen. Connection and feed status beside the
+normal screen until a bomb is planted. Connection and feed status beside the
 option explain when it is waiting or unavailable. Large remaining seconds replace the
-screen while the bomb is planted. Normal play uses an **estimated** 40-second fuse from
+screen while the bomb is planted. Icons beside the countdown show defuse time: **5 seconds
+with a kit**, **10 seconds without one**. A confirmed bomb explosion plays a short animation
+before restoring the normal screen; a successful defuse restores it immediately. Normal play uses an **estimated** 40-second fuse from
 the plant signal; community-server fuse duration is adjustable. When GSI supplies a bomb
-countdown, LumaBridge uses it instead. Defuse, explosion, round changes, feed loss and timer
-expiry clear the countdown and restore the selected clock, music mode or confirmed animation.
+countdown, LumaBridge uses it instead. Round changes, feed loss and timer expiry clear the
+countdown and restore the selected clock, music mode or confirmed animation. An estimated
+timer reaching zero does not invent an explosion: the animation uses CS2's detonation event.
 An unknown previous mode or a custom GIF not confirmed in this connection returns to the
 clock. Existing CS2 feed setups work for the estimate; **Update feed** on the CS2 page adds
-the optional countdown fields (restart CS2 afterward). This USB display feature needs testing
-on a real keyboard.
+the optional countdown fields (restart CS2 afterward). The CS2 countdown has been confirmed
+working on the owner's Azoth over wired USB.
 
 The **Show** menu also offers **Audio EQ** and **Song info**. EQ uses the default Windows
 playback device and displays a live 32-band spectrum that scales itself to the music, so
@@ -153,6 +159,18 @@ connections; vendor apps still handle firmware updates, macros and cooling confi
 A working native output takes priority over OpenRGB by default. Each OpenRGB device has
 its own saved control switch. See the [hardware guide](docs/peripherals.md) for connection
 requirements and device-specific scope.
+
+With Hardware access updated and Armoury Crate lighting paused, LumaBridge blocks the
+ASUS lighting service from restarting during keyboard connection changes, so fan and
+motherboard lighting can continue uninterrupted. Its original service startup setting
+is restored when LumaBridge releases control or exits. Opening Armoury Crate alone does
+not transfer lighting control. If an ASUS RAM lighting worker keeps the SMBus locked after
+its service stops, the helper closes that installed lighting worker so native RAM control
+can recover. Armoury Crate can start its workers again after handback.
+
+Device statuses show the current lighting connection where available: wired USB or
+wireless through Omni for the Azoth, USB or Bluetooth for controllers, and direct control,
+G HUB, Windows lighting or OpenRGB for other outputs.
 
 ### Sleep and power saving
 

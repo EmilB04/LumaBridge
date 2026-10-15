@@ -31,6 +31,13 @@ add_executable(test_core tests/test_core.cpp)
 target_include_directories(test_core PRIVATE
     src/core src/integrations/razer src/integrations/corsair src/integrations/alienware src/integrations/steelseries src/app src/app/games src/app/sensors src/app/peripherals src/hardware/aura-usb)
 add_test(NAME test_core COMMAND test_core)
+if(WIN32)
+    find_program(LUMA_POWERSHELL NAMES powershell.exe)
+    if(LUMA_POWERSHELL)
+        add_test(NAME test_handback COMMAND "${LUMA_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+                 -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_handback.ps1")
+    endif()
+endif()
 
 if(NOT WIN32)
     return()

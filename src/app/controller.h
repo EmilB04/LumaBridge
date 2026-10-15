@@ -207,14 +207,11 @@ public:
     void ReapplyAzothOled() { azoth_.ReapplyOled(); }
     bool UploadAzothOledEffect(int effect) { return azoth_.UploadOledEffect(effect); }
     void CancelAzothOledUpload() { azoth_.CancelOledUpload(); }
-    // A USB device came or went, or the PC woke up (from the window's WM_DEVICECHANGE /
-    // WM_POWERBROADCAST): look for the Azoth again, and take the motherboard's lights back if
-    // Armoury Crate re-applies its lighting.
+    // A peripheral changed: look for the Azoth without resetting the motherboard's mode.
+    // Only a confirmed ASUS service stop needs motherboard recovery (in Tick).
     void OnHardwareChanged() {
         if (systemSuspended_) return;
         azoth_.Rescan();
-        // Not needed while Armoury Crate's lighting service is paused (it can't interfere then).
-        if (mirror_.IsRunning() && hardware_.asusLighting() != helper::AsusLighting::Paused) mirror_.Reclaim();
     }
 
     // Sony DualSense lightbar, by USB or Bluetooth (experimental).
@@ -281,9 +278,7 @@ private:
     bool AuraNative() const;
     bool auraNativeApplied_ = false;  // Apply() handed the Aura devices back to Armoury Crate
     uint64_t handbackDoneAt_ = 0;  // GetTickCount64() when the current hand-back should be done
-    uint64_t armouryCheckAt_ = 0;  // when to look for Armoury Crate's window again
     uint32_t asusStops_ = 0;       // hardware_.asusStops() last seen
-    bool armouryOpen_ = false;     // its window is open: its lighting service runs
     bool shutDown_ = false;
     Output output_;
     bool systemSuspended_ = false;

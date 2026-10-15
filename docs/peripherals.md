@@ -120,14 +120,15 @@ skips the timeout entirely while its current effect isn't a plain static color (
 animated preset like Rainbow or Comet), so it doesn't fade out mid-effect; a still color still
 sleeps as usual.
 
-## ASUS ROG Azoth (wired or wireless, experimental)
+## ASUS ROG Azoth (wired or wireless)
 
-The test build adds **Devices > ROG Azoth > OLED display**: opt-in screen on/off,
+**Devices > ROG Azoth > OLED display** offers screen on/off,
 brightness, six built-in animations and a 12/24-hour clock, independent of RGB control.
 The default leaves the screen unchanged. With Armoury Crate, it can open the OLED setup
-workflow and export a 256 x 64 banner BMP for manual upload. Direct custom uploads and
-live telemetry need further protocol work. USB power and brightness acknowledgments
-were confirmed on the owner's keyboard; animation/clock visuals and hotplug remain to test.
+workflow and export a 256 x 64 banner BMP for manual upload. Direct LumaBridge GIF uploads
+and the CS2 bomb countdown have been confirmed working on the owner's Azoth over wired USB.
+USB power and brightness acknowledgments were also confirmed; live music modes still need
+physical-screen validation.
 See [the OLED investigation](azoth-oled-research.md).
 
 The status checks present USB interfaces every second and prefers the cable over Omni.

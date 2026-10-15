@@ -25,6 +25,7 @@
 // Log: %ProgramData%\LumaBridge\helper.log.
 #include <windows.h>
 #include <sddl.h>
+#include <tlhelp32.h>
 
 #include <array>
 #include <cctype>
@@ -38,6 +39,8 @@
 #include "hw_sensors.h"
 #include "hyperx_ram.h"
 #include "smbios.h"
+#include "service_start_guard.h"
+#include "asus_lighting_workers.h"
 
 namespace {
 
@@ -522,11 +525,13 @@ private:
 // effect stalls for seconds. While the app asks, the service is kept stopped; it's started
 // again when the app lets go of the lights or exits. Only a service LumaBridge stopped is
 // started again, and a registry value remembers that, so a helper that was ended meanwhile
-// (an update) still starts it. Nothing else about the service is changed.
+// (an update) still starts it. Its original startup setting is saved before temporarily
+// disabling starts, so ASUS's device watcher cannot restart it during a disconnect.
+// The setting is restored before handing control back, including after a helper restart.
 class AsusLightingService {
 public:
     // Looks every couple of seconds; `now` forces a look when 0.
-    void Update(bool pause, uint64_t now) {
+    void Update(bool pause, uint64_t now, bool ramBusBusy = false) {
         if (now && now < nextCheck_) return;
         nextCheck_ = now + 2000;
         SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
@@ -534,7 +539,8 @@ public:
             Set(helper::AsusLighting::Failed, "can't open the service manager (error %lu)", GetLastError());
             return;
         }
-        SC_HANDLE svc = OpenServiceW(scm, kName, SERVICE_QUERY_STATUS | SERVICE_STOP | SERVICE_START);
+        SC_HANDLE svc = OpenServiceW(scm, kName, SERVICE_QUERY_STATUS | SERVICE_STOP | SERVICE_START |
+                                               SERVICE_QUERY_CONFIG | SERVICE_CHANGE_CONFIG);
         if (!svc) {
             const DWORD err = GetLastError();
             if (err == ERROR_SERVICE_DOES_NOT_EXIST) Set(helper::AsusLighting::NotInstalled, nullptr);
@@ -544,13 +550,34 @@ public:
         }
         SERVICE_STATUS_PROCESS st{};
         DWORD need = 0;
-        QueryServiceStatusEx(svc, SC_STATUS_PROCESS_INFO, reinterpret_cast<LPBYTE>(&st), sizeof st, &need);
+        if (!QueryServiceStatusEx(svc, SC_STATUS_PROCESS_INFO, reinterpret_cast<LPBYTE>(&st), sizeof st, &need)) {
+            Set(helper::AsusLighting::Failed, "can't query LightingService (error %lu)", GetLastError());
+            CloseServiceHandle(svc);
+            CloseServiceHandle(scm);
+            return;
+        }
+        StartConfig config{svc};
+        StartStore store;
+        const bool guarded = pause ? service::HoldStarts(config, store) : service::RestoreStarts(config, store);
+        if (!guarded) {
+            Set(helper::AsusLighting::Failed, pause ? "couldn't block LightingService restarts (error %lu)"
+                                                  : "couldn't restore LightingService startup (error %lu)", GetLastError());
+            CloseServiceHandle(svc);
+            CloseServiceHandle(scm);
+            return;
+        }
         const bool stopped = st.dwCurrentState == SERVICE_STOPPED || st.dwCurrentState == SERVICE_STOP_PENDING;
         if (pause) {
             if (st.dwCurrentState == SERVICE_RUNNING) {
                 SERVICE_STATUS s{};
                 const bool again = state_ == helper::AsusLighting::Paused;
-                Mark(true);  // before stopping: whatever happens next, it's started again later
+                // Record ownership before stopping, so a replacement helper can restore it.
+                if (!Mark(true)) {
+                    Set(helper::AsusLighting::Failed, "couldn't save LightingService ownership (error %lu)", GetLastError());
+                    CloseServiceHandle(svc);
+                    CloseServiceHandle(scm);
+                    return;
+                }
                 if (ControlService(svc, SERVICE_CONTROL_STOP, &s)) {
                     ++stops_;
                     if (again) Log("LightingService was started again by something else - paused again");
@@ -558,6 +585,10 @@ public:
                 } else
                     Set(helper::AsusLighting::Failed, "couldn't pause LightingService (error %lu)", GetLastError());
             } else if (stopped) {
+                // COM-hosted RAM workers can outlive LightingService and hold the SMBus
+                // indefinitely. Only release these known ASUS lighting workers, after the
+                // service has stopped and starts are blocked, when native RAM needs the bus.
+                if (st.dwCurrentState == SERVICE_STOPPED && ramBusBusy) ReleaseRamWorkers();
                 Set(helper::AsusLighting::Paused, nullptr);
             }
         } else if (Marked()) {
@@ -581,9 +612,9 @@ public:
 
     // The app is gone: start the service again if LumaBridge stopped it (waits for it to stop).
     void Restore() {
-        for (int i = 0; i < 20 && Marked(); ++i) {
+        for (int i = 0; i < 20 && (Marked() || SavedStartPending()); ++i) {
             Update(false, 0);
-            if (Marked()) Sleep(250);
+            if (Marked() || SavedStartPending()) Sleep(250);
         }
     }
 
@@ -592,9 +623,94 @@ public:
     uint32_t stops() const { return stops_; }
 
 private:
+    void ReleaseRamWorkers() {
+        wchar_t pf[32768]{}, pf86[32768]{};
+        GetEnvironmentVariableW(L"ProgramFiles", pf, static_cast<DWORD>(std::size(pf)));
+        GetEnvironmentVariableW(L"ProgramFiles(x86)", pf86, static_cast<DWORD>(std::size(pf86)));
+        HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot == INVALID_HANDLE_VALUE) return;
+        PROCESSENTRY32W p{};
+        p.dwSize = sizeof p;
+        if (Process32FirstW(snapshot, &p)) do {
+            if (_wcsicmp(p.szExeFile, L"AacKingstonDramHal_x86.exe") &&
+                _wcsicmp(p.szExeFile, L"AacKingstonDramHal_x64.exe") &&
+                _wcsicmp(p.szExeFile, L"Aac3572DramHal_x86.exe")) continue;
+            HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE,
+                                         FALSE, p.th32ProcessID);
+            if (!process) continue;
+            wchar_t path[32768]{};
+            DWORD chars = static_cast<DWORD>(std::size(path));
+            if (QueryFullProcessImageNameW(process, 0, path, &chars) && asus::IsRamLightingWorker(path, pf, pf86)) {
+                if (TerminateProcess(process, 0)) {
+                    Log("RAM: stopped ASUS lighting worker %ls (pid %lu) to release the SMBus", p.szExeFile, p.th32ProcessID);
+                    WaitForSingleObject(process, 500);
+                } else if (failedRamWorker_ != p.th32ProcessID) {
+                    failedRamWorker_ = p.th32ProcessID;
+                    Log("RAM: couldn't stop ASUS lighting worker %ls (error %lu)", p.szExeFile, GetLastError());
+                }
+            }
+            CloseHandle(process);
+        } while (Process32NextW(snapshot, &p));
+        CloseHandle(snapshot);
+    }
+
     static constexpr wchar_t kName[] = L"LightingService";
     static constexpr wchar_t kKey[] = L"SOFTWARE\\LumaBridge";
     static constexpr wchar_t kValue[] = L"LightingServicePausedByLumaBridge";
+    static constexpr wchar_t kStartValue[] = L"LightingServiceOriginalStart";
+
+    struct StartConfig {
+        SC_HANDLE handle;
+        bool Read(uint32_t* start) {
+            DWORD bytes = 0;
+            QueryServiceConfigW(handle, nullptr, 0, &bytes);
+            if (!bytes) return false;
+            std::vector<BYTE> buffer(bytes);
+            auto* cfg = reinterpret_cast<QUERY_SERVICE_CONFIGW*>(buffer.data());
+            if (!QueryServiceConfigW(handle, cfg, bytes, &bytes)) return false;
+            *start = cfg->dwStartType;
+            return true;
+        }
+        bool Write(uint32_t start) {
+            if (!ChangeServiceConfigW(handle, SERVICE_NO_CHANGE, start, SERVICE_NO_CHANGE,
+                                      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr)) return false;
+            Log(start == SERVICE_DISABLED ? "LightingService restarts blocked while LumaBridge has the lights"
+                                          : "LightingService original startup setting restored");
+            return true;
+        }
+    };
+
+    struct StartStore {
+        service::SavedStart Read(uint32_t* start) {
+            DWORD value = 0, bytes = sizeof value;
+            const LSTATUS err = RegGetValueW(HKEY_LOCAL_MACHINE, kKey, kStartValue, RRF_RT_REG_DWORD,
+                                             nullptr, &value, &bytes);
+            if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND) return service::SavedStart::Missing;
+            if (err != ERROR_SUCCESS || (value != SERVICE_AUTO_START && value != SERVICE_DEMAND_START)) {
+                SetLastError(err == ERROR_SUCCESS ? ERROR_INVALID_DATA : err);
+                return service::SavedStart::Failed;
+            }
+            *start = value;
+            return service::SavedStart::Found;
+        }
+        bool Write(uint32_t start) {
+            const DWORD value = start;
+            const LSTATUS err = RegSetKeyValueW(HKEY_LOCAL_MACHINE, kKey, kStartValue, REG_DWORD, &value, sizeof value);
+            if (err != ERROR_SUCCESS) SetLastError(err);
+            return err == ERROR_SUCCESS;
+        }
+        bool Clear() {
+            const LSTATUS err = RegDeleteKeyValueW(HKEY_LOCAL_MACHINE, kKey, kStartValue);
+            if (err != ERROR_SUCCESS && err != ERROR_FILE_NOT_FOUND) SetLastError(err);
+            return err == ERROR_SUCCESS || err == ERROR_FILE_NOT_FOUND;
+        }
+    };
+
+    static bool SavedStartPending() {
+        uint32_t start = 0;
+        StartStore store;
+        return store.Read(&start) != service::SavedStart::Missing;
+    }
 
     // Logs `what` (if any) when the state changes or the message is new.
     void Set(helper::AsusLighting s, const char* what, unsigned long code = 0) {
@@ -606,17 +722,22 @@ private:
         DWORD v = 0, size = sizeof v;
         return RegGetValueW(HKEY_LOCAL_MACHINE, kKey, kValue, RRF_RT_REG_DWORD, nullptr, &v, &size) == ERROR_SUCCESS && v;
     }
-    static void Mark(bool on) {
+    static bool Mark(bool on) {
+        LSTATUS err;
         if (on) {
             const DWORD v = 1;
-            RegSetKeyValueW(HKEY_LOCAL_MACHINE, kKey, kValue, REG_DWORD, &v, sizeof v);
+            err = RegSetKeyValueW(HKEY_LOCAL_MACHINE, kKey, kValue, REG_DWORD, &v, sizeof v);
         } else {
-            RegDeleteKeyValueW(HKEY_LOCAL_MACHINE, kKey, kValue);
+            err = RegDeleteKeyValueW(HKEY_LOCAL_MACHINE, kKey, kValue);
+            if (err == ERROR_FILE_NOT_FOUND) return true;
         }
+        if (err != ERROR_SUCCESS) SetLastError(err);
+        return err == ERROR_SUCCESS;
     }
 
     uint64_t nextCheck_ = 0;
     uint32_t stops_ = 0;
+    DWORD failedRamWorker_ = 0;
     helper::AsusLighting state_ = helper::AsusLighting::Unknown;
     const char* lastLog_ = nullptr;
 };
@@ -644,6 +765,7 @@ helper::Shared* CreateShared(HANDLE* mapping) {
         ZeroMemory(s, sizeof *s);
         s->version = helper::kVersion;
         s->helperPid = GetCurrentProcessId();
+        s->taskVersion = 7;
         MemoryBarrier();
         s->magic = helper::kMagic;
     }
@@ -669,7 +791,12 @@ int wmain() {
     }
     for (int i = 0; i < 150 && !s->appPid; ++i) Sleep(100);  // wait for the app to connect
     if (!s->appPid) {
+        // At boot, recover a startup setting left behind by a power loss or killed helper.
+        AsusLightingService recovery;
+        recovery.Restore();
         Log("the app didn't connect - exiting");
+        UnmapViewOfFile(s);
+        CloseHandle(mapping);
         return 1;
     }
     HANDLE app = OpenProcess(SYNCHRONIZE, FALSE, s->appPid);
@@ -694,6 +821,10 @@ int wmain() {
         Sleep(30);
         const uint64_t now = GetTickCount64();
         s->helperBeat++;
+        if (s->stopRequested) {
+            Log("the app requested hardware handback");
+            break;
+        }
         if (app && WaitForSingleObject(app, 0) == WAIT_OBJECT_0) {
             Log("the app exited");
             break;
@@ -706,7 +837,8 @@ int wmain() {
             Log("no word from the app for 10 s - exiting");
             break;
         }
-        asus.Update(s->pauseAsusLighting != 0, now);  // needs no PawnIO
+        asus.Update(s->pauseAsusLighting != 0, now,
+                    s->ramWanted && s->ramOwn && ram.status() == helper::RamStatus::BusBusy);  // needs no PawnIO
         s->asusLighting = asus.state();
         s->asusStops = asus.stops();
         if (s->status != helper::Status::Running) continue;
@@ -744,6 +876,8 @@ int wmain() {
     }
     ram.LetGo();  // LumaBridge is gone: hand the sticks back
     asus.Restore();
+    MemoryBarrier();
+    s->stopped = 1;
     UnmapViewOfFile(s);
     CloseHandle(mapping);
     Log("hardware helper exiting");

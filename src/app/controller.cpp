@@ -385,9 +385,9 @@ void Controller::Shutdown(bool handBack) {
     openRgb_.Stop();
     kraken_.Stop();
     lampArray_.Stop();
-    hardware_.Stop();
     const bool wasControlling = mirror_.IsRunning();
     mirror_.Stop();
+    hardware_.Stop();  // close Aura's USB handle before the helper restores ASUS lighting
     // Exiting LumaBridge gives the lights back to Armoury Crate (not during a Windows
     // shutdown: the controller reloads Armoury Crate's saved effect at the next boot anyway).
     if (wasControlling && handBack) HandBackLighting();
@@ -905,17 +905,9 @@ void Controller::Tick() {
                      !output_.stopped && !DeviceNative(prefs_, device::kRam), prefs_.ramRelease);
     // Armoury Crate's lighting service re-applies its own lighting whenever a USB device comes
     // or goes (dark, flickering fans and a stalled RAM effect): kept paused while LumaBridge has
-    // ASUS lights, unless Armoury Crate's window is open (then it's being used).
-    if (now >= armouryCheckAt_) {
-        armouryCheckAt_ = now + 2000;
-        const bool open = ArmouryCrateWindowOpen();
-        if (open != armouryOpen_ && prefs_.pauseArmouryCrate)
-            LUMA_INFO("Armoury Crate's window %s - its lighting service %s", open ? "is open" : "closed",
-                      open ? "runs meanwhile" : "is paused again");
-        armouryOpen_ = open;
-    }
+    // ASUS lights. Opening its window must not silently transfer lighting ownership.
     const bool asusLights = !output_.stopped && (mirror_.IsRunning() || (prefs_.ramLighting && !DeviceNative(prefs_, device::kRam)));
-    hardware_.SetPauseAsusLighting(prefs_.pauseArmouryCrate && asusLights && !armouryOpen_);
+    hardware_.SetPauseAsusLighting(prefs_.pauseArmouryCrate && asusLights);
     // Something (Armoury Crate, when an ASUS keyboard is plugged in by cable) can start the
     // service again every few seconds. Each time it runs it takes the motherboard's channels
     // out of direct mode, and LumaBridge's frames are then ignored without an error (black

@@ -280,8 +280,8 @@ void AzothOutput::Run() {
     int64_t lastSongSecond = -1, lastSongLength = -1;
     bool songSent = false;
     bool bombWasShown = false, bombRestore = false;
-    int restoreCustom = -1, restorePreset = -1, lastBombSecond = -1;
-    bool lastBombEstimated = true, lastBombTesting = false;
+    int restoreCustom = -1, restorePreset = -1;
+    games::BombCountdown lastBomb;
     bool musicNeedsSetup = true;
     HANDLE dev = INVALID_HANDLE_VALUE;
     azoth::Link link = azoth::Link::Wired;
@@ -319,7 +319,8 @@ void AzothOutput::Run() {
     };
     auto resetSession = [&] {
         bombWasShown = bombRestore = false;
-        restoreCustom = restorePreset = lastBombSecond = -1;
+        restoreCustom = restorePreset = -1;
+        lastBomb = {};
         music.Reset();
         musicRevision = UINT64_MAX;
         nextMusic = 0;
@@ -562,7 +563,7 @@ void AzothOutput::Run() {
                     restoreCustom = uploadedEffect_;
                     restorePreset = oledAnimation_;
                 }
-                lastBombSecond = -1;
+                lastBomb = {};
             } else {
                 bombRestore = true;
                 appliedRevision = attemptedRevision = UINT64_MAX;
@@ -739,7 +740,7 @@ void AzothOutput::Run() {
             const bool setup = musicRevision != revision || musicNeedsSetup;
             // The progress bar and clock change once a second while a song plays.
             const bool trackChanged = liveBomb
-                ? bomb.seconds != lastBombSecond || bomb.estimated != lastBombEstimated || bomb.testing != lastBombTesting
+                ? !games::SameBombDisplay(bomb, lastBomb)
                 : !songSent || media.title != lastSongTitle || media.artist != lastSongArtist ||
                   media.positionMs / 1000 != lastSongSecond || media.durationMs / 1000 != lastSongLength;
             azoth::Report reply{}, failedCommand{};
@@ -748,7 +749,8 @@ void AzothOutput::Run() {
             auto exchange = [&](const azoth::Report& command) {
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
-                    superseded = stop_ || asleep_ || revision != oledRevision_ || bomb.active != bomb_.active;
+                    superseded = stop_ || asleep_ || revision != oledRevision_ || bomb.active != bomb_.active ||
+                                 bomb.exploded != bomb_.exploded;
                 }
                 if (superseded) return false;
                 if (OledExchange(dev, command, link, reply, &replySize, 1000)) return true;
@@ -775,7 +777,7 @@ void AzothOutput::Run() {
                 for (size_t i = 0; ok && i < (data.size() + 59) / 60; ++i)
                     ok = exchange(azoth::OledSongPart(data, i));
                 if (ok) {
-                    lastBombSecond = bomb.seconds; lastBombEstimated = bomb.estimated; lastBombTesting = bomb.testing;
+                    lastBomb = bomb;
                     lastSongTitle = media.title; lastSongArtist = media.artist; songSent = true;
                     lastSongSecond = media.positionMs / 1000; lastSongLength = media.durationMs / 1000;
                 }

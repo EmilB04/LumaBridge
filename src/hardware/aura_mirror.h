@@ -66,8 +66,8 @@ public:
     void SetDisabledDevices(const std::vector<std::wstring>& names);
     void Rescan();  // re-enumerate devices on the next worker iteration
     // A USB device came or went, or the PC woke up: Armoury Crate may re-apply its lighting
-    // and take the lights out of direct mode, so take them back a few times over the next
-    // seconds (aurausb::DirectModeReclaim).
+    // and take the lights out of direct mode, so recover once after the event burst
+    // (aurausb::DirectModeReclaim).
     void Reclaim();
 
     // Send black once, then leave the hardware alone until resume. No vendor hand-back.

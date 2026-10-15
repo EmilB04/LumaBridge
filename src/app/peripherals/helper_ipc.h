@@ -93,6 +93,10 @@ struct Shared {
     // Helper -> app: bumped each time the helper stopped LightingService. Starting it puts the
     // motherboard's channels in Armoury Crate's own mode, so the app takes them back.
     uint32_t asusStops;
+    // ---- Since helper task version 7 ----
+    uint32_t taskVersion;
+    uint32_t stopRequested;  // app asks the helper to finish handback before exiting
+    uint32_t stopped;        // helper finished releasing RAM and restoring ASUS service settings
 };
 
 constexpr size_t kSizeV2 = offsetof(Shared, pauseAsusLighting);

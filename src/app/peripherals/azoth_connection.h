@@ -19,6 +19,15 @@ inline bool KeyboardConnected(Connection state) {
     return state == Connection::Wired || state == Connection::Wireless;
 }
 
+inline bool CanUseOled(Connection state, bool asleep, bool unresponsive) {
+    return KeyboardConnected(state) && !asleep && !unresponsive;
+}
+
+// Live music, bomb countdowns and custom GIF uploads use the wired interface only.
+inline bool CanUseUsbOled(Connection state, bool asleep, bool unresponsive) {
+    return state == Connection::Wired && CanUseOled(state, asleep, unresponsive);
+}
+
 inline bool ControlPath(Link link, std::wstring path) {
     for (auto& c : path) if (c >= L'A' && c <= L'Z') c += L'a' - L'A';
     return path.find(link == Link::Wired ? L"&mi_01#" : L"&mi_02&col02#") != std::wstring::npos;

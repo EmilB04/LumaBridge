@@ -104,6 +104,13 @@ void HardwareHelper::Run() {
         if (sh) {
             sh->ramOwn = 0;
             sh->pauseAsusLighting = 0;
+            if (stop_ && sh->taskVersion >= 7) {
+                MemoryBarrier();
+                sh->stopRequested = 1;
+                const uint64_t until = GetTickCount64() + 2500;
+                while (!sh->stopped && GetTickCount64() < until) Sleep(25);
+                if (!sh->stopped) LUMA_WARN("hardware helper: handback is still finishing (see helper.log)");
+            }
             UnmapViewOfFile(sh);
         }
         asus_ = helper::AsusLighting::Unknown;

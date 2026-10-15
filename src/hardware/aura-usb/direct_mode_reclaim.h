@@ -3,9 +3,9 @@
 // and after sleep, and that takes the controller's channels out of direct mode: LumaBridge's
 // frames are then ignored without any error, and the fans stay dark until direct mode is
 // entered again. Entering it blanks the LEDs for an instant (a flicker if done all the time),
-// so it's only repeated a few times over the seconds after such an event, by when Armoury
-// Crate has finished. Only needed while that service runs: the app normally keeps it paused
-// (hardware helper). Pure C++, tested.
+// so each event burst gets only one recovery attempt. If the helper stops a restarted ASUS
+// service, that is a new recovery event. Only needed while that service runs: the app
+// normally keeps it paused (hardware helper). Pure C++, tested.
 #pragma once
 
 #include <cstddef>
@@ -16,7 +16,7 @@ namespace luma::aurausb {
 class DirectModeReclaim {
 public:
     // After an event: when (ms) to enter direct mode again.
-    static constexpr uint64_t kAfterMs[] = {500, 1500, 3000, 5000, 7500, 10000, 13000};
+    static constexpr uint64_t kAfterMs[] = {500};
     static constexpr size_t kSteps = sizeof kAfterMs / sizeof kAfterMs[0];
 
     // A device came or went, or the PC woke up. True if this starts a schedule (worth a log

@@ -173,7 +173,16 @@ void CellText(const std::string& text) {
 // A status pill in a table cell, cut to the cell with "..." (the full text and `tip` on hover).
 void CellPill(const std::string& text, unsigned color, const std::string& tip) {
     const float padX = 2 * 10 * S();  // Pill's own padding
-    const std::string shown = Ellipsize(text, ImGui::GetContentRegionAvail().x - padX);
+    const float room = ImGui::GetContentRegionAvail().x - padX;
+    std::string shown = Ellipsize(text, room);
+    const std::string following = "Following LumaBridge";
+    if (shown != text && text.rfind(following + ", ", 0) == 0) {
+        // Keep the connection visible in narrow device tables; the full status is on hover.
+        const std::string connection = text.substr(following.size());
+        const float connectionWidth = ImGui::CalcTextSize(connection.c_str()).x;
+        if (connectionWidth + ImGui::CalcTextSize("...").x < room)
+            shown = Ellipsize(following, room - connectionWidth) + connection;
+    }
     Pill(shown.c_str(), color);
     if (!ImGui::IsItemHovered()) return;
     if (shown != text) ImGui::SetTooltip("%s%s%s", text.c_str(), tip.empty() ? "" : "\n", tip.c_str());
@@ -224,8 +233,8 @@ bool Segmented(const char* id, int* current, const char* const* labels, int coun
     const float bw = (total - pad * 2) / count;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    dl->AddRectFilled(p, ImVec2(p.x + total, p.y + h), Hex(kTrack), h / 2);
-    dl->AddRect(p, ImVec2(p.x + total, p.y + h), Hex(kBorder, 160), h / 2);
+    dl->AddRectFilled(p, ImVec2(p.x + total, p.y + h), ImGui::GetColorU32(V4(kTrack)), h / 2);
+    dl->AddRect(p, ImVec2(p.x + total, p.y + h), ImGui::GetColorU32(V4(kBorder, 160.f / 255.f)), h / 2);
     for (int i = 0; i < count; ++i) {
         const ImVec2 a(p.x + pad + i * bw, p.y + pad);
         ImGui::SetCursorScreenPos(a);
@@ -235,12 +244,12 @@ bool Segmented(const char* id, int* current, const char* const* labels, int coun
         const bool sel = *current == i, hovered = ImGui::IsItemHovered();
         if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         if (sel) {
-            dl->AddRectFilled(a, ImVec2(a.x + bw, a.y + bh), Hex(hovered ? kAccentHover : kAccent), bh / 2);
+            dl->AddRectFilled(a, ImVec2(a.x + bw, a.y + bh), ImGui::GetColorU32(V4(hovered ? kAccentHover : kAccent)), bh / 2);
         } else if (hovered) {
-            dl->AddRectFilled(a, ImVec2(a.x + bw, a.y + bh), Hex(kCardHover), bh / 2);
+            dl->AddRectFilled(a, ImVec2(a.x + bw, a.y + bh), ImGui::GetColorU32(V4(kCardHover)), bh / 2);
         }
         const ImVec2 ts = ImGui::CalcTextSize(labels[i], nullptr, true);
-        dl->AddText(ImVec2(a.x + (bw - ts.x) / 2, a.y + (bh - ts.y) / 2), sel ? Hex(0xFFFFFF) : hovered ? Hex(kText) : Hex(kMuted),
+        dl->AddText(ImVec2(a.x + (bw - ts.x) / 2, a.y + (bh - ts.y) / 2), ImGui::GetColorU32(V4(sel ? 0xFFFFFF : hovered ? kText : kMuted)),
                     labels[i], LabelEnd(labels[i]));
         if (clicked && !sel) {
             *current = i;
@@ -276,12 +285,12 @@ bool Toggle(const char* label, bool* v) {
     const ImVec2 a(p.x, p.y + (fh - h) / 2), b(p.x + w, p.y + (fh + h) / 2);
     const ImVec4 off = V4(ImGui::IsItemHovered() ? 0x343B4E : kBorder), on = V4(kAccent);
     const ImVec4 mix(off.x + (on.x - off.x) * t, off.y + (on.y - off.y) * t, off.z + (on.z - off.z) * t, 1.f);
-    dl->AddRectFilled(a, b, ImGui::ColorConvertFloat4ToU32(mix), h / 2);
+    dl->AddRectFilled(a, b, ImGui::GetColorU32(mix), h / 2);
     const float r = h / 2 - 3 * S();
-    dl->AddCircleFilled(ImVec2(a.x + h / 2 + (w - h) * t, a.y + h / 2), r, Hex(0xFFFFFF), 24);
+    dl->AddCircleFilled(ImVec2(a.x + h / 2 + (w - h) * t, a.y + h / 2), r, ImGui::GetColorU32(V4(0xFFFFFF)), 24);
     if (tw > 0) {
         const float th = ImGui::GetTextLineHeight();
-        dl->AddText(ImVec2(p.x + w + 10 * S(), p.y + (fh - th) / 2), Hex(kText), label, end);
+        dl->AddText(ImVec2(p.x + w + 10 * S(), p.y + (fh - th) / 2), ImGui::GetColorU32(V4(kText)), label, end);
     }
     return clicked;
 }
@@ -5219,7 +5228,8 @@ DeviceStatus OpenRgbStatus(const Controller& ctl, const OpenRgbDevice& d) {
         return ctl.OpenRgbDefaultOn(d) ? DeviceStatus{"Off", kMuted}
                                        : DeviceStatus{"Lit by LumaBridge itself", kMuted,
                                                       "LumaBridge lights this device directly, so it's left out here."};
-    return ctl.output().stopped ? DeviceStatus{"Its own effect", kMuted} : DeviceStatus{"Following LumaBridge", kGreen};
+    return ctl.output().stopped ? DeviceStatus{"Its own effect", kMuted}
+                                : DeviceStatus{"Following LumaBridge, via OpenRGB", kGreen};
 }
 
 DeviceStatus LampArrayStatus(const Controller& ctl, const LampArrayDevice& d) {
@@ -5229,7 +5239,8 @@ DeviceStatus LampArrayStatus(const Controller& ctl, const LampArrayDevice& d) {
         return ctl.LampArrayDefaultOn(d) ? DeviceStatus{"Off", kMuted}
                                          : DeviceStatus{"Lit by LumaBridge itself", kMuted,
                                                         "LumaBridge lights this device another way, so it's left out here."};
-    return ctl.output().stopped ? DeviceStatus{"Its own effect", kMuted} : DeviceStatus{"Following LumaBridge", kGreen};
+    return ctl.output().stopped ? DeviceStatus{"Its own effect", kMuted}
+                                : DeviceStatus{"Following LumaBridge, Windows lighting", kGreen};
 }
 
 DeviceStatus LogitechStatus(Controller& ctl) {
@@ -5239,7 +5250,7 @@ DeviceStatus LogitechStatus(Controller& ctl) {
     if (ctl.logitechAsleep() && lg.state() == LogitechOutput::State::Active)
         return {"Asleep - not used for a while", kMuted, "It lights up again when you use it."};
     switch (lg.state()) {
-    case S_::Active: return {lg.mouseEffect() ? "Following LumaBridge, every LED" : "Following LumaBridge", kGreen,
+    case S_::Active: return {lg.mouseEffect() || !lg.sdkActive() ? "Following LumaBridge, direct control" : "Following LumaBridge, via G HUB", kGreen,
                             lg.sdkActive() ? "G HUB connected; supported mice use direct HID++."
                                            : "Direct HID++ control; G HUB is not required."};
     case S_::NoGHub: return {"No supported direct device found", kAmber,
@@ -5257,27 +5268,32 @@ DeviceStatus AzothStatus(Controller& ctl) {
     if (connection == azoth::Connection::Unknown) return {"Checking connection", kMuted};
     if (connection == azoth::Connection::Disconnected) return {"Not connected", kAmber};
     if (connection == azoth::Connection::ReceiverOnly)
-        return {ctl.azothAsleep() ? "Keyboard asleep / connection unverified" : "Receiver only", kMuted,
+        return {ctl.azothAsleep() ? "Keyboard asleep / connection unverified" : "Omni receiver only", kMuted,
                 "The Omni USB receiver is present. The keyboard hasn't answered; it may be off, asleep or out of range."};
     const bool wireless = connection == azoth::Connection::Wireless;
+    const std::string link = wireless ? "wireless (Omni)" : "wired USB";
     if (az.stuck() && !ctl.azothAsleep())
-        return {"Not answering - replug the USB cable", kAmber,
-                "The keyboard stopped answering LumaBridge. Unplug its USB cable and plug it back in."};
+        return {"Not answering, " + link, kAmber,
+                wireless ? "The receiver is present, but the keyboard stopped answering LumaBridge."
+                         : "The keyboard stopped answering LumaBridge. Unplug its USB cable and plug it back in."};
     if (!ctl.prefs().azothKeyboard) {
         if (ctl.prefs().azothOled.direct) {
             const auto display = az.oledState();
-            if (display == AzothOutput::OledState::Active) return {"Display only", kGreen};
-            if (display == AzothOutput::OledState::Asleep) return {"Display asleep", kMuted};
-            return {"Display waiting for keyboard", kAmber};
+            if (display == AzothOutput::OledState::Active) return {"Display only, " + link, kGreen};
+            if (display == AzothOutput::OledState::Asleep) return {"Display asleep, " + link, kMuted};
+            return {"Display waiting, " + link, kAmber};
         }
-        return {wireless ? "Wireless; RGB off" : "Wired USB; RGB off", kMuted};
+        return {"RGB off, " + link, kMuted};
     }
     if (ctl.azothAsleep())
-        return {"Asleep - not used for a while", kMuted, "It lights up again with the next key press."};
+        return {"Asleep, " + link, kMuted, "Not used for a while. It lights up again with the next key press."};
     switch (az.state()) {
-    case A_::Active: return {az.wireless() ? "Following LumaBridge, every key (wireless)" : "Following LumaBridge, every key", kGreen};
+    case A_::Active: return {"Following LumaBridge, " + link, kGreen,
+                            "Each key follows the selected lighting effect. " +
+                                std::string(wireless ? "Connected wirelessly through the ROG Omni receiver."
+                                                     : "Connected by USB cable.")};
     case A_::NotFound: return {wireless ? "Wireless control unavailable" : "USB detected; control unavailable", kAmber};
-    default: return {wireless ? "Wireless; own lighting" : "Wired USB; own lighting", kMuted};
+    default: return {"Own lighting, " + link, kMuted};
     }
 }
 
@@ -5286,7 +5302,7 @@ DeviceStatus DualSenseStatus(Controller& ctl) {
     using D_ = DualSenseOutput::State;
     if (!ctl.prefs().dualsenseController) return {"Off", kMuted};
     switch (ds.state()) {
-    case D_::Active: return {ds.bluetooth() ? "Following LumaBridge (Bluetooth)" : "Following LumaBridge (USB)", kGreen};
+    case D_::Active: return {ds.bluetooth() ? "Following LumaBridge, Bluetooth" : "Following LumaBridge, wired USB", kGreen};
     case D_::Connecting: return {"Connecting (Bluetooth)", kAmber};
     case D_::NotFound: return {"Not connected", kAmber};
     default: return {"The game or Steam's lighting", kMuted};
@@ -5812,8 +5828,9 @@ bool LumaOledGifGallery(Controller& ctl, UiState& ui, const Fonts& f, azoth::Ole
     const auto uploadState = ctl.azoth().uploadState();
     const bool uploading = uploadState == AzothOutput::UploadState::Pending ||
                            uploadState == AzothOutput::UploadState::Uploading;
-    const bool canUpload = !uploading && settings.enabled && !ctl.azothAsleep() &&
-                           ctl.azoth().connection() == azoth::Connection::Wired;
+    const bool canUpload = !uploading && settings.enabled &&
+                           azoth::CanUseUsbOled(ctl.azoth().connection(), ctl.azothAsleep(), ctl.azoth().stuck()) &&
+                           !ctl.AzothBombCountdown(GetTickCount64()).active;
     ImGui::BeginDisabled(!canUpload);
     if (PrimaryButton("Upload to Azoth (USB)")) {
         // Apply any selection made this frame before queuing the manual upload.
@@ -5833,7 +5850,7 @@ bool LumaOledGifGallery(Controller& ctl, UiState& ui, const Fonts& f, azoth::Ole
     if (!uploadMessage.empty()) Muted("%s", uploadMessage.c_str());
     if (!canUpload && !uploading)
         Muted("Connect by USB, wake the keyboard and turn the screen on to upload.");
-    Muted("Test feature. Replaces the keyboard's custom animation; Armoury Crate isn't needed. "
+    Muted("Replaces the keyboard's custom animation; Armoury Crate isn't needed. "
           "The keyboard fits artwork into 208 x 64 pixels beside its status icons.");
     ImGui::Dummy(ImVec2(0, 4 * S()));
     if (!ImGui::CollapsingHeader("Export GIF / Armoury Crate fallback")) return changed;
@@ -5882,6 +5899,12 @@ bool LumaOledGifGallery(Controller& ctl, UiState& ui, const Fonts& f, azoth::Ole
 
 void Cs2BombSettings(Controller& ctl) {
     auto settings = ctl.prefs().azothOled;
+    const auto& az = ctl.azoth();
+    const auto connection = az.connection();
+    const bool uploading = az.uploadState() == AzothOutput::UploadState::Pending ||
+                           az.uploadState() == AzothOutput::UploadState::Uploading;
+    const bool available = azoth::CanUseUsbOled(connection, ctl.azothAsleep(), az.stuck()) && !uploading;
+    ImGui::BeginDisabled(!available);
     bool changed = Toggle("CS2 bomb countdown on Azoth", &settings.cs2BombTimer);
     Muted("The screen changes after a bomb is planted. Enabling this option alone keeps your normal screen.");
     Muted("Normal play estimates from the plant signal. Spectator countdowns are used when available.");
@@ -5894,9 +5917,8 @@ void Cs2BombSettings(Controller& ctl) {
     if (settings.content == azoth::OledContent::Keep ||
         (settings.content == azoth::OledContent::Animation && settings.animationSource == azoth::OledAnimationSource::LumaBridge))
         Muted("Unconfirmed screen content returns to the clock. Upload a GIF first to restore it automatically.");
+    ImGui::EndDisabled();
     if (changed) ctl.SetAzothOled(settings);
-    const auto& az = ctl.azoth();
-    const auto connection = az.connection();
     const uint64_t now = GetTickCount64();
     const auto bomb = ctl.AzothBombCountdown(now);
     const char* status;
@@ -5915,7 +5937,7 @@ void Cs2BombSettings(Controller& ctl) {
         status = "OLED request failed - see the Azoth response details";
         color = kAmber;
     } else if (bomb.active) {
-        status = bomb.testing ? "Testing countdown on the keyboard" : "Bomb planted - countdown active";
+        status = bomb.exploded ? "Bomb exploded" : bomb.testing ? "Testing countdown on the keyboard" : "Bomb planted - countdown active";
         color = kGreen;
     } else if (ctl.output().stopped) status = "Lighting stopped - automatic bomb display paused";
     else if (!ctl.feeds().Cs2Listening()) { status = "CS2 port busy - close other LumaBridge instances"; color = kAmber; }
@@ -5927,32 +5949,26 @@ void Cs2BombSettings(Controller& ctl) {
     ImGui::PopStyleColor();
     if (connection == azoth::Connection::Wireless || connection == azoth::Connection::ReceiverOnly)
         Muted("Plug in the USB cable and set the keyboard switch to wired USB. Omni supports RGB and built-in screen modes, but this live countdown uses USB.");
-    if (ctl.azothBombTesting()) {
-        if (Btn("Stop countdown test")) ctl.CancelAzothBombTest();
-    } else {
-        const bool liveBomb = ctl.feeds().Cs2Bomb(now, settings.cs2BombSeconds).active;
-        ImGui::BeginDisabled(!settings.enabled || !settings.cs2BombTimer || connection != azoth::Connection::Wired ||
-                             ctl.azothAsleep() || az.stuck() || liveBomb);
-        if (Btn("Test countdown on keyboard")) ctl.TestAzothBombCountdown();
-        ImGui::EndDisabled();
-    }
-    Muted("The test runs for 10 seconds over USB, then restores your screen. No match is needed.");
 }
 
 void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
     BeginCard("azoth-oled");
     auto settings = ctl.prefs().azothOled;
+    const auto& az = ctl.azoth();
+    const auto connection = az.connection();
+    const bool uploading = az.uploadState() == AzothOutput::UploadState::Pending ||
+                           az.uploadState() == AzothOutput::UploadState::Uploading;
+    const bool controlsAvailable = azoth::CanUseOled(connection, ctl.azothAsleep(), az.stuck()) && !uploading;
+    const bool usbAvailable = azoth::CanUseUsbOled(connection, ctl.azothAsleep(), az.stuck()) && !uploading;
     const auto bomb = ctl.AzothBombCountdown(GetTickCount64());
     const bool bombPreview = settings.enabled && settings.cs2BombTimer && bomb.active;
-    // Title, a Test tag, and how the screen is doing on the right.
+    // Title and the current screen status on the right.
     {
         IconItem(Icon::Grid, 18 * S(), Hex(kAccent));
         ImGui::SameLine(0, 10 * S());
         ImGui::PushFont(f.bold);
         ImGui::TextUnformatted("OLED display");
         ImGui::PopFont();
-        ImGui::SameLine();
-        Pill("Test", kAccent);
         using OS = AzothOutput::OledState;
         const char* text = "Waiting for keyboard";
         unsigned color = kMuted;
@@ -5989,7 +6005,7 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
                 connection == azoth::Connection::Wireless) { text = "Music: USB required"; color = kAmber; }
         }
         if (bombPreview) {
-            text = ctl.azoth().wireless() ? "Bomb timer: USB required" : bomb.testing ? "Countdown test" : "CS2 bomb countdown";
+            text = ctl.azoth().wireless() ? "Bomb timer: USB required" : bomb.exploded ? "Bomb exploded" : bomb.testing ? "Countdown test" : "CS2 bomb countdown";
             color = kAmber;
         }
         const float pw = ImGui::CalcTextSize(text).x + 20 * S();
@@ -5997,6 +6013,17 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
         Pill(text, color);
     }
     Muted("The original ROG Azoth's 256 x 64 screen, controlled apart from the keys.");
+    if (!azoth::KeyboardConnected(connection))
+        Muted("OLED control is unavailable over Bluetooth. Connect the keyboard by USB, or switch to 2.4 GHz Omni "
+              "for basic screen controls. Unavailable actions are greyed out; previews and exports still work.");
+    else if (ctl.azothAsleep())
+        Muted("OLED controls are unavailable while the keyboard sleeps. Press a key to wake it.");
+    else if (az.stuck())
+        Muted("OLED controls are unavailable because the keyboard isn't answering. Reconnect the USB cable.");
+    else if (uploading)
+        Muted("Screen settings are paused during the GIF upload. Cancel the upload to change them.");
+    else if (connection == azoth::Connection::Wireless)
+        Muted("Omni supports basic screen controls. Audio EQ, song info, CS2 countdowns and GIF uploads require wired USB.");
     ImGui::Dummy(ImVec2(0, 4 * S()));
 
     const bool previewInGallery = settings.content == azoth::OledContent::Animation &&
@@ -6005,7 +6032,8 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
         const float mockW = std::min(ImGui::GetContentRegionAvail().x, 360 * S());
         OledMockup(settings, f, mockW, ctl.azoth().musicSnapshot(), bomb);
         ImGui::PushFont(f.caption);
-        Muted(bombPreview ? (bomb.testing ? "Display test: the same countdown sent to the Azoth over USB."
+        Muted(bombPreview ? (bomb.exploded ? "The bomb detonated. Your normal screen returns after the explosion animation."
+                            : bomb.testing ? "Display test: the same countdown sent to the Azoth over USB."
                                 : bomb.estimated ? "CS2 bomb countdown. Estimated seconds are counted from the plant signal."
                                             : "CS2 bomb countdown. Remaining seconds supplied by the game feed.")
               : settings.enabled && settings.content == azoth::OledContent::Animation
@@ -6078,6 +6106,7 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
 
     section("Screen");
     {
+        ImGui::BeginDisabled(!controlsAvailable);
         bool changed = Toggle("Screen on", &settings.enabled);
         ImGui::BeginDisabled(!settings.enabled);
         ImGui::AlignTextToFramePadding();
@@ -6093,9 +6122,19 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
         static const char* kShow[] = {"Keep current", "Animation", "Clock", "Audio EQ", "Song info"};
         int content = static_cast<int>(settings.content);
         ImGui::SetNextItemWidth(std::min(ImGui::GetContentRegionAvail().x, 420 * S()));
-        if (ImGui::Combo("##oled-show", &content, kShow, 5)) {
-            settings.content = static_cast<azoth::OledContent>(content);
-            changed = true;
+        if (ImGui::BeginCombo("##oled-show", kShow[content])) {
+            for (int i = 0; i < 5; ++i) {
+                const bool usbOnly = i == static_cast<int>(azoth::OledContent::Equalizer) ||
+                                     i == static_cast<int>(azoth::OledContent::SongInfo);
+                ImGui::BeginDisabled(usbOnly && !usbAvailable);
+                if (ImGui::Selectable(kShow[i], content == i)) {
+                    settings.content = static_cast<azoth::OledContent>(i);
+                    changed = true;
+                }
+                if (content == i) ImGui::SetItemDefaultFocus();
+                ImGui::EndDisabled();
+            }
+            ImGui::EndCombo();
         }
         if (settings.content == azoth::OledContent::Animation) {
             ImGui::TextUnformatted("Animation collection");
@@ -6126,6 +6165,14 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
                 const int animation = ctl.azoth().oledAnimation();
                 if (animation >= 0) Muted("Last confirmed ASUS preset: %d.", animation + 1);
                 ImGui::PopFont();
+            } else {
+                // Previews and exports stay usable without a keyboard connection. The
+                // gallery handles availability of its USB upload action separately.
+                ImGui::EndDisabled();
+                ImGui::EndDisabled();
+                changed |= LumaOledGifGallery(ctl, ui, f, settings);
+                ImGui::BeginDisabled(!controlsAvailable);
+                ImGui::BeginDisabled(!settings.enabled);
             }
         } else if (settings.content == azoth::OledContent::Clock) {
             changed |= Toggle("12-hour clock", &settings.clock12Hour);
@@ -6144,11 +6191,16 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
             ImGui::PopFont();
         }
         ImGui::EndDisabled();
+        ImGui::EndDisabled();
         if (changed) ctl.SetAzothOled(settings);
         ImGui::Dummy(ImVec2(0, 2 * S()));
         if (settings.content != azoth::OledContent::Animation ||
             settings.animationSource != azoth::OledAnimationSource::LumaBridge) {
+            const bool needsUsb = settings.enabled &&
+                (settings.content == azoth::OledContent::Equalizer || settings.content == azoth::OledContent::SongInfo);
+            ImGui::BeginDisabled(!controlsAvailable || (needsUsb && !usbAvailable));
             if (Btn("Reapply and retry")) ctl.ReapplyAzothOled();
+            ImGui::EndDisabled();
             ImGui::PushFont(f.caption);
             Muted("Armoury Crate's live clock, music and hardware-info modes can overwrite what LumaBridge shows. "
                   "Choose Keep current to leave the screen to them, or turn them off in Armoury Crate.");
@@ -6161,12 +6213,7 @@ void AzothOledCard(Controller& ctl, UiState& ui, const Fonts& f) {
 
     const bool showGallery = settings.content == azoth::OledContent::Animation &&
                              settings.animationSource == azoth::OledAnimationSource::LumaBridge;
-    if (showGallery) {
-        ImGui::Dummy(ImVec2(0, 6 * S()));
-        ImGui::Separator();
-        ImGui::Dummy(ImVec2(0, 6 * S()));
-        if (LumaOledGifGallery(ctl, ui, f, settings)) ctl.SetAzothOled(settings);
-    } else {
+    if (!showGallery) {
         section("Custom images and GIFs");
         Muted("Armoury Crate uploads them: ROG Azoth > OLED > Image or Animation > Custom image/animation > Replace File > Apply. "
               "Use a 256 x 64 image; ASUS lists up to 196 GIF frames at 25 fps for this model.");
@@ -7400,7 +7447,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         return;
     }
     if (id == device::kKeyboard) {
-        if (!DeviceHeader(ui, f, Icon::Keyboard, "ASUS ROG Azoth", AzothStatus(ctl), true,
+        if (!DeviceHeader(ui, f, Icon::Keyboard, "ASUS ROG Azoth", AzothStatus(ctl), false,
                           "By cable, or wirelessly through its ROG Omni receiver"))
             return;
         AzothCard(ctl, f);
@@ -8552,9 +8599,8 @@ void LampArrayCard(Controller& ctl, const Fonts& f) {
     if (!ctl.prefs().lampArray) Pill("Off", kMuted);
     else if (!lit.empty()) Pill(pill, kGreen);
     else Pill("None found", kMuted);
-    Muted("Built in: keyboards, mice, headsets, cases and light strips of any brand with Windows' lighting standard "
-          "(HID LampArray, the one Windows 11's Dynamic Lighting uses) in their firmware follow LumaBridge and your "
-          "games, lamp by lamp, with no software from their maker. New devices appear by themselves.");
+    Muted("Let compatible keyboards, mice and other Windows lighting devices follow your games. "
+          "New devices appear automatically; there is nothing to install.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
     bool on = ctl.prefs().lampArray;
     if (Toggle("Enabled", &on)) ctl.SetLampArrayEnabled(on);
@@ -8575,13 +8621,11 @@ void OpenRgbCard(Controller& ctl, const Fonts& f) {
     const auto devs = ctl.openRgb().devices();
     char pill[48];
     snprintf(pill, sizeof pill, "Connected, %d device%s", static_cast<int>(devs.size()), devs.size() == 1 ? "" : "s");
-    if (st == OpenRgbOutput::State::Connected) Pill(pill, kGreen);
+    if (!ctl.prefs().openRgb) Pill("Control off", kMuted);
+    else if (st == OpenRgbOutput::State::Connected) Pill(pill, kGreen);
     else Pill("Waiting for SDK server", kMuted);
-    Muted("Adds support for RGB memory, coolers, graphics cards, keyboards, mice, fans and controllers across "
-          "many brands. Run OpenRGB, open its SDK Server tab and Start Server. Devices appear automatically "
-          "even while lighting control is off. Enable control below to make them follow LumaBridge.");
-    Muted("Working native connections take priority. Unsupported or unavailable native connections can use "
-          "OpenRGB instead. Each device has its own switch on Devices.");
+    Muted("Connect more brands through OpenRGB. Open OpenRGB's SDK Server tab and choose Start Server.");
+    Muted("LumaBridge uses its own working connections first. Choose which devices follow your games on Devices.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
     bool on = ctl.prefs().openRgb;
     if (Toggle("Lighting control", &on)) ctl.SetOpenRgbEnabled(on);
@@ -8602,8 +8646,67 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
     in.SetOwner(hwnd);
     EnsureIntegrations(ctl, in, ui);
 
-    Muted("LumaBridge answers games as if the vendor's software and devices were installed, then sends "
-          "the colors to your Aura devices.");
+    int ready = gs.IsRunning() && gs.CorePropsWritten() ? 1 : 0;
+    for (const auto& it : in.list())
+        if ((it.id == "logitech" || it.id == "chroma" || it.id == "lightfx") &&
+            it.state == IntegrationState::Active) ++ready;
+    bool enabled = ready > 0 || gs.IsRunning() || ctl.prefs().lampArray || ctl.prefs().openRgb;
+    auto setAll = [&](bool on) {
+        // Capture the current setup before changing the built-in listener.
+        in.SetAll(on);
+        ctl.SetGameSenseEnabled(on);
+        ctl.SetLampArrayEnabled(on);
+        ctl.SetOpenRgbEnabled(on);
+        ui.integrationsLoaded = false;
+    };
+
+    BeginCard("integrations-master");
+    CardTitle(f, "Let your games light up your setup", Icon::Plug);
+    Muted("One switch connects Logitech, Razer, SteelSeries and Alienware games to LumaBridge.");
+    ImGui::Dummy(ImVec2(0, 10 * S()));
+    ImGui::BeginDisabled(in.Busy());
+    if (Toggle("Game and device integrations", &enabled)) setAll(enabled);
+    ImGui::EndDisabled();
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    if (in.Busy()) Pill("Setting things up...", kAmber);
+    else if (!enabled) Pill("Off", kMuted);
+    else if (ready == 4) Pill("Connected", kGreen);
+    else Pill("Some connections are enabled", kAmber);
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    Muted("Also enables Windows lighting and OpenRGB. OpenRGB needs its SDK server running.");
+    Muted("Corsair needs a game folder. Use Edit to add a game or choose which connections you want.");
+    Muted("Setup may ask for Windows approval. Existing vendor lighting files are backed up; "
+          "turning it off restores them. Corsair game folders are managed separately in Edit.");
+    if (Btn(ui.integrationsEdit ? "Done editing" : "Edit connections"))
+        ui.integrationsEdit = !ui.integrationsEdit;
+    if (enabled && ready < 4) {
+        ImGui::SameLine();
+        ImGui::BeginDisabled(in.Busy());
+        if (Btn("Enable missing connections")) setAll(true);
+        ImGui::EndDisabled();
+    }
+    const std::string result = in.LastMessage();
+    if (!result.empty()) {
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+        const bool good = result.rfind("Done:", 0) == 0;
+        ImGui::PushStyleColor(ImGuiCol_Text, V4(in.Busy() ? kAmber : good ? kGreen : kAmber));
+        ImGui::TextWrapped("%s", result.c_str());
+        ImGui::PopStyleColor();
+    }
+    EndCard();
+
+    if (!ui.integrationsEdit) {
+        BeginCard("integrations-explained");
+        CardTitle(f, "When you start a game", Icon::Lighting);
+        Muted("Start a supported game and its lighting will follow you across your setup. "
+              "Restart a game if it was already open when you changed a connection.");
+        Muted("Counter-Strike 2, Rocket League and War Thunder use their own game feeds. "
+              "You can set those up on Games List.");
+        if (Btn("Browse games")) ui.page = Page::GamesList;
+        EndCard();
+        return;
+    }
+    Muted("YOUR CONNECTIONS");
     ImGui::Dummy(ImVec2(0, 4 * S()));
 
     for (const auto& it : in.list()) {
@@ -8623,8 +8726,14 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
         case IntegrationState::PerGame: Pill("Per game", kAccent); break;
         case IntegrationState::Problem: Pill(it.id == "handback" ? "Update needed" : "Needs repair", kRed); break;
         }
-        Muted("%s", it.description.c_str());
-        Muted("%s", it.detail.c_str());
+        const bool support = it.id == "handback" || it.id == "helper";
+        if (it.id == "handback")
+            Muted("Give your lights back to Armoury Crate when LumaBridge closes. Kept when the master switch is off.");
+        else if (it.id == "helper")
+            Muted("Control RAM lighting and read temperatures and fan speeds. Kept when the master switch is off.");
+        else if (it.id == "corsair")
+            Muted("Connect iCUE games one at a time by choosing their install folder.");
+        else Muted("%s", it.description.c_str());
         ImGui::Dummy(ImVec2(0, 2 * S()));
 
         ImGui::BeginDisabled(in.Busy());
@@ -8648,21 +8757,24 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
                 std::wstring dir = PickFolder(hwnd, L"Choose the game's folder");
                 if (!dir.empty()) in.Remove("corsair", dir);
             }
-        } else if ((it.id == "handback" || it.id == "helper") && it.state != IntegrationState::NotInstalled) {
-            // Setting it up again replaces the task (needed after updates that change it).
-            if (it.state == IntegrationState::Problem ? PrimaryButton("Update") : Btn("Set up again"))
-                in.Install(it.id);
-            ImGui::SameLine();
-            if (Btn("Remove")) in.Remove(it.id);
-        } else if (it.state == IntegrationState::Active) {
-            if (Btn("Remove")) in.Remove(it.id);
-        } else if (it.state == IntegrationState::Conflict) {
-            if (Btn("Replace vendor runtime")) in.Install(it.id, L"", true);
         } else {
-            if (PrimaryButton(it.id == "logitech" || it.id == "handback" || it.id == "helper" ? "Set up" : "Install"))
-                in.Install(it.id);
+            bool on = it.state == IntegrationState::Active || (support && it.state == IntegrationState::Problem);
+            if (it.state == IntegrationState::Conflict)
+                Muted("Enabling this uses LumaBridge for game lighting. Turning it off restores the original files.");
+            if (Toggle("Enabled", &on)) {
+                if (on) in.Install(it.id, L"", true);
+                else in.Remove(it.id);
+            }
+            if (support && it.state == IntegrationState::Problem) {
+                ImGui::SameLine();
+                if (Btn("Update")) in.Install(it.id);
+            }
         }
         ImGui::EndDisabled();
+        if (ImGui::TreeNode("Connection details")) {
+            Muted("%s", it.detail.c_str());
+            ImGui::TreePop();
+        }
         // The result of the last action, right under its button.
         if (in.LastId() == it.id) {
             const std::string msg = in.LastMessage();
@@ -8678,12 +8790,13 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
         EndCard();
     }
 
+    ImGui::BeginDisabled(in.Busy());
     LampArrayCard(ctl, f);
     OpenRgbCard(ctl, f);
     NzxtCard(ctl, f);
+    ImGui::EndDisabled();
 
-    Muted("Counter-Strike 2, Rocket League and War Thunder light up through their own official data "
-          "instead: set them up on the Games List page.");
+    Muted("Game-specific feeds and profiles live on Games List.");
 }
 
 void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
@@ -8739,7 +8852,7 @@ void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
         ctl.Changed();
     Muted("Armoury Crate puts its own lighting back whenever a USB device is plugged in or out, so the fans and "
           "memory go dark or flicker for a few seconds. Pausing its lighting service stops that. It runs again "
-          "when LumaBridge hands the lights back or exits, and while Armoury Crate's window is open.");
+          "when LumaBridge hands the lights back or exits. Opening Armoury Crate alone keeps LumaBridge in control.");
     if (ctl.prefs().pauseArmouryCrate) {
         using A = helper::AsusLighting;
         const auto& hw = ctl.hardware();
@@ -10234,6 +10347,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
 
     integrations.SetOwner(hwnd);  // administrator prompts open in front of LumaBridge, from any page
+    integrations.Tick();
     SampleHistory(ctl);           // the dashboard's graphs keep going on every page
     // The setup guide fills the window until it's finished (first start, or from Settings).
     if (!ctl.prefs().setupDone && ui.setupStep < 0) ui.setupStep = 0;
@@ -10273,7 +10387,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
                                "Auto follows your games; Manual is your own look",
                                "Every game on this PC, and how it lights up",
                                "Lighting controls and live readings",
-                               "Answer games as the lighting software they look for",
+                               "Bring your games and devices together",
                                "Calibration, startup and more"};
     ImGui::BeginGroup();
     ImGui::PushFont(f.title);
