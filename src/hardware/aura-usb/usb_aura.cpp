@@ -52,6 +52,8 @@ bool UsbAura::Connect() {
             dev_.Close();
             continue;
         }
+        firmware_ = fw;
+        config_ = cfg;
         channels_ = BuildChannels(cfg, argbLeds_);
         selected_.assign(channels_.size(), true);
         infos_.clear();
@@ -91,6 +93,24 @@ bool UsbAura::EnterDirectMode() {
     for (uint8_t ch = 0; ch < kEffectChannels; ++ch)
         if (!dev_.Write(SetModeRequest(ch, kModeDirect))) return false;
     directMode_ = true;
+    return true;
+}
+
+bool UsbAura::SavePowerOnColor(Rgb c) {
+    if (!dev_.IsOpen()) return false;
+    const auto requests = PowerOnColorRequests(config_, firmware_, c);
+    if (requests.empty()) {
+        LUMA_WARN("Aura USB: the controller lists no LEDs, so there's no power-on color to save");
+        return false;
+    }
+    // The effect channels leave direct mode for this: the next frame takes them back.
+    directMode_ = false;
+    for (const Report& r : requests)
+        if (!dev_.Write(r)) {
+            LUMA_WARN("Aura USB: write failed while saving the power-on color");
+            return false;
+        }
+    LUMA_INFO("Aura USB: saved #%02X%02X%02X as the power-on color (firmware %s)", c.r, c.g, c.b, firmware_.c_str());
     return true;
 }
 

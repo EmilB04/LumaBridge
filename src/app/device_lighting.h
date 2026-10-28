@@ -6,9 +6,12 @@
 // device with its live effect where you put it. Pure, tested.
 #pragma once
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -202,6 +205,73 @@ inline bool DecodeSpot(const std::string& s, Spot* out) {
     if (second != std::string::npos) r.angle = static_cast<float>(std::fmod(std::atof(s.substr(second + 1).c_str()), 360.0));
     *out = r;
     return true;
+}
+
+// ---- Flow: an effect travelling across the setup --------------------------------------
+
+// Which way the effect travels over the layout. Every device runs the same effect, the ones
+// further along a little behind, so a pulse or a rainbow moves from one device to the next.
+enum class FlowDirection { Off, LeftToRight, RightToLeft, TopToBottom, BottomToTop };
+constexpr int kFlowDirections = 5;
+
+// Where a device sits for the flow, from the layout's spots (`spot(item)`): the fans on the
+// ARGB header all get the same signal, so they count as one device in the middle of their
+// fans; the memory sits in the board's slots, right of its center; the devices lit through
+// OpenRGB and the like at the first of them.
+template <class SpotOf>
+Spot FlowSpot(const std::string& id, int fans, SpotOf spot) {
+    if (id == device::kFans) {
+        const int n = fans < 1 ? 1 : fans;
+        Spot s{0, 0};
+        for (int i = 0; i < n; ++i) {
+            const Spot f = spot(FanItem(i));
+            s.x += f.x / static_cast<float>(n);
+            s.y += f.y / static_cast<float>(n);
+        }
+        return s;
+    }
+    if (id == device::kRam) {
+        Spot s = spot(std::string(device::kBoard));
+        s.x = s.x + 0.04f > 1 ? 1 : s.x + 0.04f;
+        return s;
+    }
+    if (id == device::kOther) return spot(std::string("other0"));
+    return spot(id);
+}
+
+// How far along the flow each device is: 0 for the first one(s) .. 1 for the last, spread
+// over the room the devices take up (not the whole layout). All 0 when off or when every
+// device sits in the same line across the flow.
+inline std::map<std::string, double> FlowOffsets(const std::map<std::string, Spot>& at, FlowDirection dir) {
+    std::map<std::string, double> out;
+    auto along = [dir](Spot s) -> double {
+        switch (dir) {
+        case FlowDirection::LeftToRight: return s.x;
+        case FlowDirection::RightToLeft: return 1.0 - s.x;
+        case FlowDirection::TopToBottom: return s.y;
+        case FlowDirection::BottomToTop: return 1.0 - s.y;
+        default: return 0;
+        }
+    };
+    double lo = 1e9, hi = -1e9;
+    for (const auto& [id, s] : at) {
+        lo = std::min(lo, along(s));
+        hi = std::max(hi, along(s));
+    }
+    for (const auto& [id, s] : at) out[id] = dir == FlowDirection::Off || hi - lo < 1e-6 ? 0.0 : (along(s) - lo) / (hi - lo);
+    return out;
+}
+
+// The effect with its clock moved for a device `offset` (0..1) along a flow that takes
+// `seconds` from the first device to the last: the further along, the later its moment of the
+// effect. Only moving effects with a shared start flow; a game's Beat keeps its timing.
+inline fx::Params Flowed(fx::Params p, double offset, double seconds) {
+    if (!p.epoch || !fx::IsAnimated(p) || p.kind == fx::Kind::Beat || seconds <= 0) return p;
+    // Ahead rather than behind: the first device runs `seconds` early, so no device waits
+    // frozen at the effect's start.
+    const auto lead = static_cast<uint64_t>((1.0 - std::clamp(offset, 0.0, 1.0)) * seconds * 1000.0 + 0.5);
+    p.epoch = p.epoch > lead ? p.epoch - lead : 1;
+    return p;
 }
 
 }  // namespace luma::app

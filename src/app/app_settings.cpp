@@ -73,6 +73,7 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (_wcsicmp(v.c_str(), L"manual") == 0) p.mode = Mode::Manual;
     FromHex(Narrow(Read(ini, L"App", L"ManualColor")), &p.manualColor);
     FromHex(Narrow(Read(ini, L"App", L"ManualColor2")), &p.manualColor2);
+    FromHex(Narrow(Read(ini, L"App", L"PowerOnColor")), &p.powerOnColor);
     v = Read(ini, L"App", L"ManualEffect");
     for (const auto& e : kEffectNames)
         if (_wcsicmp(v.c_str(), e.name) == 0) p.effect = e.kind;
@@ -104,6 +105,10 @@ Prefs LoadPrefs(const std::wstring& ini) {
     if (!v.empty()) p.closeToTray = v != L"0";
     v = Read(ini, L"App", L"Lighting3d");
     if (!v.empty()) p.lighting3d = v != L"0";
+    float flow = static_cast<float>(p.flowDirection);
+    num(L"FlowDirection", &flow, 0, kFlowDirections - 1);
+    p.flowDirection = static_cast<int>(flow);
+    num(L"FlowSeconds", &p.flowSeconds, 0.2f, 5.f);
     v = Read(ini, L"App", L"DashGraphs");
     if (!v.empty()) p.dashGraphs = v != L"0";
     v = Read(ini, L"App", L"PsuWatts");
@@ -314,6 +319,7 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"Mode", p.mode == Mode::Manual ? L"manual" : L"auto");
     WriteConfigValue(ini, L"App", L"ManualColor", Widen(ToHex(p.manualColor)));
     WriteConfigValue(ini, L"App", L"ManualColor2", Widen(ToHex(p.manualColor2)));
+    WriteConfigValue(ini, L"App", L"PowerOnColor", Widen(ToHex(p.powerOnColor)));
     for (const auto& e : kEffectNames)
         if (e.kind == p.effect) WriteConfigValue(ini, L"App", L"ManualEffect", e.name);
     WriteConfigValue(ini, L"App", L"ManualSpeed", Num(p.speedHz));
@@ -331,6 +337,8 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"StartMinimized", p.startMinimized ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"CloseToTray", p.closeToTray ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"Lighting3d", p.lighting3d ? L"1" : L"0");
+    WriteConfigValue(ini, L"App", L"FlowDirection", std::to_wstring(p.flowDirection));
+    WriteConfigValue(ini, L"App", L"FlowSeconds", Num(p.flowSeconds));
     WriteConfigValue(ini, L"App", L"DashGraphs", p.dashGraphs ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"PsuWatts", std::to_wstring(p.psuWatts).c_str());
     WriteConfigValue(ini, L"App", L"SetupDone", p.setupDone ? L"1" : L"0");

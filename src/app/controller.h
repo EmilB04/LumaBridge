@@ -248,6 +248,9 @@ public:
     const Output& output() const { return output_; }
     const std::vector<Source>& sources() const { return tracker_.All(); }
     AuraMirror::Status auraStatus() const { return mirror_.GetStatus(); }
+    // Saves Prefs::powerOnColor in the motherboard's controller (writes its flash: only on
+    // the user's click).
+    void SavePowerOnColor() { mirror_.SavePowerOnColor(prefs_.powerOnColor); }
     const gamesense::Server& gameSense() const { return gameSense_; }
     const std::wstring& configPath() const { return iniPath_; }
     const std::wstring& logPath() const { return cfg_.logFile; }

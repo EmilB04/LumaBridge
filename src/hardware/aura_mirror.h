@@ -28,11 +28,13 @@ namespace luma {
 
 class AuraMirror {
 public:
+    enum class PowerOnSave { None, Pending, Saved, Failed };
     struct Status {
         bool running = false;
         bool connected = false;     // talking to Aura directly
         bool routedToApp = false;   // frames go to the LumaBridge app instead
         std::vector<AuraDeviceInfo> devices;
+        PowerOnSave powerOnSave = PowerOnSave::None;
     };
 
     // Starts the worker (idempotent). `sourceName` labels this front-end in the app
@@ -69,6 +71,9 @@ public:
     // and take the lights out of direct mode, so recover once after the event burst
     // (aurausb::DirectModeReclaim).
     void Reclaim();
+    // Saves `c` (calibrated like every frame) in the motherboard's controller as its still
+    // power-on color (LightingBackend::SavePowerOnColor). The outcome is in Status.
+    void SavePowerOnColor(Rgb c);
 
     // Send black once, then leave the hardware alone until resume. No vendor hand-back.
     void SetSystemSuspended(bool suspended) { powerSuspend_.Request(suspended); Wake(); }
@@ -112,6 +117,8 @@ private:
     uint64_t settingsVersion_ = 0;
     bool rescan_ = false;
     bool reclaim_ = false;
+    bool savePowerOn_ = false;
+    Rgb powerOnColor_{};
     Status status_;
 };
 

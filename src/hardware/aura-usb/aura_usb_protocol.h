@@ -8,6 +8,8 @@
 //   EC 82                      -> EC 02 <firmware name, 16 ASCII bytes>
 //   EC B0                      -> EC 30 ?? ?? <60-byte configuration table>
 //   EC 35 <ch> 00 00 <mode>    set an *effect channel's* mode; 0xFF = direct (host-driven)
+//   EC 36 <mask hi> <mask lo> 00 <R G B>...   effect colors (Static etc.), one per LED slot
+//   EC 3F 55                   save the effects and their colors in the controller's flash
 //   EC 40 <ch|0x80 on last> <first led> <count> <R G B>...   direct colors, <= 20 LEDs each
 //
 // Effect channels and direct channels are numbered independently: on a B550-F
@@ -15,8 +17,10 @@
 // different LED groups. Put every effect channel into direct mode first, then address
 // direct channels; `aura-usb-test scan` maps which direct channel is which.
 //
-// Deliberately NOT implemented: the command that saves the current state to the
-// controller's flash. Everything LumaBridge does is undone by Armoury Crate or a reboot.
+// Direct mode is never saved: everything LumaBridge shows is undone by Armoury Crate or a
+// reboot. The save command (EC 3F 55, as OpenRGB's AsusAuraMainboardController sends it) is
+// only used by PowerOnColorRequests(), when the user asks for a power-on color: it writes
+// the controller's flash, which shouldn't happen on every color change.
 #pragma once
 
 #include <algorithm>
@@ -33,6 +37,7 @@ constexpr uint16_t kVendorAsus = 0x0B05;
 constexpr uint8_t kReportId = 0xEC;
 constexpr size_t kReportSize = 65;
 constexpr uint8_t kModeDirect = 0xFF;
+constexpr uint8_t kModeStatic = 0x01;
 constexpr size_t kLedsPerPacket = 20;  // (65 - 5 header bytes) / 3
 
 using Report = std::array<uint8_t, kReportSize>;
@@ -84,6 +89,30 @@ inline std::vector<Report> DirectColorRequests(uint8_t channel, const std::vecto
     return out;
 }
 
+// Effect colors for `count` LED slots from `first`. Slots run across the whole controller
+// (the board's LEDs first, then one per ARGB header: see EffectTargets()), and the mask
+// says which ones this report sets.
+inline Report EffectColorRequest(uint8_t first, uint8_t count, Rgb c) {
+    Report r = Blank();
+    const uint16_t mask = static_cast<uint16_t>(((1u << count) - 1u) << first);
+    r[1] = 0x36;
+    r[2] = static_cast<uint8_t>(mask >> 8);
+    r[3] = static_cast<uint8_t>(mask & 0xFF);
+    for (size_t i = first; i < static_cast<size_t>(first) + count; ++i) {
+        r[5 + i * 3] = c.r;
+        r[6 + i * 3] = c.g;
+        r[7 + i * 3] = c.b;
+    }
+    return r;
+}
+
+inline Report SaveRequest() {
+    Report r = Blank();
+    r[1] = 0x3F;
+    r[2] = 0x55;
+    return r;
+}
+
 inline bool ParseFirmware(const Report& r, std::string* name) {
     if (r[0] != kReportId || r[1] != 0x02) return false;
     name->clear();
@@ -131,6 +160,47 @@ inline std::vector<UsbChannel> BuildChannels(const ConfigTable& cfg, int argbLed
         std::wstring name = headers == 1 ? L"ARGB header (fans, strips)" : L"ARGB header " + std::to_wstring(i + 1);
         out.push_back(UsbChannel{name, 0x00011000, static_cast<uint8_t>(i), argbLeds});
     }
+    return out;
+}
+
+// An effect channel and the LED slots its effect color goes to (EffectColorRequest).
+struct EffectTarget {
+    uint8_t effectChannel, firstLed, leds;
+    bool operator==(const EffectTarget& o) const {
+        return effectChannel == o.effectChannel && firstLed == o.firstLed && leds == o.leds;
+    }
+};
+
+// The effect channels as OpenRGB's AsusAuraMainboardController numbers them: the board's
+// LEDs (if it lists any) are effect channel 0 and the ARGB headers follow, except on
+// AULA3-AR32 firmware, where the headers start at 0 and the board comes after them. LED
+// slots: the board's LEDs first, then one per header. Slots past the 16-bit mask are left out.
+inline std::vector<EffectTarget> EffectTargets(const ConfigTable& cfg, const std::string& firmware) {
+    std::vector<EffectTarget> out;
+    const int board = cfg.MainboardLeds(), headers = cfg.ArgbHeaders();
+    const bool headersFromZero = firmware.rfind("AULA3-AR32", 0) == 0;
+    int effect = 0, slot = 0;
+    auto add = [&](int channel, int leds) {
+        if (slot + leds <= 16) out.push_back({static_cast<uint8_t>(channel), static_cast<uint8_t>(slot), static_cast<uint8_t>(leds)});
+        slot += leds;
+    };
+    if (board > 0) {
+        add(headersFromZero ? headers : effect, board);
+        if (!headersFromZero) ++effect;
+    }
+    for (int i = 0; i < headers; ++i) add(effect++, 1);
+    return out;
+}
+
+// Everything to make the controller show `c`, still, from power-on: every effect channel
+// to Static with that color, then the save. Sent once, when the user asks for it.
+inline std::vector<Report> PowerOnColorRequests(const ConfigTable& cfg, const std::string& firmware, Rgb c) {
+    std::vector<Report> out;
+    for (const EffectTarget& t : EffectTargets(cfg, firmware)) {
+        out.push_back(SetModeRequest(t.effectChannel, kModeStatic));
+        out.push_back(EffectColorRequest(t.firstLed, t.leds, c));
+    }
+    if (!out.empty()) out.push_back(SaveRequest());
     return out;
 }
 

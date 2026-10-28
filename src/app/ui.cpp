@@ -4754,6 +4754,24 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
     SetupView(ctl, ui, selectable ? view3d::Mode::Lighting : view3d::Mode::Preview, h);
 }
 
+// Your own lighting travelling from device to device, by where they sit in the 2D layout.
+void FlowControls(Controller& ctl) {
+    Prefs& p = ctl.prefs();
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    ImGui::TextUnformatted("Let the effect travel across your setup");
+    static const char* kDirections[kFlowDirections] = {"Off", "Left to right", "Right to left", "Top down", "Bottom up"};
+    int dir = std::clamp(p.flowDirection, 0, kFlowDirections - 1);
+    if (Segmented("flow", &dir, kDirections, kFlowDirections, std::min(600 * S(), ImGui::GetContentRegionAvail().x))) {
+        p.flowDirection = dir;
+        ctl.Changed();
+    }
+    if (dir == 0) return;
+    if (LabeledSlider("From the first device to the last", &p.flowSeconds, 0.2f, 5.f, "%.1f seconds")) ctl.Changed();
+    Muted("Moving effects (breathing, color cycle, rainbows, comets) reach each device in turn, by where it sits in "
+          "the 2D layout. Fans on one hub all show the same thing, so they move as one. Games still light "
+          "everything at once.");
+}
+
 void ManualOverview(Controller& ctl, UiState& ui, const Fonts& f) {
     const bool side = ImGui::GetContentRegionAvail().x >= 760 * S();
     if (ImGui::BeginTable("manual-overview", side ? 2 : 1, ImGuiTableFlags_SizingStretchProp)) {
@@ -4791,6 +4809,7 @@ void ManualOverview(Controller& ctl, UiState& ui, const Fonts& f) {
                 it = it->first.rfind("desk:", 0) == 0 ? std::next(it) : spots.erase(it);
             ctl.Changed();
         }
+        FlowControls(ctl);
         EndCard();
         if (!side && !native) BrightnessCard(ctl, f, ui.lightTarget);
         ImGui::EndTable();
@@ -6975,6 +6994,36 @@ DeviceStatus AuraStatus(Controller& ctl, const AuraDeviceInfo& d) {
                                       : DeviceStatus{"Armoury Crate's lighting", kMuted};
 }
 
+// The still color the motherboard's controller shows from power-on, before LumaBridge
+// starts. Saving writes the controller's flash, so it only happens on the button.
+void PowerOnCard(Controller& ctl, UiState& ui, const Fonts& f) {
+    using Save = AuraMirror::PowerOnSave;
+    const AuraMirror::Status st = ctl.auraStatus();
+    BeginCard("power-on");
+    CardTitle(f, "Color at power-on", Icon::Bolt);
+    Muted("Until LumaBridge starts, the motherboard and its ARGB headers (fans, strips) show the effect saved in "
+          "them, often a rainbow. Save one still color here and they all show it from power-on instead. It's stored "
+          "in the board, so save it only when you want a new one. Saving an effect in Armoury Crate replaces it.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    ColorEditor(ctl, ui, &ctl.prefs().powerOnColor, "poweron");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    ImGui::BeginDisabled(!st.connected || st.powerOnSave == Save::Pending);
+    if (PrimaryButton("Save as power-on color")) ctl.SavePowerOnColor();
+    ImGui::EndDisabled();
+    if (!st.connected) {
+        Muted("LumaBridge needs to be lighting the motherboard to save it.");
+    } else if (st.powerOnSave != Save::None) {
+        const bool failed = st.powerOnSave == Save::Failed;
+        ImGui::PushStyleColor(ImGuiCol_Text, V4(failed ? kRed : st.powerOnSave == Save::Saved ? kGreen : kMuted));
+        ImGui::TextWrapped("%s", failed ? "Couldn't save it. The log says why."
+                                 : st.powerOnSave == Save::Saved ? "Saved. The board shows this color from the next start."
+                                                                 : "Saving...");
+        ImGui::PopStyleColor();
+    }
+    if (ctl.prefs().ramLighting) Muted("The RAM can't keep a color: it shows its own rainbow until LumaBridge starts.");
+    EndCard();
+}
+
 // The top of a device's page: a way back, its name and how it's doing.
 bool DeviceHeader(UiState& ui, const Fonts& f, Icon icon, const std::string& name, const DeviceStatus& st,
                   bool experimental, const std::string& detail) {
@@ -7410,6 +7459,7 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         EndCard();
         if (d->type == 0x00011000) FansCard(ctl, f);
         DeviceLightingCard(ctl, ui, f, AuraLightingId(*d));
+        PowerOnCard(ctl, ui, f);
         return;
     }
     if (id == device::kRam) {

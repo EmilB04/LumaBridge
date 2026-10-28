@@ -463,6 +463,14 @@ void Controller::OnIpc(const ipc::Frame& f) {
 fx::Params Controller::DeviceEffect(const Output& out, const std::string& id) const {
     fx::Params p = out.For(id);
     if (DeviceReversed(prefs_, id)) p.reverse = !p.reverse;
+    // Your own lighting can travel across the setup; a game's lights every device at once.
+    const auto dir = static_cast<FlowDirection>(prefs_.flowDirection);
+    if (dir != FlowDirection::Off && !out.game) {
+        std::map<std::string, Spot> at;
+        for (const char* d : device::All())
+            at[d] = FlowSpot(d, cfg_.argbFans.Fans(), [&](const std::string& item) { return SetupSpot(prefs_, item); });
+        p = Flowed(p, FlowOffsets(at, dir)[id], prefs_.flowSeconds);
+    }
     return p;
 }
 

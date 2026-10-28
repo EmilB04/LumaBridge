@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "aura_usb.h"
@@ -37,6 +38,7 @@ public:
     bool SetAll(uint32_t auraColor) override;
     bool SetFrames(const std::vector<std::vector<Rgb>>& frames) override;
     void ReenterDirectMode() override { directMode_ = false; }
+    bool SavePowerOnColor(Rgb c) override;
 
 private:
     bool EnterDirectMode();
@@ -44,6 +46,8 @@ private:
     std::vector<uint16_t> pids_;
     int argbLeds_;
     Device dev_;
+    std::string firmware_;
+    ConfigTable config_;
     std::vector<UsbChannel> channels_;
     std::vector<bool> selected_;
     std::vector<AuraDeviceInfo> infos_;

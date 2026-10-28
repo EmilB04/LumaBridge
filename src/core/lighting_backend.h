@@ -48,6 +48,11 @@ public:
         return SetAll(0);
     }
 
+    // Saves `c` in the hardware as the still color it shows from power-on (until Armoury Crate
+    // saves another effect). It writes the controller's flash, so only when the user asks.
+    // False when the backend can't, or on an I/O failure.
+    virtual bool SavePowerOnColor(Rgb) { return false; }
+
     // Take the hardware over again with the next frame, in case Armoury Crate changed its
     // mode meanwhile (see DirectModeReclaim). Nothing to do for backends without a mode.
     virtual void ReenterDirectMode() {}

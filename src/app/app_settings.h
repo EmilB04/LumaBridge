@@ -41,6 +41,7 @@ struct Prefs {
     Mode mode = Mode::Auto;
     Rgb manualColor{0, 140, 255};
     Rgb manualColor2{255, 255, 255};  // second color of gradient / comet / twinkle
+    Rgb powerOnColor{0, 140, 255};    // the color last picked to save in the motherboard for power-on
     ManualEffect effect = ManualEffect::Static;
     float speedHz = 0.5f;  // effect cycles per second (0 = still, for gradients)
     // Rainbow look (color cycle, rainbow wave and the idle rainbow): see fx::Params.
@@ -136,6 +137,10 @@ struct Prefs {
     // Where things sit on the desk in the 3D views ("desk:case", "desk:keyboard", ...; see
     // pc::DeskItems). Also the old 2D canvas's spots (0.15 and earlier), kept as they were.
     std::map<std::string, Spot> setupSpots;
+    // Your own lighting travelling across the 2D layout (FlowDirection; 0 off), taking this
+    // long from the first device to the last.
+    int flowDirection = 0;
+    float flowSeconds = 1.5f;
     // The case's fans and how it's turned (pc::Encode); "" until you correct LumaBridge's guess.
     std::string caseLayout;
     std::map<std::string, float> monitorSizes;  // monitor identity (displays::SizeKey) -> diagonal in inches

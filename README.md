@@ -48,7 +48,7 @@ with an administrator prompt.
 |---|---|
 | **Dashboard** | See the current lighting, active game, CPU/GPU load, temperatures, memory, power and cooling readings. Hide or reorder cards and follow recent readings in graphs. |
 | **My setup** | Explore your PC and desk in 3D, with live colors, moving fans and airflow. Arrange devices, correct monitor sizes and configure the case, fans and cooler. |
-| **Lighting** | Build a look with static color, breathing, strobe, color cycle, rainbow wave, gradient, comet or twinkle. Set brightness, direction and individual device overrides. |
+| **Lighting** | Build a look with static color, breathing, strobe, color cycle, rainbow wave, gradient, comet or twinkle. Set brightness, direction and individual device overrides, and let moving effects travel across your setup (left to right, top down, ...) by where each device sits in the 2D layout. |
 | **Games List** | Find installed games, set up their data feeds and choose screen colors or a fallback look for games without supported lighting. |
 | **Devices** | Control lighting, view readings and browse everything Windows reports in the searchable **All hardware** inventory. |
 | **Integrations** | One master switch sets up Logitech, Razer, SteelSeries and Alienware game lighting, Windows lighting and OpenRGB. Edit individual connections, add Corsair game folders or repair setup. Hardware access and Armoury Crate hand-back stay installed when game connections are switched off. |
@@ -147,7 +147,7 @@ connections; vendor apps still handle firmware updates, macros and cooling confi
 
 | Hardware | Connection and scope |
 |---|---|
-| **ASUS Aura motherboard / ARGB** | Direct USB control of supported motherboard LEDs and ARGB headers, including fans and strips. Optional Aura SDK backend. |
+| **ASUS Aura motherboard / ARGB** | Direct USB control of supported motherboard LEDs and ARGB headers, including fans and strips. A still power-on color can be saved in the board (replaces Armoury Crate's saved effect at boot). Optional Aura SDK backend. |
 | **ROG Azoth** | Direct per-key lighting over USB or the ROG Omni receiver; OLED controls, 18 GIF animations with USB upload, and experimental USB audio EQ / song info. |
 | **Logitech** | Direct HID++ for supported mice; G502 X Plus supports individual LEDs. Other RGB gear can use G HUB's LED SDK, which sends one color. |
 | **HyperX / Kingston FURY RGB DDR4** | Experimental native control through Hardware access. AMD PIIX4 and Intel I801 supported; Intel lighting still needs physical validation. Other controller families and DDR5 can use OpenRGB where supported. |

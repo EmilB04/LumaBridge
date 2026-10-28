@@ -241,6 +241,16 @@ void AuraMirror::Reclaim() {
     Wake();
 }
 
+void AuraMirror::SavePowerOnColor(Rgb c) {
+    {
+        std::lock_guard<std::mutex> lock(settingsMutex_);
+        savePowerOn_ = true;
+        powerOnColor_ = c;
+        status_.powerOnSave = PowerOnSave::Pending;
+    }
+    Wake();
+}
+
 AuraMirror::Status AuraMirror::GetStatus() const {
     std::lock_guard<std::mutex> lock(settingsMutex_);
     Status s = status_;
@@ -384,13 +394,17 @@ void AuraMirror::Run() {
         }
 
         // ---- Direct: talk to Aura ourselves. ----
-        bool rescan, reclaimEvent;
+        bool rescan, reclaimEvent, savePowerOn;
         uint64_t settingsVersion;
         ColorCorrection cc;
+        Rgb powerOnColor;
         {
             std::lock_guard<std::mutex> lock(settingsMutex_);
             rescan = rescan_;
             rescan_ = false;
+            savePowerOn = savePowerOn_;
+            savePowerOn_ = false;
+            powerOnColor = powerOnColor_;
             reclaimEvent = reclaim_;
             reclaim_ = false;
             settingsVersion = settingsVersion_;
@@ -432,6 +446,15 @@ void AuraMirror::Run() {
             for (size_t i = 0; i < devs.size(); ++i) backend->SetSelected(i, DeviceAllowed(devs[i]));
             appliedSettings = settingsVersion;
             havePushed = false;  // calibration or device set changed: repaint
+        }
+
+        if (savePowerOn) {
+            const bool ok = backend->IsConnected() && backend->SavePowerOnColor(ApplyCorrection(cc, powerOnColor));
+            if (!ok) LUMA_WARN("Aura mirror: couldn't save the power-on color");
+            backend->ReenterDirectMode();
+            havePushed = false;  // the save left direct mode: repaint right away
+            std::lock_guard<std::mutex> lock(settingsMutex_);
+            status_.powerOnSave = ok ? PowerOnSave::Saved : PowerOnSave::Failed;
         }
 
         if (pattern.active) {

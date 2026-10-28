@@ -499,6 +499,38 @@ static void TestAuraUsb() {
     CHECK(ch.size() == 2);
     CHECK(ch[0].directChannel == 4 && ch[0].leds == 5 && ch[0].auraType == 0x00010000);
     CHECK(ch[1].directChannel == 0 && ch[1].leds == 120 && ch[1].auraType == 0x00011000);
+
+    // Power-on color: the board is effect channel 0 (LED slots 0-4), the ARGB header
+    // channel 1 (slot 5); on AULA3-AR32 firmware the header comes first.
+    auto targets = EffectTargets(real, "AULA3-AR42");
+    CHECK(targets.size() == 2);
+    CHECK((targets[0] == EffectTarget{0, 0, 5}) && (targets[1] == EffectTarget{1, 5, 1}));
+    targets = EffectTargets(real, "AULA3-AR32-0207");
+    CHECK(targets.size() == 2);
+    CHECK((targets[0] == EffectTarget{1, 0, 5}) && (targets[1] == EffectTarget{0, 5, 1}));
+    ConfigTable noBoard = real;
+    noBoard.raw[0x1B] = 0;
+    targets = EffectTargets(noBoard, "AULA3-AR42");
+    CHECK(targets.size() == 1 && (targets[0] == EffectTarget{0, 0, 1}));
+    ConfigTable tooMany = real;
+    tooMany.raw[0x1B] = 15;
+    tooMany.raw[0x02] = 3;
+    CHECK(EffectTargets(tooMany, "").size() == 2);  // slots 0-14 and 15; 16 and 17 don't fit the mask
+
+    Report color = EffectColorRequest(5, 1, Rgb{10, 20, 30});
+    CHECK(color[1] == 0x36 && color[2] == 0x00 && color[3] == 0x20 && color[4] == 0);
+    CHECK(color[5 + 15] == 10 && color[6 + 15] == 20 && color[7 + 15] == 30 && color[5] == 0);
+    color = EffectColorRequest(0, 5, Rgb{1, 2, 3});
+    CHECK(color[2] == 0x00 && color[3] == 0x1F && color[5] == 1 && color[5 + 12] == 1 && color[5 + 15] == 0);
+
+    auto save = PowerOnColorRequests(real, "AULA3-AR42", Rgb{255, 128, 0});
+    CHECK(save.size() == 5);
+    CHECK(save[0][1] == 0x35 && save[0][2] == 0 && save[0][5] == kModeStatic);
+    CHECK(save[1][1] == 0x36 && save[1][3] == 0x1F);
+    CHECK(save[2][1] == 0x35 && save[2][2] == 1 && save[2][5] == kModeStatic);
+    CHECK(save[3][1] == 0x36 && save[3][3] == 0x20 && save[3][5 + 15] == 255);
+    CHECK(save[4][0] == 0xEC && save[4][1] == 0x3F && save[4][2] == 0x55);
+    CHECK(PowerOnColorRequests(ConfigTable{}, "", Rgb{}).empty());  // nothing to save, no save command
 }
 
 static void TestCoreProps() {
@@ -2568,6 +2600,52 @@ static void TestLogitechHidpp() {
     CHECK(g.size() == 3 && g[1][4] == 6 && g[1][8] == 5 && g[1][12] == 6 && g[1][16] == 6 && g[1][17] == 4);
 }
 
+static void TestFlow() {
+    using namespace luma::app;
+    using luma::fx::Kind;
+    std::map<std::string, Spot> layout{{"fan0", Spot{0.1f, 0.2f}}, {"fan1", Spot{0.1f, 0.6f}}, {"board", Spot{0.5f, 0.3f}}};
+    auto spot = [&](const std::string& item) {
+        auto it = layout.find(item);
+        return it != layout.end() ? it->second : Spot{0.9f, 0.9f};
+    };
+    // Fans count as one device between their fans; the memory sits right of the board's center.
+    Spot fans = FlowSpot(device::kFans, 2, spot);
+    CHECK(std::fabs(fans.x - 0.1f) < 1e-5f && std::fabs(fans.y - 0.4f) < 1e-5f);
+    Spot ram = FlowSpot(device::kRam, 2, spot);
+    CHECK(std::fabs(ram.x - 0.54f) < 1e-5f && std::fabs(ram.y - 0.3f) < 1e-5f);
+    CHECK(FlowSpot(device::kKeyboard, 2, spot) == (Spot{0.9f, 0.9f}));
+
+    std::map<std::string, Spot> at{{"fans", Spot{0.1f, 0.4f}}, {"board", Spot{0.5f, 0.3f}}, {"keyboard", Spot{0.9f, 0.9f}}};
+    auto o = FlowOffsets(at, FlowDirection::LeftToRight);
+    CHECK(o["fans"] == 0.0 && std::fabs(o["board"] - 0.5) < 1e-6 && o["keyboard"] == 1.0);
+    o = FlowOffsets(at, FlowDirection::RightToLeft);
+    CHECK(o["fans"] == 1.0 && o["keyboard"] == 0.0);
+    o = FlowOffsets(at, FlowDirection::BottomToTop);
+    CHECK(o["keyboard"] == 0.0 && o["board"] == 1.0);
+    o = FlowOffsets(at, FlowDirection::Off);
+    CHECK(o["fans"] == 0.0 && o["keyboard"] == 0.0);
+    CHECK(FlowOffsets({{"a", Spot{0.5f, 0.1f}}, {"b", Spot{0.5f, 0.9f}}}, FlowDirection::LeftToRight)["b"] == 0.0);
+
+    luma::fx::Params p;
+    p.kind = Kind::Breathing;
+    p.speed = 1;
+    p.epoch = 100000;
+    CHECK(Flowed(p, 0.0, 1.5).epoch == 98500);  // the first device runs the whole flow ahead
+    CHECK(Flowed(p, 1.0, 1.5).epoch == 100000);  // the last one on the effect's own clock
+    CHECK(Flowed(p, 0.5, 2.0).epoch == 99000);
+    luma::fx::Params still = p;
+    still.kind = Kind::Static;
+    CHECK(Flowed(still, 0.0, 1.5).epoch == 100000);
+    luma::fx::Params beat = p;
+    beat.kind = Kind::Beat;
+    CHECK(Flowed(beat, 0.0, 1.5).epoch == 100000);
+    luma::fx::Params unstamped = p;
+    unstamped.epoch = 0;
+    CHECK(Flowed(unstamped, 0.0, 1.5).epoch == 0);
+    p.epoch = 500;
+    CHECK(Flowed(p, 0.0, 1.5).epoch == 1);  // never before the clock's start, never "no start"
+}
+
 static void TestDeviceLighting() {
     using namespace luma::app;
     DeviceLighting d;
@@ -3620,6 +3698,7 @@ int main() {
     TestAzothKeys();
     TestLogitechHidpp();
     TestDeviceLighting();
+    TestFlow();
     TestSetupHardware();
     TestSetupPlan();
     TestOpenRgb();
