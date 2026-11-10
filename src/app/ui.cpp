@@ -8311,6 +8311,130 @@ void NollieBootCard(Controller& ctl, UiState& ui, const Fonts& f, const NollieDe
     }
 }
 
+// One boot effect of the hub: the effect and what it uses. `id` keeps two of them apart.
+bool NollieOnboardEffect(Controller& ctl, UiState& ui, nollie::onboard::BootSetup& b, const char* id, int* colorSlot) {
+    namespace ob = nollie::onboard;
+    ImGui::PushID(id);
+    bool changed = false;
+    if (ImGui::BeginCombo("Effect", ob::EffectName(b.effect, true))) {
+        for (int i = 0; i < ob::kBootEffects; ++i)
+            if (ImGui::Selectable(ob::EffectName(i, true), i == b.effect)) { b.effect = i; changed = true; }
+        ImGui::EndCombo();
+    }
+    auto whole = [&](const char* label, int* v, int lo, int hi, const char* fmt) {
+        float x = static_cast<float>(*v);
+        if (!LabeledSlider(label, &x, static_cast<float>(lo), static_cast<float>(hi), fmt)) return;
+        *v = static_cast<int>(x + 0.5f);
+        changed = true;
+    };
+    whole("Brightness", &b.brightness, 1, 100, "%.0f%%");
+    whole("Speed", &b.step, 1, 10, "%.0f");
+    const bool all = ob::UsesAll(b);  // "Light up" has just a color, brightness and speed
+    if (all) {
+        whole("Size", &b.size, 0, 50, "%.0f");
+        whole("Delay", &b.delay, 0, 8, "%.0f");
+        whole("Pause between sweeps", &b.pause, 1, 255, "%.0f");
+    }
+    const int colors = all ? 3 : 1;
+    ImGui::TextUnformatted(colors == 1 ? "Color" : "Colors");
+    for (int i = 0; i < colors; ++i) {
+        const std::string slot = "swatch" + std::to_string(i);
+        if (Swatch(slot.c_str(), b.colors[i], 26 * S(), *colorSlot == i)) *colorSlot = i;
+        if (i + 1 < colors) ImGui::SameLine();
+    }
+    if (*colorSlot >= colors) *colorSlot = 0;
+    if (ColorEditor(ctl, ui, &b.colors[*colorSlot], ("edit" + std::to_string(*colorSlot)).c_str())) changed = true;
+    ImGui::PopID();
+    if (changed) b = ob::Clamped(b);
+    return changed;
+}
+
+// Devices > a Nollie hub: the boot effect the hub keeps itself and plays at power-on, before
+// Windows or LumaBridge is running. Only the hub's eight built-in effects: nothing else fits in it.
+void NollieOnboardCard(Controller& ctl, UiState& ui, const Fonts& f, const NollieDevice& d) {
+    namespace ob = nollie::onboard;
+    const nollie::Model* model = nollie::Find(d.vid, d.pid);
+    ob::BootPlan& plan = ctl.prefs().nollieOnboardBoot[d.id];
+    BeginCard("nollie-onboard");
+    CardTitle(f, "Boot effect in the hub", Icon::Lighting);
+    Muted("The hub can keep a start-up effect itself and play it when it gets power, before Windows or "
+          "LumaBridge is running. It holds one of its eight built-in effects (not LumaBridge's own start-up "
+          "show above), played on the channels you set up below. With two or more channels you can give each one of two effects. "
+          "Close Nollie's own app first.");
+    bool changed = false;
+    // The channels set up on this hub: each plays effect 1 or effect 2.
+    struct Zone { int z; std::string name; };
+    std::vector<Zone> zones;
+    for (int z = 0; z < d.channels; ++z) {
+        auto it = ctl.prefs().nollieChannels.find(nollie::Key(d.id, z));
+        if (it == ctl.prefs().nollieChannels.end() || it->second.kind == nollie::Kind::Unused || !model) continue;
+        const nollie::Channel& c = it->second;
+        const std::string what = c.kind == nollie::Kind::Strip ? "LED strip"
+                                 : std::to_string(c.Fans()) + (c.Fans() == 1 ? " fan" : " fans");
+        zones.push_back({z, nollie::DisplayName(c, z) + "  -  " + what});
+    }
+    int tab = 0;  // which effect is being edited
+    if (zones.size() > 1) {
+        ImGui::TextUnformatted("What each channel plays");
+        const float column = std::min(ImGui::GetContentRegionAvail().x * 0.5f, 260 * S());
+        const char* const which[] = {"Effect 1", "Effect 2"};
+        for (const Zone& zone : zones) {
+            int effect = zone.z < 32 && (plan.secondMask >> zone.z & 1) ? 1 : 0;
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(zone.name.c_str());
+            ImGui::SameLine(column + 40 * S());
+            if (Segmented(("ch" + std::to_string(zone.z)).c_str(), &effect, which, 2, 170 * S())) {
+                plan.secondMask = effect ? plan.secondMask | (1u << zone.z) : plan.secondMask & ~(1u << zone.z);
+                changed = true;
+            }
+        }
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+        ImGui::TextUnformatted("Change");
+        const std::string names[2] = {std::string("Effect 1: ") + ob::EffectName(plan.first.effect, true),
+                                      std::string("Effect 2: ") + ob::EffectName(plan.second.effect, true)};
+        const char* const labels[] = {names[0].c_str(), names[1].c_str()};
+        Segmented("edit-tab", &ui.nollieOnboardTab, labels, 2, std::min(ImGui::GetContentRegionAvail().x, 460 * S()));
+        tab = ui.nollieOnboardTab;
+        if (tab == 1 && plan.secondMask == 0) Muted("No channel plays effect 2 yet: choose it above.");
+    }
+    if (tab == 0) changed |= NollieOnboardEffect(ctl, ui, plan.first, "first", &ui.nollieOnboardColor);
+    else changed |= NollieOnboardEffect(ctl, ui, plan.second, "second", &ui.nollieOnboardColor2);
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    int index = 0;
+    for (int i = 0; i < static_cast<int>(sizeof ob::kFrameTimes / sizeof *ob::kFrameTimes); ++i)
+        if (ob::kFrameTimes[i] == plan.frameMs) index = i;
+    char label[48];
+    snprintf(label, sizeof label, "%d frames a second", 1000 / std::max(1, plan.frameMs));
+    if (ImGui::BeginCombo("Frame rate", label)) {
+        for (int i = static_cast<int>(sizeof ob::kFrameTimes / sizeof *ob::kFrameTimes) - 1; i >= 0; --i) {
+            snprintf(label, sizeof label, "%d frames a second", 1000 / ob::kFrameTimes[i]);
+            if (ImGui::Selectable(label, i == index)) { plan.frameMs = ob::kFrameTimes[i]; changed = true; }
+        }
+        ImGui::EndCombo();
+    }
+    Muted("How fast the boot effect moves overall, on top of its speed.");
+    if (changed) ctl.Changed();
+    const std::string result = ctl.nollie().bootResult(d.id);
+    if (Btn("Save to the hub") && result != "Saving...") {
+        std::string why;
+        if (!ctl.SaveNollieBootToHub(d, &why)) ui.nollieOnboardMessage = why;
+        else ui.nollieOnboardMessage.clear();
+    }
+    ImGui::SameLine();
+    if (Btn("Play it on the hub") && result != "Starting...") {
+        ctl.PlayNollieHubBoot(d.id);
+        ui.nollieOnboardMessage.clear();
+    }
+    if (!ui.nollieOnboardMessage.empty()) Muted("%s", ui.nollieOnboardMessage.c_str());
+    else if (!result.empty()) Muted("%s", result.c_str());
+    Muted("\"Play it on the hub\" shows what the hub holds (save first): LumaBridge's colors stop for about "
+          "eight seconds while the hub plays it.");
+    Muted("This also tells the hub how many LEDs each channel you set up has (its own start-up and loop effects "
+          "then fit your fans), and makes the boot effect the first thing it plays. Power the hub off and on "
+          "again to see it; the colors LumaBridge sends take over once it is running.");
+    EndCard();
+}
+
 // A Nollie hub: switch it on or off, say what is plugged into each channel (nothing, an LED
 // strip, a chain of fans), and give each channel its own lighting.
 void NolliePage(Controller& ctl, UiState& ui, const Fonts& f, const NollieDevice& d) {
@@ -8343,6 +8467,7 @@ void NolliePage(Controller& ctl, UiState& ui, const Fonts& f, const NollieDevice
     EndCard();
     if (!model) return;
     NollieBootCard(ctl, ui, f, d);
+    if (nollie::onboard::Speaks(*model)) NollieOnboardCard(ctl, ui, f, d);
 
     BeginCard("nollie-channels");
     CardTitle(f, "Channels", Icon::Fan);

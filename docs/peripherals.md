@@ -440,6 +440,38 @@ Stackab1-3, Bullets) with colors and a speed, on up to two boot canvases (14 and
 answers' layout is not confirmed on real hardware yet; each log line also carries the raw
 bytes. A hub that doesn't answer two questions in a row is not asked again.
 
+Confirmed on the owner's 8 channel hub (firmware 2.4.0): every answer reads as expected, the
+colors come back as R, G, B, effect 0 of the boot list is "Light up".
+
+**Saving the boot effect to the hub.** The hub's page has "Boot effect in the hub" (only for
+hubs `onboard::Speaks`): one of the eight built-in effects, brightness, speed (step 1-10),
+size and up to three colors (`onboard::BootSetup`, saved in the INI as `[Nollie] Boot.<id>`).
+"Save to the hub" (`Controller::SaveNollieBootToHub`, `SaveBootToHub` on the output's thread)
+reads what the hub has, then writes, in this order: the LED count of each channel set up
+(others keep the hub's value), one boot canvas, the boot channel map (set-up channels first,
+then the rest, so it stays every channel once), the boot canvas 14 (effect, colors, and the
+hub's own LED-order and delay values kept) and, if the hub's power-on was not the boot
+canvases, the playlist. Reports are `FA` + what + data, as Nollie's app sends them. It reads
+the canvas, map and counts back and logs "boot effect read back as sent" or "DIFFERENT". The
+hub saves by itself a few seconds after the last report.
+
+**Two effects, pauses and frame rate.** The hub holds two boot canvases (14 and 15). Channels
+ticked "second effect" (`BootPlan::secondMask`) go to canvas 15 with their own effect; the map
+lists canvas 14's channels, then canvas 15's, then the rest (`onboard::Layout`). Each effect also
+has a delay (0-8) and a pause between sweeps (1-255, the hub's "frame delay": 16 bytes, one per
+canvas, written whole as `FA 12`). The boot frame time (`FA 07`, milliseconds: 8 to 100 in the
+steps the hub's app offers) is shown as frames a second. "Light up" uses only color 1,
+brightness and speed, as in Nollie's app. The read-back also checks the canvas count, the frame
+time and the pauses. Unconfirmed on hardware: which canvas index the pause belongs to (taken to be
+the canvas number), and that a second canvas plays in step with the first.
+
+"Play it on the hub" (`NollieOutput::PlayHubBoot`, `PlayBootOnHub`) shows what the hub holds: the
+colors to that hub stop for 8 seconds (`kHubBootHoldMs`), the hub is put on its own effects
+(`FA 01 01`) and told to play the boot effect (`FA 20`), then its play stage is asked and
+logged ("asked to play its boot effect; it says it is ..."). It plays what is saved, not unsaved
+edits. Unconfirmed on hardware whether the hub accepts `FA 20` while it was showing colors. Not written: loop canvases, palettes,
+frame times, anything on a hub with an animation store.
+
 - **16 / 32 channel hubs:** one 1025-byte report per channel (channel, flag, LED count
   big-endian, then G R B per LED). Channels go out in hardware order; channels 15 and 31 always
   go out (they carry the flag that ends a bank), with 8 ms after each. The zone numbers the user

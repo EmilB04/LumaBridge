@@ -274,6 +274,10 @@ public:
     const std::string& nollieTest() const { return nollieTest_; }
     // Plays the hub's boot effect now (its identity).
     void PlayNollieBoot(const std::string& deviceId) { nollie_.PlayBoot(deviceId); }
+    void PlayNollieHubBoot(const std::string& deviceId) { nollie_.PlayHubBoot(deviceId); }
+    // Writes the boot effect set on the hub's page to the hub itself, for the channels that have
+    // something on them. False (with `why`) when no channel is set up.
+    bool SaveNollieBootToHub(const NollieDevice& d, std::string* why);
     // Starts the hub's sequence over (its identity).
     void RestartNollieSequence(const std::string& deviceId) { nollie_.RestartSequence(deviceId); }
 

@@ -74,6 +74,8 @@ struct UiState {
     int nollieChannel = -1;
     int nollieFan = -1;  // with each fan on its own: the fan being edited (-1: the whole channel)
     bool nollieBootEdit = false;
+    int nollieOnboardColor = 0, nollieOnboardColor2 = 0, nollieOnboardTab = 0;  // the boot colors being edited in the hub
+    std::string nollieOnboardMessage;    // why a save did not start
     int nollieSeqColor = 0;
     int nollieStop = 0;
     int setupColorSlot = 0;  // Setup effects: the color being edited (0 lit, 1 unlit)      // the gradient color being edited  // the sequence's color being edited: 0 lit, 1 unlit  // the hub's boot effect is open for editing

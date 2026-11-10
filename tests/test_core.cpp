@@ -3369,6 +3369,82 @@ static void TestNollieOnboard() {
     CHECK(std::string(o::IntroName(0)) == "the boot canvases" && std::string(o::SteadyName(0)) == "its own effects");
     CHECK(o::List({1, 20, 3}) == "1, 20, 3" && o::List({}).empty());
     CHECK(o::Hex({0x0A, 0xF9, 0x00}, 2) == "0A F9" && o::Hex({1}, 5) == "01");
+
+    // Saving the boot effect.
+    o::BootSetup setup;
+    setup.effect = 1;
+    setup.brightness = 80;
+    setup.step = 5;
+    setup.size = 12;
+    setup.delay = 2;
+    setup.pause = 99;
+    setup.colors[0] = Rgb{1, 2, 3};
+    setup.colors[1] = Rgb{255, 0, 16};
+    setup.colors[2] = Rgb{0, 0, 255};
+    o::BootSetup again;
+    CHECK(o::Decode(o::Encode(setup), &again) && again == setup);
+    CHECK(!o::Decode("", &again) && !o::Decode("1|2|3", &again) && !o::Decode("1|80|5|12|010203|FF0010|00", &again) &&
+          !o::Decode("x|80|5|12|010203|FF0010|0000FF", &again));
+    CHECK(o::Decode("99|500|0|-4|010203|FF0010|0000FF", &again) && again.effect == 7 && again.brightness == 100 &&
+          again.step == 1 && again.size == 0);
+    // The map: used channels first, then every other one once.
+    CHECK(o::BootChannelOrder({6, 2, 2, 0}, 8) == (std::vector<int>{0, 2, 6, 1, 3, 4, 5, 7}));
+    CHECK(o::BootChannelOrder({}, 3) == (std::vector<int>{0, 1, 2}) && o::BootChannelOrder({9, -1, 1}, 3) == (std::vector<int>{1, 0, 2}));
+    CHECK(o::MergeLedCounts({126, 126, 126}, {0, 40, 0}, 3) == (std::vector<int>{126, 40, 126}));
+    CHECK(o::MergeLedCounts({}, {5}, 2) == (std::vector<int>{5, 0}));
+    // The reports.
+    const n::Packet counts = o::LedCountsPacket({126, 300});
+    CHECK(counts.bytes.size() == 65 && counts.bytes[1] == 0xFA && counts.bytes[2] == 8 && counts.bytes[3] == 126 &&
+          counts.bytes[4] == 0 && counts.bytes[5] == 0x2C && counts.bytes[6] == 1);
+    const n::Packet map = o::BootMapPacket({4, 5, 0});
+    CHECK(map.bytes[1] == 0xFA && map.bytes[2] == 11 && map.bytes[3] == 0 && map.bytes[4] == 4 && map.bytes[5] == 5 &&
+          map.bytes[6] == 0 && map.bytes[3 + 32] == 0 && map.bytes.size() == 65);
+    const n::Packet bootCanvas = o::BootCanvasPacket(setup, 0, 8, 0);
+    const std::vector<uint8_t> expect{0, 0xFA, 2, 14, 1, 80, 5, 12, 8, 0, 2, 1, 2, 3, 255, 0, 16, 0, 0, 255};
+    CHECK(std::equal(expect.begin(), expect.end(), bootCanvas.bytes.begin()) && bootCanvas.bytes[20] == 0);
+    // What is written is what the question reads back.
+    o::CanvasEffect read;
+    CHECK(o::DecodeCanvasEffect(std::vector<uint8_t>(bootCanvas.bytes.begin() + 1, bootCanvas.bytes.end()), &read));
+    CHECK(read.mode == 1 && read.brightness == 80 && read.step == 5 && read.size == 12 && read.channels == 8 &&
+          read.delay == 2 && read.colors[1] == (Rgb{255, 0, 16}));
+    // The second boot canvas is canvas 15.
+    CHECK(o::BootCanvasPacket(setup, 1, 3, 0).bytes[3] == 15 && o::BootCanvasPacket(setup, 1, 3, 0).bytes[8] == 3);
+    // Settings from before delay and pause existed read with the defaults; new ones keep them.
+    o::BootSetup old;
+    CHECK(o::Decode("1|80|5|12|010203|FF0010|0000FF", &old) && old.delay == 0 && old.pause == 33 && old.size == 12);
+    CHECK(!o::Decode("1|80|5|12|010203|FF0010|0000FF|2", &old) && !o::Decode("1|80|5|12|010203|FF0010|0000FF|x|9", &old));
+    CHECK(o::Decode("1|80|5|12|010203|FF0010|0000FF|99|999", &old) && old.delay == 8 && old.pause == 255);
+    CHECK(!o::UsesAll(o::BootSetup{}) && o::UsesAll(setup));
+    // Frame times snap to what the hub offers.
+    CHECK(o::NearestFrameMs(16) == 16 && o::NearestFrameMs(17) == 16 && o::NearestFrameMs(1000) == 100 && o::NearestFrameMs(0) == 8);
+    CHECK(o::BootFrameMsPacket(33).bytes[1] == 0xFA && o::BootFrameMsPacket(33).bytes[2] == 7 && o::BootFrameMsPacket(33).bytes[3] == 33);
+    const n::Packet pauses = o::FrameDelayPacket({1, 2, 3});
+    CHECK(pauses.bytes[2] == 18 && pauses.bytes[3] == 1 && pauses.bytes[5] == 3 && pauses.bytes[6] == 33 && pauses.bytes[18] == 33 &&
+          pauses.bytes[19] == 0);
+    // A plan with two effects: channels on the second go after the first's in the map.
+    o::BootPlan plan;
+    plan.first = o::BootSetup{};
+    plan.second = setup;
+    plan.secondMask = (1u << 4) | (1u << 6);
+    plan.frameMs = 25;
+    o::BootPlan planBack;
+    CHECK(o::Decode(o::Encode(plan), &planBack) && planBack == plan);
+    o::BootPlan fromOld;
+    CHECK(o::Decode("1|80|5|12|010203|FF0010|0000FF", &fromOld) && fromOld.first.step == 5 && fromOld.secondMask == 0 && fromOld.frameMs == 16);
+    CHECK(!o::Decode("", &fromOld) && !o::Decode("16;x;a;b", &fromOld) && !o::Decode("16;0;1|80|5|12|010203|FF0010|0000FF", &fromOld));
+    const o::BootLayout two = o::Layout(plan, {0, 1, 4, 5, 6}, 8);
+    CHECK(two.canvases == 2 && two.first == (std::vector<int>{0, 1, 5}) && two.second == (std::vector<int>{4, 6}) &&
+          two.order == (std::vector<int>{0, 1, 5, 4, 6, 2, 3, 7}) && two.secondSetup == setup);
+    // Nothing on the second effect's channels: one canvas. Everything on it: it becomes the only one.
+    CHECK(o::Layout(plan, {0, 1}, 8).canvases == 1);
+    const o::BootLayout allSecond = o::Layout(plan, {4, 6}, 8);
+    CHECK(allSecond.canvases == 1 && allSecond.first == (std::vector<int>{4, 6}) && allSecond.firstSetup == setup &&
+          allSecond.second.empty());
+    CHECK(o::BootCanvasCountPacket(1).bytes[1] == 0xFA && o::BootCanvasCountPacket(1).bytes[2] == 5 &&
+          o::BootCanvasCountPacket(1).bytes[3] == 1);
+    CHECK(o::BootPlaylistPacket(0, 0).bytes[2] == 19);
+    CHECK(o::ModePacket(1).bytes[1] == 0xFA && o::ModePacket(1).bytes[2] == 1 && o::ModePacket(1).bytes[3] == 1);
+    CHECK(o::PlayBootPacket().bytes[1] == 0xFA && o::PlayBootPacket().bytes[2] == 32 && o::PlayBootPacket().bytes.size() == 65);
 }
 
 static void TestSetupEffects() {

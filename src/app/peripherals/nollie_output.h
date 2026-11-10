@@ -1,8 +1,8 @@
 // Nollie ARGB hubs, lit directly over USB HID (nollie_protocol.h): each channel with the
 // effect of its own look, as a strip or as a chain of fans (nollie_layout.h). Only colors are
 // sent; a hub with the OS2 firmware is also asked once what it keeps on its own, for the log
-// (nollie_onboard.h). When LumaBridge lets go it stops sending, and the hub keeps showing the last frame
-// until it loses power.
+// (nollie_onboard.h), and can write the hub's own boot effect on request. When LumaBridge lets
+// go it stops sending, and the hub keeps showing the last frame until it loses power.
 // Runs on its own thread; looks for new hubs every 15 seconds.
 #pragma once
 #include "delivery_receipt.h"
@@ -19,6 +19,7 @@
 #include "effects.h"
 #include "nollie_hub.h"
 #include "nollie_layout.h"
+#include "nollie_onboard.h"
 #include "nollie_sequence.h"
 
 namespace luma::app {
@@ -71,6 +72,13 @@ struct NollieChannelPlan {
     int gradientFirst = 0;
 };
 
+// The boot effect the hub keeps on its own (nollie_onboard.h), to write to one hub.
+struct NollieBootSave {
+    std::string deviceId;
+    nollie::onboard::BootPlan plan;
+    std::vector<int> ledCounts;  // by zone: LEDs on the channel, 0 for a channel with nothing on it
+};
+
 class NollieOutput {
 public:
     enum class State { Off, Running };
@@ -90,6 +98,13 @@ public:
              const std::map<std::string, NollieHubPlan>& hubs, const ColorCorrection& correction = {});
     // Plays the boot effect of this hub (identity) now.
     void PlayBoot(const std::string& deviceId);
+    // Writes the boot effect to the hub itself (on the output's thread). The outcome, in words
+    // for the user, is in bootResult() ("" before the first save, "Saving..." meanwhile).
+    void SaveBoot(const NollieBootSave& request);
+    std::string bootResult(const std::string& deviceId) const;
+    // Plays the boot effect the hub holds (not unsaved changes): the colors stop for a few
+    // seconds while it plays. The outcome is in bootResult().
+    void PlayHubBoot(const std::string& deviceId);
     // Starts the hub's sequence over.
     void RestartSequence(const std::string& deviceId);
 
@@ -111,6 +126,9 @@ private:
     std::map<std::string, NollieHubPlan> hubs_;
     ColorCorrection correction_;
     std::vector<std::string> replay_, restart_;
+    std::vector<NollieBootSave> saves_;
+    std::vector<std::string> hubPlays_;
+    std::map<std::string, std::string> bootResults_;
     std::vector<NollieDevice> devices_;
 };
 

@@ -315,6 +315,16 @@ Prefs LoadPrefs(const std::wstring& ini) {
             if (bar == std::string::npos) break;
             pos = bar + 1;
         }
+        const std::string bootIds = Narrow(Read(ini, L"Nollie", L"BootIds"));  // "id,id"
+        for (size_t pos = 0; pos < bootIds.size();) {
+            size_t comma = bootIds.find(',', pos);
+            const std::string id = bootIds.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+            nollie::onboard::BootPlan b;
+            if (!id.empty() && nollie::onboard::Decode(Narrow(Read(ini, L"Nollie", (L"Boot." + Widen(id)).c_str())), &b))
+                p.nollieOnboardBoot[id] = b;
+            if (comma == std::string::npos) break;
+            pos = comma + 1;
+        }
         const std::string hubs = Narrow(Read(ini, L"Nollie", L"Hubs"));  // "id,id"
         for (size_t pos = 0; pos < hubs.size();) {
             size_t comma = hubs.find(',', pos);
@@ -499,6 +509,12 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
             WriteConfigValue(ini, L"Nollie", (L"Hub." + Widen(id)).c_str(), Widen(nollie::Encode(h)));
         }
         WriteConfigValue(ini, L"Nollie", L"Hubs", Widen(hubs));
+        std::string bootIds;
+        for (const auto& [id, b] : p.nollieOnboardBoot) {
+            bootIds += (bootIds.empty() ? "" : ",") + id;
+            WriteConfigValue(ini, L"Nollie", (L"Boot." + Widen(id)).c_str(), Widen(nollie::onboard::Encode(b)));
+        }
+        WriteConfigValue(ini, L"Nollie", L"BootIds", Widen(bootIds));
     }
     std::string recent;
     for (size_t i = 0; i < p.recentColors.size(); ++i) recent += (i ? "," : "") + ToHex(p.recentColors[i]);

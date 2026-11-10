@@ -18,6 +18,7 @@
 #include "lighting_zones.h"
 #include "nollie_hub.h"
 #include "nollie_layout.h"
+#include "nollie_onboard.h"
 
 namespace luma::app {
 
@@ -145,6 +146,8 @@ struct Prefs {
     std::map<std::string, nollie::Channel> nollieChannels;
     // Per hub: the travelling effect and the boot effect.
     std::map<std::string, nollie::Hub> nollieHubs;
+    // Per hub: the boot effect written to the hub itself, as last set on its page.
+    std::map<std::string, nollie::onboard::BootPlan> nollieOnboardBoot;
     // Which memory slots hold a stick (bit 0 A1 .. bit 3 B2, from the CPU outward), set by hand
     // on the Memory page; -1: as the system scan says.
     int ramSlots = -1;

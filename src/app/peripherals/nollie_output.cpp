@@ -21,6 +21,7 @@ namespace luma::app {
 namespace {
 
 constexpr uint64_t kRescanMs = 15000;
+constexpr double kHubBootHoldMs = 8000;  // how long the hub's own boot effect gets to itself
 constexpr uint64_t kRefreshMs = 2000;  // the same frame again now and then
 
 std::string Narrow(const wchar_t* w) {
@@ -99,6 +100,7 @@ public:
     }
 
     bool Open(const Found& f) {
+        found = f;
         path_ = f.path;
         model_ = f.model;
         outLen_ = f.outLen;
@@ -142,6 +144,8 @@ public:
     const std::wstring& path() const { return path_; }
     DWORD lastError() const { return lastError_; }
 
+    Found found;  // how it was found, for the questions
+    double pausedUntil = 0;  // no colors until then: the hub plays its own boot effect
     // What the hub shows now, to send again only when it changes.
     uint64_t delivered = 0;
     std::vector<std::vector<Rgb>> last;
@@ -181,6 +185,12 @@ public:
         if (event_) CloseHandle(event_);
     }
     bool ok() const { return h_ != INVALID_HANDLE_VALUE && event_ && outLen_ > 0 && inLen_ > 1; }
+    // One report, no answer expected. False when it can't be sent.
+    bool Write(const nollie::Packet& p) {
+        std::vector<uint8_t> buf = p.bytes;
+        if (buf.size() < outLen_) buf.resize(outLen_, 0);
+        return Finish(WriteFile(h_, buf.data(), static_cast<DWORD>(buf.size()), nullptr, Fresh()), 500);
+    }
     // Two questions in a row without an answer: the hub doesn't speak this, stop asking.
     bool silent() const { return missed_ >= 2; }
 
@@ -267,6 +277,9 @@ void LogOnboard(const Found& f) {
     if (hub.Ask(ob::kGetEffect, ob::kLedCounts, -1, &r))
         LUMA_INFO("Nollie: %s LEDs per channel as the hub counts them: %s", m.name,
                   ob::List(ob::DecodeLedCounts(r, m.channels)).c_str());
+    if (hub.Ask(ob::kGetEffect, ob::kFrameDelay, -1, &r))
+        LUMA_INFO("Nollie: %s pauses between sweeps (canvases 14, 15): %d, %d (answer: %s)", m.name,
+                  ob::At(r, ob::kBootCanvasBase), ob::At(r, ob::kBootCanvasBase + 1), ob::Hex(r, 16).c_str());
     // The looping canvases, then the boot ones: how many, how fast, which channels, which effect.
     for (const bool boot : {false, true}) {
         int count = 0, frameMs = 0;
@@ -289,6 +302,123 @@ void LogOnboard(const Found& f) {
     if (hub.silent())
         LUMA_INFO("Nollie: %s didn't answer when asked for its own settings (an older firmware, or its own app is asking too)",
                   m.name);
+}
+
+// Writes the boot effect to the hub (nollie_onboard.h) and reads it back. Returns what to tell
+// the user. The hub saves what it was sent a few seconds later, by itself.
+std::string SaveBootToHub(const Found& f, const NollieBootSave& req) {
+    namespace ob = nollie::onboard;
+    const nollie::Model& m = *f.model;
+    if (!ob::Speaks(m)) return "This hub can't keep a boot effect that LumaBridge knows how to set.";
+    OnboardReader hub(f);
+    if (!hub.ok()) return "The hub can't be reached for this.";
+    std::vector<int> used;
+    std::vector<int> wanted(static_cast<size_t>(m.channels), 0);
+    for (int z = 0; z < m.channels && z < static_cast<int>(req.ledCounts.size()); ++z)
+        if (req.ledCounts[z] > 0) {
+            used.push_back(z);
+            wanted[static_cast<size_t>(z)] = std::min(req.ledCounts[z], m.maxLeds);
+        }
+    if (used.empty()) return "Set up at least one channel first: the boot effect plays on the channels that have something on them.";
+    hub.Drain();
+    // What the hub has now: what stays as it is.
+    std::vector<uint8_t> r;
+    const char* const silent = "The hub didn't answer, nothing was changed.";
+    if (!hub.Ask(ob::kGetEffect, ob::kLedCounts, -1, &r)) return silent;
+    const std::vector<int> before = ob::DecodeLedCounts(r, m.channels);
+    ob::CanvasEffect now[2];
+    for (int c = 0; c < ob::kBootCanvases; ++c)
+        if (!hub.Ask(ob::kGetEffect, ob::kCanvasEffect, ob::kBootCanvasBase + c, &r) || !ob::DecodeCanvasEffect(r, &now[c]))
+            return silent;
+    std::vector<int> pauses(16, 33);
+    if (hub.Ask(ob::kGetEffect, ob::kFrameDelay, -1, &r))
+        for (int i = 0; i < 16 && i < static_cast<int>(r.size()); ++i) pauses[static_cast<size_t>(i)] = r[static_cast<size_t>(i)];
+    int intro = 0, steady = 0;
+    if (hub.Ask(ob::kGetEffect, ob::kBootPlaylist, -1, &r)) {
+        intro = ob::At(r, 0);
+        steady = ob::At(r, 1);
+    }
+    const ob::BootLayout layout = ob::Layout(req.plan, used, m.channels);
+    const std::vector<int> counts = ob::MergeLedCounts(before, wanted, m.channels);
+    const int frameMs = ob::NearestFrameMs(req.plan.frameMs);
+    pauses[ob::kBootCanvasBase] = layout.firstSetup.pause;
+    if (layout.canvases == 2) pauses[ob::kBootCanvasBase + 1] = layout.secondSetup.pause;
+    LUMA_INFO("Nollie: %s saving the boot effect %s%s%s: LED counts %s -> %s, first canvas on channels %s%s%s, %d ms a frame "
+              "(was: %s, %d channels)",
+              m.name, ob::EffectName(layout.firstSetup.effect, true), layout.canvases == 2 ? " and " : "",
+              layout.canvases == 2 ? ob::EffectName(layout.secondSetup.effect, true) : "", ob::List(before).c_str(),
+              ob::List(counts).c_str(), ob::List(layout.first).c_str(), layout.canvases == 2 ? ", second on " : "",
+              ob::List(layout.second).c_str(), frameMs, ob::EffectName(now[0].mode, true), now[0].channels);
+    std::vector<nollie::Packet> writes;
+    writes.push_back(ob::LedCountsPacket(counts));
+    writes.push_back(ob::BootCanvasCountPacket(layout.canvases));
+    writes.push_back(ob::BootMapPacket(layout.order));
+    writes.push_back(ob::BootCanvasPacket(layout.firstSetup, 0, static_cast<int>(layout.first.size()), now[0].map));
+    if (layout.canvases == 2)
+        writes.push_back(ob::BootCanvasPacket(layout.secondSetup, 1, static_cast<int>(layout.second.size()), now[1].map));
+    writes.push_back(ob::FrameDelayPacket(pauses));
+    writes.push_back(ob::BootFrameMsPacket(frameMs));
+    if (intro != 0) writes.push_back(ob::BootPlaylistPacket(0, steady));
+    for (const nollie::Packet& w : writes) {
+        if (!hub.Write(w)) return "The hub stopped taking the settings part way. Save again.";
+        Sleep(20);
+    }
+    // Read it back: the answer is what the hub will play.
+    auto same = [](const ob::CanvasEffect& c, const ob::BootSetup& s, int channels) {
+        return c.mode == s.effect && c.brightness == s.brightness && c.step == s.step && c.size == s.size &&
+               c.delay == s.delay && c.channels == channels && c.colors[0] == s.colors[0] && c.colors[1] == s.colors[1] &&
+               c.colors[2] == s.colors[2];
+    };
+    bool ok = true;
+    ob::CanvasEffect back[2];
+    for (int c = 0; c < layout.canvases; ++c) {
+        const ob::BootSetup& want = c == 0 ? layout.firstSetup : layout.secondSetup;
+        const int channels = static_cast<int>((c == 0 ? layout.first : layout.second).size());
+        ok = hub.Ask(ob::kGetEffect, ob::kCanvasEffect, ob::kBootCanvasBase + c, &r) && ob::DecodeCanvasEffect(r, &back[c]) &&
+             same(back[c], want, channels) && ok;
+    }
+    std::vector<int> map, countsBack;
+    int canvasesBack = 0, frameBack = 0;
+    std::vector<int> pausesBack;
+    if (hub.Ask(ob::kGetEffect, ob::kBootCanvasMap, 0, &r)) map = ob::DecodeChannelMap(r, m.channels);
+    if (hub.Ask(ob::kGetEffect, ob::kLedCounts, -1, &r)) countsBack = ob::DecodeLedCounts(r, m.channels);
+    if (hub.Ask(ob::kGetEffect, ob::kBootCanvasCount, -1, &r)) canvasesBack = ob::At(r, 0);
+    if (hub.Ask(ob::kGetEffect, ob::kBootFrameMs, -1, &r)) frameBack = ob::At(r, 0);
+    if (hub.Ask(ob::kGetEffect, ob::kFrameDelay, -1, &r))
+        for (int i = ob::kBootCanvasBase; i < ob::kBootCanvasBase + layout.canvases; ++i) pausesBack.push_back(ob::At(r, i));
+    std::vector<int> pausesWant{layout.firstSetup.pause};
+    if (layout.canvases == 2) pausesWant.push_back(layout.secondSetup.pause);
+    ok = ok && map == layout.order && countsBack == counts && canvasesBack == layout.canvases && frameBack == frameMs &&
+         pausesBack == pausesWant;
+    LUMA_INFO("Nollie: %s boot effect read back %s (map %s, LED counts %s, %d boot canvases, %d ms a frame, pauses %s)", m.name,
+              ok ? "as sent" : "DIFFERENT from what was sent", ob::List(map).c_str(), ob::List(countsBack).c_str(),
+              canvasesBack, frameBack, ob::List(pausesBack).c_str());
+    return ok ? "Saved. The hub plays it at power-on, with no program running. It keeps it a few seconds after this."
+              : "The hub took the settings but reads some of them back differently. Check the log.";
+}
+
+// Plays the boot effect the hub holds, now. A hub shows a program's colors over its own effects,
+// so the caller stops sending colors first; the hub is put back on its own effects and told to
+// play. Returns what to tell the user, from what the hub says it is doing.
+std::string PlayBootOnHub(const Found& f) {
+    namespace ob = nollie::onboard;
+    const nollie::Model& m = *f.model;
+    if (!ob::Speaks(m)) return "This hub can't play its boot effect from here.";
+    OnboardReader hub(f);
+    if (!hub.ok()) return "The hub can't be reached for this.";
+    hub.Drain();
+    if (!hub.Write(ob::ModePacket(1))) return "The hub didn't take the command.";
+    Sleep(30);
+    if (!hub.Write(ob::PlayBootPacket())) return "The hub didn't take the command.";
+    Sleep(300);
+    std::vector<uint8_t> r;
+    int stage = -1;
+    if (hub.Ask(ob::kGetEffect, ob::kMode, -1, &r)) stage = ob::At(r, 1);
+    LUMA_INFO("Nollie: %s asked to play its boot effect; it says it is %s (answer: %s)", m.name,
+              stage < 0 ? "not answering" : ob::StageName(stage), ob::Hex(r, 4).c_str());
+    if (stage == 1) return "Playing on the hub now. LumaBridge takes over again in a few seconds.";
+    return "Sent. The hub says it is: " + std::string(stage < 0 ? "not answering" : ob::StageName(stage)) +
+           ". LumaBridge takes over again in a few seconds.";
 }
 
 }  // namespace
@@ -324,6 +454,24 @@ void NollieOutput::Set(bool own, const std::map<std::string, NollieChannelPlan>&
 void NollieOutput::PlayBoot(const std::string& deviceId) {
     std::lock_guard<std::mutex> lock(mutex_);
     replay_.push_back(deviceId);
+}
+
+void NollieOutput::SaveBoot(const NollieBootSave& request) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    saves_.push_back(request);
+    bootResults_[request.deviceId] = "Saving...";
+}
+
+std::string NollieOutput::bootResult(const std::string& deviceId) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = bootResults_.find(deviceId);
+    return it == bootResults_.end() ? std::string() : it->second;
+}
+
+void NollieOutput::PlayHubBoot(const std::string& deviceId) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hubPlays_.push_back(deviceId);
+    bootResults_[deviceId] = "Starting...";
 }
 
 void NollieOutput::RestartSequence(const std::string& deviceId) {
@@ -388,6 +536,8 @@ void NollieOutput::Run() {
         bool own;
         std::map<std::string, NollieChannelPlan> plans;
         std::vector<std::string> skip, replay, restart;
+        std::vector<NollieBootSave> saves;
+        std::vector<std::string> hubPlays;
         std::map<std::string, NollieHubPlan> hubPlans;
         ColorCorrection cc;
         {
@@ -399,6 +549,28 @@ void NollieOutput::Run() {
             cc = correction_;
             replay.swap(replay_);
             restart.swap(restart_);
+            saves.swap(saves_);
+            hubPlays.swap(hubPlays_);
+        }
+        for (const std::string& id : hubPlays) {
+            std::string result = "That hub isn't there any more.";
+            for (const auto& h : hubs)
+                if (h->info().id == id) {
+                    // Stop the colors first, and show them again after the effect has had time.
+                    h->pausedUntil = now + kHubBootHoldMs;
+                    h->last.clear();
+                    result = PlayBootOnHub(h->found);
+                }
+            std::lock_guard<std::mutex> lock(mutex_);
+            bootResults_[id] = result;
+        }
+        for (const NollieBootSave& save : saves) {
+            std::string result = "That hub isn't there any more.";
+            for (const auto& h : hubs)
+                if (h->info().id == save.deviceId) result = SaveBootToHub(h->found, save);
+            LUMA_INFO("Nollie: save boot effect: %s", result.c_str());
+            std::lock_guard<std::mutex> lock(mutex_);
+            bootResults_[save.deviceId] = result;
         }
         int fastest = 30;
         uint64_t deliveredMinimum = UINT64_MAX;
@@ -418,6 +590,10 @@ void NollieOutput::Run() {
                 hub.SetRate(fps);
                 hub.framesCounted = 0;
                 hub.countFrom = now;
+            }
+            if (now < hub.pausedUntil) {
+                ++it;
+                continue;
             }
             const bool wanted = own && std::find(skip.begin(), skip.end(), hub.info().id) == skip.end();
             if (!wanted) {

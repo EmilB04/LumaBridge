@@ -129,6 +129,28 @@ bool Controller::LampArrayOn(const LampArrayDevice& d) const {
     return lighting::Enabled(prefs_.lampArrayDevices, d.id, d.name, LampArrayDefaultOn(d));
 }
 
+bool Controller::SaveNollieBootToHub(const NollieDevice& d, std::string* why) {
+    const nollie::Model* model = nollie::Find(d.vid, d.pid);
+    NollieBootSave save;
+    save.deviceId = d.id;
+    save.plan = prefs_.nollieOnboardBoot[d.id];
+    save.ledCounts.assign(static_cast<size_t>(d.channels), 0);
+    bool any = false;
+    for (const auto& [key, channel] : prefs_.nollieChannels) {
+        if (key.rfind(d.id + ".", 0) != 0 || channel.kind == nollie::Kind::Unused || !model) continue;
+        const int zone = std::atoi(key.c_str() + d.id.size() + 1);
+        if (zone < 0 || zone >= d.channels) continue;
+        save.ledCounts[static_cast<size_t>(zone)] = channel.Leds(*model);
+        any = any || save.ledCounts[static_cast<size_t>(zone)] > 0;
+    }
+    if (!any) {
+        if (why) *why = "Say what is plugged into at least one channel first (Channels, below).";
+        return false;
+    }
+    nollie_.SaveBoot(save);
+    return true;
+}
+
 void Controller::SetNollieEnabled(bool on) {
     prefs_.nollieLighting = on;
     Changed();
