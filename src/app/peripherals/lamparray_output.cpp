@@ -11,6 +11,7 @@ extern "C" {
 #include <map>
 #include <memory>
 
+#include "frame_clock.h"
 #include "lamparray.h"
 #include "log.h"
 #include "lighting_identity.h"
@@ -22,8 +23,8 @@ namespace la = lamparray;
 
 constexpr int kColumns = 32;              // effects run across a device in this many steps
 constexpr uint64_t kRescanMs = 15000;     // new devices
-constexpr uint64_t kRefreshMs = 5000;     // every lamp again now and then
-constexpr DWORD kFrameMs = 33;
+constexpr uint64_t kRefreshMs = 2000;     // every lamp again now and then (a device may go back to its own effect)
+constexpr double kFrameHz = 60;           // at most; slower when a device asks for it
 
 std::string Narrow(const wchar_t* w) {
     const int size = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
@@ -314,7 +315,7 @@ void LampArrayOutput::Start() {
 
 void LampArrayOutput::Stop() {
     if (!thread_.joinable()) return;
-    stop_ = true;
+    RequestStop();
     thread_.join();
     state_ = State::Off;
     std::lock_guard<std::mutex> lock(mutex_);
@@ -336,6 +337,7 @@ std::vector<LampArrayDevice> LampArrayOutput::devices() const {
 }
 
 void LampArrayOutput::Run() {
+    WorkerCancellation::Scope cancellable(cancellation_);
     std::vector<std::unique_ptr<Device>> devs;   // can be lit
     std::vector<std::pair<std::wstring, LampArrayDevice>> unusable;  // found, but can't be lit (with why)
     std::vector<std::wstring> seen;              // paths looked at already
@@ -344,6 +346,7 @@ void LampArrayOutput::Run() {
     // a log line each time.
     std::vector<std::wstring> mute;
     uint64_t nextScan = 0;
+    FramePacer pacer(kFrameHz);
     auto publish = [&] {
         std::vector<LampArrayDevice> list;
         for (const auto& d : devs) list.push_back(d->info());
@@ -404,21 +407,24 @@ void LampArrayOutput::Run() {
             since = effectSince_;
             skip = skip_;
         }
-        const double t = fx::Seconds(effect, now, since);
-        DWORD wait = kFrameMs;
+        const double t = fx::SecondsAt(effect, PreciseNowMs(), static_cast<double>(since));
+        double frameMs = 1000.0 / kFrameHz;
+        bool deliveredAny = false, deliveredAll = true;
         for (auto it = devs.begin(); it != devs.end();) {
             Device& d = **it;
             const bool wanted = own && std::find(skip.begin(), skip.end(), d.info().id) == skip.end();
             bool ok = true;
             if (!wanted) {
-                if (d.controlling) ok = d.Autonomous(true);  // its own effect again
+                if (d.controlling && !keepLastColor_) ok = d.Autonomous(true);  // its own effect again
                 d.controlling = false;
             } else {
                 const bool first = !d.controlling;
                 if (first) ok = d.Autonomous(false);
                 d.controlling = ok;
-                if (ok) ok = d.Frame(effect, t, level, first);
-                wait = std::max<DWORD>(wait, d.minIntervalMs());
+                if (ok) ok = d.Frame(effect, t, level, first || (effect.delivery && !delivery_.Has(effect.delivery)));
+                deliveredAny = true;
+                deliveredAll = deliveredAll && ok;
+                frameMs = std::max<double>(frameMs, d.minIntervalMs());
                 if (ok && !d.lit) {
                     d.lit = true;
                     mute.erase(std::remove(mute.begin(), mute.end(), d.path()), mute.end());
@@ -442,10 +448,12 @@ void LampArrayOutput::Run() {
             }
             ++it;
         }
-        Sleep(wait);
+        if (deliveredAny && deliveredAll) delivery_.Confirm(effect.delivery);
+        pacer.SetRate(1000.0 / frameMs);
+        pacer.Wait();
     }
     for (auto& d : devs)
-        if (d->controlling) d->Autonomous(true);
+        if (d->controlling && !keepLastColor_) d->Autonomous(true);
 }
 
 }  // namespace luma::app

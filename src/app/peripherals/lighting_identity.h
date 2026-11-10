@@ -29,7 +29,8 @@ inline bool Enabled(const std::map<std::string, bool>& choices, const std::strin
 }
 
 struct NativeConnections {
-    bool aura = false, logitech = false, azoth = false, memory = false, kraken = false, dualsense = false;
+    bool aura = false, logitech = false, azoth = false, memory = false, kraken = false, dualsense = false,
+         nollie = false;
 };
 
 // Availability matters: selecting native control must not block a working fallback when
@@ -41,7 +42,7 @@ inline bool PreferNative(int type, std::string who, NativeConnections available)
            (available.logitech && has("logitech")) || (available.azoth && has("azoth")) ||
            (available.memory && type == 1 && (has("kingston") || has("hyperx") || has("fury"))) ||
            (available.kraken && type == 3 && has("kraken")) ||
-           (available.dualsense && type == 10 && has("dualsense"));
+           (available.dualsense && type == 10 && has("dualsense")) || (available.nollie && has("nollie"));
 }
 
 inline bool SameLocation(std::string description, std::string path) {

@@ -141,7 +141,7 @@ void PadInput::Start() {
 
 void PadInput::Stop() {
     if (!thread_.joinable()) return;
-    stop_ = true;
+    RequestStop();
     thread_.join();
     std::lock_guard<std::mutex> lock(mutex_);
     snap_ = Snapshot();
@@ -158,6 +158,7 @@ void PadInput::SetMapping(const pad::Mapping& mapping) {
 }
 
 void PadInput::Run() {
+    WorkerCancellation::Scope cancellable(cancellation_);
     Sender sender;
     pad::MouseStick stick;
     HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);

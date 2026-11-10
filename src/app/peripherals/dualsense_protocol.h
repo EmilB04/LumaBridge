@@ -46,9 +46,10 @@ inline std::vector<uint8_t> HidWriteBuffer(const std::array<uint8_t, N>& report,
 
 constexpr uint8_t kDirectMode = 0x01;  // SetupZones' "Direct" mode value: take over the lightbar
 
-// A full USB output report (48 bytes, report ID included): direct mode, full brightness,
-// no player LEDs, the given lightbar color.
-inline std::array<uint8_t, kUsbReportSize> UsbReport(Rgb color) {
+// A full USB output report (48 bytes, report ID included): direct mode, full brightness, the
+// given lightbar color and player LEDs (bit 0 .. 4, from the left; none by default). The player
+// LED byte is the one Linux's hid-playstation driver documents: five LED bits.
+inline std::array<uint8_t, kUsbReportSize> UsbReport(Rgb color, uint8_t players = 0) {
     std::array<uint8_t, kUsbReportSize> r{};
     r[0] = 0x02;
     r[1] = 0x0F;
@@ -56,7 +57,7 @@ inline std::array<uint8_t, kUsbReportSize> UsbReport(Rgb color) {
     r[9] = kDirectMode;
     r[39] = 0xFF;  // must be nonzero for the brightness byte below to take effect
     r[43] = 0x00;  // brightness: 0 = full, 2 = dimmest of the controller's three steps
-    r[44] = 0x20;  // lightbar-color bit set, all five player-LED bits clear
+    r[44] = static_cast<uint8_t>(0x20 | (players & 0x1F));  // lightbar-color bit set, then the player-LED bits
     r[45] = color.r;
     r[46] = color.g;
     r[47] = color.b;
@@ -104,10 +105,11 @@ inline std::array<uint8_t, kBtReportSize> BtResetReport(uint8_t sequence) {
 }
 
 // Only the lightbar and player LEDs are enabled: rumble, audio and triggers keep their
-// game's settings. The player indicators stay off, as with the USB lighting mode.
-inline std::array<uint8_t, kBtReportSize> BtReport(Rgb color, uint8_t sequence = 0) {
+// game's settings. The player indicators stay off unless asked for (bit 0 .. 4, from the left).
+inline std::array<uint8_t, kBtReportSize> BtReport(Rgb color, uint8_t sequence = 0, uint8_t players = 0) {
     auto out = BtFrame(sequence);
     out[4] = 0x14;  // common valid_flag1: lightbar color and player indicators
+    out[46] = static_cast<uint8_t>(players & 0x1F);  // common player_leds (USB byte 44, two later)
     out[47] = color.r;
     out[48] = color.g;
     out[49] = color.b;

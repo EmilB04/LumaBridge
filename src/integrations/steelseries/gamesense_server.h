@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <memory>
 #include <vector>
 
 #include "config.h"
@@ -67,6 +68,7 @@ private:
     SOCKET listen_ = INVALID_SOCKET;
     int port_ = 0;
     std::thread acceptThread_;
+    std::vector<std::pair<std::thread, std::shared_ptr<std::atomic<bool>>>> clientThreads_;
     std::mutex clientsMutex_;
     std::vector<SOCKET> clients_;  // open game connections, shut down on Stop()
 

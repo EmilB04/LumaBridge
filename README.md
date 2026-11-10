@@ -22,6 +22,20 @@ with a live view of your PC and desk.
 LumaBridge brings game lighting to devices the game may not support itself. It uses
 official game data feeds and compatible lighting SDKs, then sends the effects to your
 connected hardware. Choose **Auto** to follow games or **Manual** to create your own look.
+Delete a custom zone with the X on its zone button under Your zones; its devices return to Everything.
+Popups, dropdowns and hover hints have rounded borders and gently fade in and out.
+Under **Across the setup**, fill, center-out and ignition reveals can finish in a solid color
+or a gentle synchronized pulse. Center to pulse repeats by drawing the light back to the
+center after one full breath; its boot version settles into the pulse. Nollie boot lighting offers the same reveals with a smooth
+fade back into your normal lighting.
+
+Under **Devices > Controller**, customize the five white player indicators: follow the
+lighting, stay steady, chase, breathe or blink; choose individual lights and enable them
+per effect. Under **Settings > When LumaBridge lets go**, choose a final color for enabled
+lighting devices when you stop lighting or close the app. A companion can apply the same
+color after a crash or forced close while Windows and the companion remain running.
+A restart cancels background recovery so you can reopen the app immediately. Hardware
+access now prompts to update older helpers, and the Memory page shows measured RAM bus timing.
 
 ## Get started
 
@@ -48,7 +62,7 @@ with an administrator prompt.
 |---|---|
 | **Dashboard** | See the current lighting, active game, CPU/GPU load, temperatures, memory, power and cooling readings. Hide or reorder cards and follow recent readings in graphs. |
 | **My setup** | Explore your PC and desk in 3D, with live colors, moving fans and airflow. Arrange devices, correct monitor sizes and configure the case, fans and cooler. |
-| **Lighting** | Build a look with static color, breathing, strobe, color cycle, rainbow wave, gradient, comet or twinkle. Set brightness, direction and individual device overrides, and let moving effects travel across your setup (left to right, top down, ...) by where each device sits in the 2D layout. |
+| **Lighting** | One page: your setup live on the left, one inspector on the right (Effect, Color, Motion, Devices, Games). **Zones** group devices the way you want (memory and fans; keyboard and mouse; the controller), each with its own lighting, its own manual or auto mode and its own travel; the devices in no zone are "Everything else". Effects: static, breathing, strobe, color cycle, rainbow wave, gradient, comet, twinkle, and **effects across the setup** that use every part on its own (each fan and strip, each memory stick, the motherboard, keyboard, mouse...): fill one by one, one at a time, bounce, rainbow by part, lightning, alternate, ripple and countdown. Effects that travel follow how you arrange Your setup, in 2D or 3D. LumaBridge also asks what is plugged into a Nollie hub and the ARGB header. |
 | **Games List** | Find installed games, set up their data feeds and choose screen colors or a fallback look for games without supported lighting. |
 | **Devices** | Control lighting, view readings and browse everything Windows reports in the searchable **All hardware** inventory. |
 | **Integrations** | One master switch sets up Logitech, Razer, SteelSeries and Alienware game lighting, Windows lighting and OpenRGB. Edit individual connections, add Corsair game folders or repair setup. Hardware access and Armoury Crate hand-back stay installed when game connections are switched off. |
@@ -152,9 +166,16 @@ connections; vendor apps still handle firmware updates, macros and cooling confi
 | **Logitech** | Direct HID++ for supported mice; G502 X Plus supports individual LEDs. Other RGB gear can use G HUB's LED SDK, which sends one color. |
 | **HyperX / Kingston FURY RGB DDR4** | Experimental native control through Hardware access. AMD PIIX4 and Intel I801 supported; Intel lighting still needs physical validation. Other controller families and DDR5 can use OpenRGB where supported. |
 | **Windows lighting devices** | Native HID LampArray output for devices that expose Windows' lighting standard in their firmware. |
+| **Nollie ARGB hubs** | Direct USB control of Nollie 1, 8, 16 and 32 channel hubs (also the 28 series and Prism8), channel by channel: say what is plugged in (an LED strip, or a chain of fans with their LEDs each), and every channel, and every fan of a chain, gets its own lighting, with a test pattern to find the right header. An effect can start on one fan and travel to the next, fan by fan or smoothly LED by LED, at up to 60 Hz; sequences fill one fan after another until all are lit (and more); gradients of up to six colors along the fans; the hubs are a device of their own on the Lighting page, in step with the rest of the lighting, the channels set up on Devices, and a boot effect (set on the hub's page under Devices) plays when LumaBridge starts lighting the hub. Follows OpenRGB's documented protocol; confirmed on a hub with three fans and an LED strip. |
 | **OpenRGB devices** | Optional local SDK server for supported RAM, GPUs, coolers, peripherals and RGB controllers. Coverage depends on OpenRGB's drivers and configuration. |
-| **DualSense / DualShock 4** | Controller lighting and live input views over USB or Bluetooth. DualSense lighting is experimental; DualShock 4 is unverified on physical hardware. |
+| **DualSense / DualShock 4** | Controller lighting and live input views over USB or Bluetooth. Moving effects show on the lightbar (the effect's average color) and on the five player LEDs (a comet chases across them, fills fill them, breathing is a level meter). DualSense lighting is experimental; DualShock 4 is unverified on physical hardware. |
 | **NZXT Kraken** | Liquid temperature, pump and fan readings on supported models alongside CAM. Native X53/X63/X73 and Z53/Z63/Z73 RGB outputs are experimental and physically unverified; LCDs and cooling curves remain with CAM. |
+
+Every lighting output runs on a precise frame timer, with effects timed to a fraction of a
+millisecond, so animations move in even steps: Aura fans and board at up to 60 frames a second
+(Settings > Maximum update rate), Nollie, Windows lighting devices and OpenRGB at 60, Logitech at
+50, the Azoth and DualSense at 30, memory at 30 and the Kraken at 10. These are target
+rates; the hardware and connection can limit delivery. The Memory page shows measured bus timing.
 
 A working native output takes priority over OpenRGB by default. Each OpenRGB device has
 its own saved control switch. See the [hardware guide](docs/peripherals.md) for connection

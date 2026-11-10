@@ -119,10 +119,6 @@ void GameFeeds::Stop() {
         !eliteThread_.joinable() && !memoryThread_.joinable())
         return;
     stop_ = true;
-    if (cs2Listen_ != INVALID_SOCKET) {
-        closesocket(cs2Listen_);  // ends accept()
-        cs2Listen_ = INVALID_SOCKET;
-    }
     for (std::thread* t :
          {&cs2Thread_, &rlThread_, &wtThread_, &leagueThread_, &forzaThread_, &f1Thread_, &msfsThread_, &dcsThread_})
         if (t->joinable()) t->join();
@@ -130,6 +126,10 @@ void GameFeeds::Stop() {
         if (u.thread.joinable()) u.thread.join();
     if (eliteThread_.joinable()) eliteThread_.join();
     if (memoryThread_.joinable()) memoryThread_.join();
+    if (cs2Listen_ != INVALID_SOCKET) {
+        closesocket(cs2Listen_);  // ends accept()
+        cs2Listen_ = INVALID_SOCKET;
+    }
     if (wsa_) WSACleanup();
     wsa_ = false;
 }
@@ -239,6 +239,12 @@ GameFeeds::Feed GameFeeds::Dcs(uint64_t now) {
 
 void GameFeeds::Cs2Accept() {
     while (!stop_) {
+        // A polling listener makes shutdown independent of cross-thread closesocket
+        // behavior (including Wine), even when no game ever connected.
+        fd_set ready; FD_ZERO(&ready); FD_SET(cs2Listen_, &ready);
+        timeval wait{0, 100000};
+        if (select(0, &ready, nullptr, nullptr, &wait) <= 0) continue;
+        if (stop_) break;
         SOCKET c = accept(cs2Listen_, nullptr, nullptr);
         if (c == INVALID_SOCKET) {
             if (stop_) break;

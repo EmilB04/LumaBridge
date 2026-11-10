@@ -24,6 +24,8 @@
 #include "monitor_model.h"
 #include "game_feeds.h"
 #include "game_profiles.h"
+#include "effect_labels.h"
+#include "effect_info.h"
 #include "friendly_names.h"
 #include "system_monitor.h"
 #include "effects.h"
@@ -39,6 +41,8 @@
 #include "azoth_music_source.h"
 #include "armoury_crate.h"
 #include "logitech_hidpp.h"
+#include "frame_clock.h"
+#include "nollie_layout.h"
 #include "openrgb_protocol.h"
 #include "lamparray.h"
 #include "device_catalog.h"
@@ -81,6 +85,24 @@ constexpr const char* kVersionText = "v" LUMA_VERSION;
 
 float g_scale = 1.f;  // DPI scale, set by ApplyTheme
 float S() { return g_scale; }
+
+// Plain hover hints use the same inset as richer help windows.
+void Tooltip(const char* format, ...) IM_FMTARGS(1);
+void Tooltip(const char* format, ...) {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12 * S(), 10 * S()));
+    va_list args;
+    va_start(args, format);
+    ImGui::SetTooltipV(format, args);
+    va_end(args);
+    ImGui::PopStyleVar();
+}
+
+bool BeginHoverTip() {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12 * S(), 10 * S()));
+    const bool open = ImGui::BeginTooltip();
+    ImGui::PopStyleVar();
+    return open;
+}
 
 Rgb FromV4(const float* f) {
     auto b = [](float v) { return static_cast<uint8_t>(std::clamp(v, 0.f, 1.f) * 255.f + 0.5f); };
@@ -167,7 +189,7 @@ void CellText(const std::string& text) {
     ImGui::PushStyleColor(ImGuiCol_Text, V4(kMuted));
     ImGui::TextUnformatted(shown.c_str());
     ImGui::PopStyleColor();
-    if (shown != text && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", text.c_str());
+    if (shown != text && ImGui::IsItemHovered()) Tooltip("%s", text.c_str());
 }
 
 // A status pill in a table cell, cut to the cell with "..." (the full text and `tip` on hover).
@@ -185,8 +207,8 @@ void CellPill(const std::string& text, unsigned color, const std::string& tip) {
     }
     Pill(shown.c_str(), color);
     if (!ImGui::IsItemHovered()) return;
-    if (shown != text) ImGui::SetTooltip("%s%s%s", text.c_str(), tip.empty() ? "" : "\n", tip.c_str());
-    else if (!tip.empty()) ImGui::SetTooltip("%s", tip.c_str());
+    if (shown != text) Tooltip("%s%s%s", text.c_str(), tip.empty() ? "" : "\n", tip.c_str());
+    else if (!tip.empty()) Tooltip("%s", tip.c_str());
 }
 
 bool BeginCard(const char* id, float height = 0, ImGuiWindowFlags windowFlags = 0) {
@@ -342,7 +364,7 @@ bool DirectionArrows(const char* id, bool* reversed) {
         ImGui::PopID();
         const bool sel = *reversed != right, hovered = ImGui::IsItemHovered();
         if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        if (hovered) ImGui::SetTooltip(right ? "Right" : "Left");
+        if (hovered) Tooltip(right ? "Right" : "Left");
         if (sel) dl->AddRectFilled(a, ImVec2(a.x + bw, a.y + bh), Hex(hovered ? kAccentHover : kAccent), bh / 2);
         else if (hovered) dl->AddRectFilled(a, ImVec2(a.x + bw, a.y + bh), Hex(kCardHover), bh / 2);
         // The arrow: a shaft and a head, pointing left or right.
@@ -399,28 +421,6 @@ bool LabeledSlider(const char* label, float* v, float min, float max, const char
 }
 
 // ---- Effects -------------------------------------------------------------------------
-
-struct EffectInfo {
-    const char* name;
-    const char* help;
-    float minSpeed, maxSpeed;  // maxSpeed 0: no speed slider
-    const char* speedFmt;
-};
-
-// Indexed by fx::Kind.
-const EffectInfo kEffects[] = {
-    {"Static", "One color on every LED.", 0, 0, ""},
-    {"Breathing", "Fades your color in and out.", 0.1f, 3.f, "%.1f breaths per second"},
-    {"Strobe", "Flashes your color on and off.", 0.1f, 10.f, "%.1f flashes per second"},
-    {"Color cycle", "Every LED shows the same color, cycling through the spectrum.", 0, 0, ""},
-    {"Rainbow wave", "The whole spectrum around each fan, turning.", 0.05f, 2.f, "%.2f turns per second"},
-    {"Gradient", "Blends your two colors around each fan. Speed 0 keeps it still.", 0.f, 2.f,
-     "%.2f turns per second"},
-    {"Comet", "A comet of your color with a fading tail chases around, over the second color.", 0.1f, 3.f,
-     "%.1f laps per second"},
-    {"Twinkle", "Your color with sparkles of the second color.", 0.1f, 3.f, "%.1f per second"},
-    {"Beat", "Flashes that speed up (a game's bomb).", 0, 0, ""},  // games only: not in the picker
-};
 
 // Effect picker: two rows of four.
 bool EffectGrid(fx::Kind* kind, float width) {
@@ -772,8 +772,8 @@ void Graph(const char* id, const perf::Series& series, double lo, double hi, uns
             char val[48];
             snprintf(val, sizeof val, fmt, v[best]);
             const int ago = static_cast<int>(v.size() - 1 - best);
-            if (ago == 0) ImGui::SetTooltip("%s  now", val);
-            else ImGui::SetTooltip("%s  %d s ago", val, ago);
+            if (ago == 0) Tooltip("%s  now", val);
+            else Tooltip("%s  %d s ago", val, ago);
         }
     }
 }
@@ -1070,6 +1070,8 @@ std::vector<LampArrayDevice> LampArrayLit(Controller& ctl) {
 // memory by part number.
 std::vector<std::string> AlsoFound(const Controller& ctl, const sensors::SystemSnapshot& snap) {
     std::vector<uint16_t> native{0x046D, 0x0B05};
+    if (ctl.prefs().nollieLighting && !ctl.nollie().devices().empty())  // lit by LumaBridge itself
+        for (uint16_t vid : {nollie::kVidNollie, nollie::kVidNollieOs2, nollie::kVidNollieHs}) native.push_back(vid);
     for (const auto& d : ctl.lampArray().devices()) native.push_back(d.vid);
     std::vector<std::string> out = catalog::RgbBrands(ctl.presence().usb, native);
     for (const auto& m : snap.smbios.memory) {
@@ -1419,7 +1421,7 @@ void WPower(DashCtx& c) {
         snprintf(b, sizeof b, "~%.0f W", draw.rest);
         row(Icon::Board, "Rest of the PC (estimate)", b);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("The motherboard, memory, drives, fans and USB report no power: about 35 W, 5 W a drive and 2 W a fan.");
+            Tooltip("The motherboard, memory, drives, fans and USB report no power: about 35 W, 5 W a drive and 2 W a fan.");
     }
     // The power supply's rating: set here unless it reports itself over USB.
     if (!catalog::FindPsu(c.ctl.presence().usb)) {
@@ -1550,7 +1552,7 @@ void TopLighting(DashCtx& c) {
     else
         ImGui::TextUnformatted(out.label.c_str());
     ImGui::PopFont();
-    if (!out.stopped) Muted("%s", kEffects[static_cast<int>(out.fx.kind)].name);
+    if (!out.stopped) Muted("%s", EffectInfoFor(out.fx.kind).name);
     const int lit = LitDevices(c.ctl);
     if (lit) Muted("%d device%s lit", lit, lit == 1 ? "" : "s");
     ImGui::EndGroup();
@@ -1857,7 +1859,7 @@ void DashboardPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
     Muted("Hide and reorder the cards below.");
     ImGui::SameLine(0, 24 * S());
     if (Toggle("Graphs", &ctl.prefs().dashGraphs)) ctl.Changed();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The last two minutes of load, memory, temperature and power, under each figure.");
+    if (ImGui::IsItemHovered()) Tooltip("The last two minutes of load, memory, temperature and power, under each figure.");
     if (ui.dashEdit) {
         ImGui::Dummy(ImVec2(0, 4 * S()));
         DashboardCustomize(ctl, ui, f);
@@ -1906,8 +1908,26 @@ void DashboardPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
 
 // ---- Pages ---------------------------------------------------------------------------
 
+void NollieLightingPage(Controller& ctl, UiState& ui, const Fonts& f);
+
+// Whether a Nollie hub is lit: switched on, connected, and a channel set up.
+bool NollieLit(const Controller& ctl) {
+    if (!ctl.prefs().nollieLighting) return false;
+    for (const auto& d : ctl.nollie().devices()) {
+        if (!ctl.NollieOn(d)) continue;
+        for (const auto& [key, c] : ctl.prefs().nollieChannels)
+            if (key.rfind(d.id + ".", 0) == 0 && c.kind != nollie::Kind::Unused) return true;
+    }
+    return false;
+}
+
 // The devices on this PC LumaBridge lights (device::kFans, ...), in the Lighting page's order.
 std::vector<const char*> LitDeviceIds(Controller& ctl) {
+    // Asked many times a frame (every chip, every tab): worked out once per frame.
+    static int cachedFrame = -1;
+    static std::vector<const char*> cached;
+    if (cachedFrame == ImGui::GetFrameCount()) return cached;
+    cachedFrame = ImGui::GetFrameCount();
     const Prefs& p = ctl.prefs();
     const sensors::SystemSnapshot snap = ctl.monitor().Snapshot();
     std::vector<const char*> out;
@@ -1916,174 +1936,18 @@ std::vector<const char*> LitDeviceIds(Controller& ctl) {
             (id == std::string(device::kMouse) && !(p.logitechDevices && HasLogitechRgb(ctl))) ||
             (id == std::string(device::kKeyboard) && !(p.azothKeyboard && HasAzoth(ctl))) ||
             (id == std::string(device::kController) && !(p.dualsenseController && HasDualSense(ctl))) ||
-            (id == std::string(device::kOther) && OpenRgbLit(ctl).empty() && LampArrayLit(ctl).empty()))
+            (id == std::string(device::kOther) && OpenRgbLit(ctl).empty() && LampArrayLit(ctl).empty()) ||
+            (id == std::string(device::kNollie) && !NollieLit(ctl)))
             continue;
         out.push_back(id);
     }
+    cached = out;
     return out;
-}
-
-// The overall brightness, or with `device` set, that device's own on top of it.
-void BrightnessCard(Controller& ctl, const Fonts& f, const std::string& device = "") {
-    BeginCard("brightness");
-    if (device.empty()) {
-        CardTitle(f, "Brightness", Icon::Lighting);
-        float b = static_cast<float>(ctl.config().auraCorrection.brightness * 100.0);
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::SliderFloat("##brightness", &b, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
-            ctl.config().auraCorrection.brightness = b / 100.0;
-            ctl.Changed();
-        }
-        Muted("Applies to every device, in Auto and Manual mode.");
-    } else {
-        const std::string title = std::string(device::Name(device)) + " brightness";
-        CardTitle(f, title.c_str(), Icon::Lighting);
-        float& level = ctl.prefs().deviceLighting[device].brightness;
-        float b = level * 100.f;
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::SliderFloat("##devbrightness", &b, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
-            level = b / 100.f;
-            ctl.Changed();
-        }
-        Muted("For this device, games included. Overall brightness: %.0f%%.",
-              ctl.config().auraCorrection.brightness * 100.0);
-        ImGui::Dummy(ImVec2(0, 4 * S()));
-        bool& rev = ctl.prefs().deviceLighting[device].reverse;
-        if (DirectionRow("dev-dir", &rev)) ctl.Changed();
-        Muted("Which way moving effects run on this device.");
-    }
-    EndCard();
-}
-
-bool RainbowCard(Controller& ctl, const Fonts& f, Look& p, bool showSpread);
-
-// The main look's rainbow (Auto mode's rainbow between games).
-void MainRainbowCard(Controller& ctl, const Fonts& f) {
-    Look l = MainLook(ctl.prefs());
-    if (RainbowCard(ctl, f, l, true)) {
-        SetMainLook(ctl.prefs(), l);
-        ctl.Changed();
-    }
 }
 
 void EffectStrip(const fx::Params& fx, ImVec2 a, ImVec2 b, float rounding);
 bool IsRainbow(ManualEffect effect);
 void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable, bool overview = false);
-
-void AutoIdlePreview(Controller& ctl, UiState& ui, const Fonts& f) {
-    const auto idle = ctl.prefs().idle;
-    const bool external = idle == IdleBehavior::ArmouryCrate;
-    fx::Params effect = ToParams(MainLook(ctl.prefs()));
-    if (idle == IdleBehavior::Rainbow) {
-        effect.kind = fx::Kind::RainbowWave;
-        effect.speed = 0.1;
-        effect.reverse = false;
-    } else if (idle == IdleBehavior::Off) {
-        effect = fx::Params{};
-        effect.color1 = Rgb{};
-    }
-    BeginCard("idle-preview");
-    CardTitle(f, "Between games", Icon::Palette);
-    const char* names[] = {"My manual color", "Rainbow", "Lights off", "Armoury Crate"};
-    Muted("%s", names[static_cast<int>(idle)]);
-    ImGui::Dummy(ImVec2(0, 8 * S()));
-    const ImVec2 a = ImGui::GetCursorScreenPos();
-    const float w = ImGui::GetContentRegionAvail().x, h = 104 * S();
-    const ImVec2 b(a.x + w, a.y + h);
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    if (external) {
-        dl->AddRectFilled(a, b, Hex(kTrack), 12 * S());
-        const char* text = "Its own lighting";
-        const ImVec2 ts = ImGui::CalcTextSize(text);
-        dl->AddText(ImVec2(a.x + (w - ts.x) / 2, a.y + (h - ts.y) / 2), Hex(kMuted), text);
-    } else {
-        EffectStrip(effect, a, b, 12 * S());
-    }
-    dl->AddRect(a, b, Hex(kBorder), 12 * S());
-    ImGui::Dummy(ImVec2(w, h));
-    ImGui::Dummy(ImVec2(0, 4 * S()));
-    if (external) {
-        Muted("Armoury Crate chooses the color when LumaBridge hands back control.");
-    } else {
-        ImGui::PushFont(f.bold);
-        if (IsRainbow(effect.kind)) ImGui::TextUnformatted(kEffects[static_cast<int>(effect.kind)].name);
-        else ImGui::TextUnformatted(ToHex(effect.color1).c_str());
-        ImGui::PopFont();
-        if (!IsRainbow(effect.kind))
-            Muted("%s", idle == IdleBehavior::Off ? "Lights stay dark between games" : kEffects[static_cast<int>(effect.kind)].name);
-        if (fx::UsesSecondColor(effect.kind)) Muted("Second color: %s", ToHex(effect.color2).c_str());
-    }
-    if (idle == IdleBehavior::ManualColor && PrimaryButton("Switch to Manual", ImVec2(w, 0))) {
-        ctl.prefs().mode = Mode::Manual;
-        ui.lightTarget.clear();
-        ui.colorSlot = 0;
-        ctl.Changed();
-    }
-    EndCard();
-}
-
-void AutoOverview(Controller& ctl, UiState& ui, const Fonts& f) {
-    const float width = ImGui::GetContentRegionAvail().x;
-    const bool side = width >= 760 * S();
-    if (ImGui::BeginTable("auto-overview", side ? 2 : 1, ImGuiTableFlags_SizingStretchProp)) {
-        if (side) {
-            ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthFixed, 280 * S());
-            ImGui::TableSetupColumn("Setup", ImGuiTableColumnFlags_WidthStretch);
-        }
-        ImGui::TableNextColumn();
-        AutoIdlePreview(ctl, ui, f);
-        if (side) BrightnessCard(ctl, f);
-        ImGui::TableNextColumn();
-        BeginCard("auto-setup");
-        CardTitle(f, "Your setup", Icon::Grid);
-        Muted("Live lighting across your components");
-        ImGui::Dummy(ImVec2(0, 6 * S()));
-        SetupCanvas2d(ctl, ui, false, true);
-        ImGui::Dummy(ImVec2(0, 4 * S()));
-        if (!ctl.output().label.empty()) Muted("Now: %s", ctl.output().label.c_str());
-        EndCard();
-        if (!side) BrightnessCard(ctl, f);
-        ImGui::EndTable();
-    }
-}
-
-// The selected device's saved look stays visible above its editing controls.
-void ManualColorCard(Controller& ctl, UiState& ui, const Fonts& f) {
-    const Look look = ui.lightTarget.empty() ? MainLook(ctl.prefs()) : DeviceLook(ctl.prefs(), ui.lightTarget);
-    const bool native = !ui.lightTarget.empty() && DeviceNative(ctl.prefs(), ui.lightTarget);
-    BeginCard("manual-summary");
-    CardTitle(f, "Your manual lighting", Icon::Palette);
-    Muted("%s", ui.lightTarget.empty() ? "All devices" : device::Name(ui.lightTarget));
-    ImGui::Dummy(ImVec2(0, 8 * S()));
-    const ImVec2 a = ImGui::GetCursorScreenPos();
-    const float w = ImGui::GetContentRegionAvail().x, h = 104 * S();
-    const ImVec2 b(a.x + w, a.y + h);
-    if (native) {
-        ImGui::GetWindowDrawList()->AddRectFilled(a, b, Hex(kTrack), 12 * S());
-        const char* text = "Its own lighting";
-        const ImVec2 ts = ImGui::CalcTextSize(text);
-        ImGui::GetWindowDrawList()->AddText(ImVec2(a.x + (w - ts.x) / 2, a.y + (h - ts.y) / 2), Hex(kMuted), text);
-    } else {
-        EffectStrip(ToParams(look), a, b, 12 * S());
-    }
-    ImGui::GetWindowDrawList()->AddRect(a, b, Hex(kBorder), 12 * S());
-    ImGui::Dummy(ImVec2(w, h));
-    ImGui::Dummy(ImVec2(0, 4 * S()));
-    if (native) {
-        Muted("Choose a lighting source below to bring this device back under LumaBridge control.");
-    } else {
-        ImGui::PushFont(f.title);
-        ImGui::TextUnformatted(IsRainbow(look.effect) ? kEffects[static_cast<int>(look.effect)].name : ToHex(look.color1).c_str());
-        ImGui::PopFont();
-        if (!IsRainbow(look.effect)) {
-            Muted("%s", kEffects[static_cast<int>(look.effect)].name);
-            Muted("RGB %u, %u, %u", unsigned(look.color1.r), unsigned(look.color1.g), unsigned(look.color1.b));
-        }
-        if (fx::UsesSecondColor(look.effect)) Muted("Second color: %s", ToHex(look.color2).c_str());
-        Muted("Choose your color and effect below.");
-    }
-    EndCard();
-}
 
 void AutoGamesCard(Controller& ctl, const Fonts& f) {
     BeginCard("now");
@@ -2167,31 +2031,6 @@ void AutoGamesCard(Controller& ctl, const Fonts& f) {
     if (Toggle("Use screen colors for games without lighting", &ctl.prefs().screenForUnsupported)) ctl.Changed();
     Muted("Uses the screen image. Choose exceptions on the Games List page.");
     EndCard();
-}
-
-void AutoPage(Controller& ctl, UiState& ui, const Fonts& f) {
-    AutoOverview(ctl, ui, f);
-    BeginCard("idle");
-    CardTitle(f, "When no game is running", Icon::Lighting);
-    int idle = static_cast<int>(ctl.prefs().idle);
-    const char* labels[] = {"My manual color", "Rainbow", "Off", "Armoury Crate"};
-    if (Segmented("idle", &idle, labels, 4, ImGui::GetContentRegionAvail().x)) {
-        ctl.prefs().idle = static_cast<IdleBehavior>(idle);
-        ctl.Changed();
-    }
-    ImGui::Dummy(ImVec2(0, 4 * S()));
-    static const char* kIdleHelp[] = {
-        "Your manual color and effect (Lighting > Manual) show between games.",
-        "A slow rainbow wave turns around the fans and motherboard between games. Customize it below.",
-        "The motherboard and fans stay dark between games.",
-        "Between games LumaBridge hands the lights back to Armoury Crate's own effect. Set up "
-        "\"Armoury Crate hand-back\" on the Integrations page once to make this silent.",
-    };
-    Muted("%s", kIdleHelp[idle]);
-    EndCard();
-
-    if (ctl.prefs().idle == IdleBehavior::Rainbow) MainRainbowCard(ctl, f);
-    AutoGamesCard(ctl, f);
 }
 
 // ---- Presets --------------------------------------------------------------------------
@@ -2422,7 +2261,7 @@ bool ColorEditor(Controller& ctl, UiState& ui, Rgb* color, const char* slot) {
             changed = true;
             ctl.RememberColor(*color);
         }
-        if (kSwatches[i].IsBlack() && ImGui::IsItemHovered()) ImGui::SetTooltip("Off (black)");
+        if (kSwatches[i].IsBlack() && ImGui::IsItemHovered()) Tooltip("Off (black)");
     }
     const auto& recent = ctl.prefs().recentColors;
     if (!recent.empty()) {
@@ -2469,9 +2308,8 @@ bool ColorTab(const char* label, Rgb c, bool selected, float width) {
 
 // ---- Rainbow --------------------------------------------------------------------------
 
-bool RainbowCard(Controller&, const Fonts& f, Look& p, bool showSpread) {
-    BeginCard("rainbow");
-    CardTitle(f, "Rainbow", Icon::Palette);
+// The rainbow's settings (no card around them): which hues, how vivid, how many around a fan.
+bool RainbowBody(Look& p, bool showSpread) {
     Muted("Pick which part of the spectrum to use and how vivid it is. Used by Color cycle, Rainbow wave "
           "and Auto mode's rainbow between games.");
     ImGui::Dummy(ImVec2(0, 4 * S()));
@@ -2512,44 +2350,60 @@ bool RainbowCard(Controller&, const Fonts& f, Look& p, bool showSpread) {
         p.spread = 1;
         changed = true;
     }
+    return changed;
+}
+
+bool RainbowCard(Controller&, const Fonts& f, Look& p, bool showSpread) {
+    BeginCard("rainbow");
+    CardTitle(f, "Rainbow", Icon::Palette);
+    const bool changed = RainbowBody(p, showSpread);
     EndCard();
+    return changed;
+}
+
+// The effect's one or two colors with the color picker (no card around them). True when changed.
+bool ColorsBody(Controller& ctl, UiState& ui, Look& p) {
+    bool changed = false;
+    const bool two = fx::UsesSecondColor(p.effect);
+    if (two) {
+        // Setup reveals also use this editor for boot lighting. Derive the label from
+        // the effect instead of indexing a table limited to the original eight kinds.
+        const char* second = SecondaryColorLabel(p.effect);
+        const char* first = p.effect == ManualEffect::Twinkle ? "Base color" : p.effect == ManualEffect::Comet ? "Comet" : "First color";
+        const float swapW = 70 * S(), gap = 8 * S();
+        const float tabW = (ImGui::GetContentRegionAvail().x - swapW - gap * 2) / 2;
+        if (ColorTab((std::string(first) + "##c1").c_str(), p.color1, ui.colorSlot == 0, tabW)) ui.colorSlot = 0;
+        ImGui::SameLine(0, gap);
+        if (ColorTab((std::string(second) + "##c2").c_str(), p.color2,
+                     ui.colorSlot == 1, tabW))
+            ui.colorSlot = 1;
+        ImGui::SameLine(0, gap);
+        if (Btn("Swap", ImVec2(swapW, 44 * S()))) {
+            std::swap(p.color1, p.color2);
+            changed = true;
+        }
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+    } else {
+        ui.colorSlot = 0;
+    }
+    if (ui.colorSlot == 0) {
+        changed |= ColorEditor(ctl, ui, &p.color1, "color1");
+    } else {
+        changed |= ColorEditor(ctl, ui, &p.color2, "color2");
+    }
     return changed;
 }
 
 // Edit the color or palette first, then the effect, presets and speed. Returns
 // true when it changed.
-bool LookEditor(Controller& ctl, UiState& ui, const Fonts& f, Look& p) {
+bool LookEditor(Controller& ctl, UiState& ui, const Fonts& f, Look& p, bool boot = false) {
     bool changed = false;
     if (IsRainbow(p.effect)) {
         changed |= RainbowCard(ctl, f, p, p.effect == ManualEffect::RainbowWave);
     } else {
         BeginCard("colors");
-        const bool two = fx::UsesSecondColor(p.effect);
-        CardTitle(f, two ? "Colors" : "Color", Icon::Palette);
-        if (two) {
-            static const char* kSecondName[] = {"", "", "", "", "", "Second color", "Background", "Sparkles"};
-            const char* first = p.effect == ManualEffect::Twinkle ? "Base color" : p.effect == ManualEffect::Comet ? "Comet" : "First color";
-            const float swapW = 70 * S(), gap = 8 * S();
-            const float tabW = (ImGui::GetContentRegionAvail().x - swapW - gap * 2) / 2;
-            if (ColorTab((std::string(first) + "##c1").c_str(), p.color1, ui.colorSlot == 0, tabW)) ui.colorSlot = 0;
-            ImGui::SameLine(0, gap);
-            if (ColorTab((std::string(kSecondName[static_cast<int>(p.effect)]) + "##c2").c_str(), p.color2,
-                         ui.colorSlot == 1, tabW))
-                ui.colorSlot = 1;
-            ImGui::SameLine(0, gap);
-            if (Btn("Swap", ImVec2(swapW, 44 * S()))) {
-                std::swap(p.color1, p.color2);
-                changed = true;
-            }
-            ImGui::Dummy(ImVec2(0, 6 * S()));
-        } else {
-            ui.colorSlot = 0;
-        }
-        if (ui.colorSlot == 0) {
-            changed |= ColorEditor(ctl, ui, &p.color1, "color1");
-        } else {
-            changed |= ColorEditor(ctl, ui, &p.color2, "color2");
-        }
+        CardTitle(f, fx::UsesSecondColor(p.effect) ? "Colors" : "Color", Icon::Palette);
+        changed |= ColorsBody(ctl, ui, p);
         EndCard();
     }
 
@@ -2557,12 +2411,12 @@ bool LookEditor(Controller& ctl, UiState& ui, const Fonts& f, Look& p) {
     CardTitle(f, "Effect", Icon::Lighting);
     const float full = ImGui::GetContentRegionAvail().x;
     if (EffectGrid(&p.effect, full)) {
-        const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
+        const EffectInfo& e = EffectInfoFor(p.effect);
         if (p.effect == ManualEffect::ColorCycle) p.speedHz = std::min(p.speedHz, 0.5f);
         else if (e.maxSpeed > 0) p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
         changed = true;
     }
-    const EffectInfo& e = kEffects[static_cast<int>(p.effect)];
+    const EffectInfo& e = EffectInfoFor(p.effect);
     Muted("%s", e.help);
     ImGui::Dummy(ImVec2(0, 4 * S()));
     ImGui::TextUnformatted("Presets");
@@ -2574,7 +2428,7 @@ bool LookEditor(Controller& ctl, UiState& ui, const Fonts& f, Look& p) {
             p.speedHz = 1.f / seconds;
             changed = true;
         }
-    } else if (e.maxSpeed > 0) {
+    } else if (e.maxSpeed > 0 && !(boot && fx::IsSettlingEffect(p.effect))) {
         p.speedHz = std::clamp(p.speedHz, e.minSpeed, e.maxSpeed);
         if (LabeledSlider("Speed", &p.speedHz, e.minSpeed, e.maxSpeed, e.speedFmt)) changed = true;
     }
@@ -2597,12 +2451,44 @@ const fx::Params* LiveParams(const Controller& ctl, const char* id) {
 }
 
 // Also dimmed like the device: the overall brightness times the device's own.
+// The effect's time: the hardware's own clock when it has one (the preview then shows the very
+// frame the lights show), else the time given.
+double LiveT(const fx::Params& p, double t) { return p.epoch ? fx::SecondsAt(p, PreciseNowMs(), 0) : t; }
+
 Rgb LiveAt(const fx::Params* p, double t, int i, int n, double level = 1.0) {
-    return p ? Scale(fx::Render(*p, t, i, n), level) : Rgb{50, 54, 64};
+    return p ? Scale(fx::Render(*p, LiveT(*p, t), i, n), level) : Rgb{50, 54, 64};
+}
+
+// One memory stick's effect: with a setup effect and the sticks apart, each stick its own part.
+fx::Params StickParams(bool apart, const fx::Params* p, int ordinal) {
+    fx::Params q = p ? *p : fx::Params{};
+    if (p && fx::IsSetupEffect(q.kind) && apart) q.part += ordinal;
+    return q;
 }
 
 double LiveLevel(Controller& ctl, const char* id) {
-    return ctl.config().auraCorrection.brightness * DeviceBrightness(ctl.prefs(), id);
+    return ctl.config().auraCorrection.brightness * ctl.Level(id);
+}
+
+// The colors that tell zones apart (chips, dots on the devices in Your setup).
+const unsigned kZoneColors[] = {0x5EA0FF, 0xFF9A5E, 0x6EE7A8, 0xE06EFF, 0xFFD25E, 0x5EE7E7, 0xFF5E8A, 0xA0A8FF};
+unsigned ZoneColor(const Prefs& p, const std::string& zoneId) {
+    for (size_t i = 0; i < p.zones.size(); ++i)
+        if (p.zones[i].id == zoneId) return kZoneColors[i % std::size(kZoneColors)];
+    return 0x8A93A6;  // Everything
+}
+
+// A device is in the zone being edited (only once there are zones to tell apart).
+bool ZoneSelected(const Controller& ctl, const UiState& ui, const char* dev) {
+    return dev && !ctl.prefs().zones.empty() && ctl.ZoneKey(dev) == ui.zone;
+}
+
+// Clicking a device in Your setup edits its zone.
+void SelectDevice(const Controller& ctl, UiState& ui, const char* dev) {
+    if (!dev) return;
+    ui.zone = ctl.ZoneKey(dev);
+    ui.lightTarget = dev;
+    ui.lightTab = ui.lightTab == 4 ? 4 : ui.lightTab;
 }
 
 // The canvas. `selectable`: clicking a device selects it for editing (Manual mode).
@@ -2678,7 +2564,7 @@ void RamSlotsCard(Controller& ctl, const Fonts& f) {
         if (hovered) {
             dl->AddRect(ImVec2(a.x - 3 * S(), a.y - 9 * S()), ImVec2(b.x + 3 * S(), b.y + 9 * S()), Hex(kAccentHover, 200), 5 * S(), 0, 1.5f * S());
             ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-            ImGui::SetTooltip("%s: %s. Click to %s.", kNames[i], full ? "a stick" : "empty", full ? "take it out" : "put a stick in");
+            Tooltip("%s: %s. Click to %s.", kNames[i], full ? "a stick" : "empty", full ? "take it out" : "put a stick in");
         }
         const ImVec2 ns = ImGui::CalcTextSize(kNames[i]);
         dl->AddText(ImVec2((a.x + b.x) / 2 - ns.x / 2, o.y + 8 * S()), Hex(full ? kText : kMuted), kNames[i]);
@@ -2733,9 +2619,9 @@ const Rgb kDark{70, 76, 90};  // an LED LumaBridge isn't lighting
 
 // A device on the desk.
 struct Gear {
-    int obj;             // kKeyboard, kMouse, kHeadset or kOther0 + i
+    int obj = 0;                 // kKeyboard, kMouse, kHeadset or kOther0 + i
     std::string name;
-    const char* device;  // whose lighting it shows (device::k*), nullptr: no RGB LumaBridge controls
+    const char* device = nullptr;  // whose lighting it shows (device::k*), nullptr: no RGB LumaBridge controls
     std::string spot;    // "desk:keyboard", ...
     int leds = 8;        // for light bars
 };
@@ -2997,6 +2883,21 @@ void Tube(s3d::Scene& sc, s3d::V3 a, s3d::V3 b, float r, uint32_t color, int id)
 }
 
 // Live colors of `n` LEDs of a device (grey while LumaBridge isn't lighting it).
+// A custom zone's view: only its devices stay lit and clickable; the rest of the scene stays as
+// plain, unlit objects (the case and the desk are still there to place things in).
+void KeepZone(Model* m, const Controller& ctl, const std::string& zone) {
+    if (zone.empty()) return;
+    auto in = [&](const char* d) { return d && ctl.ZoneKey(d) == zone; };
+    if (!in(device::kFans)) m->fansRgb = false;
+    if (!in(device::kBoard)) m->boardRgb = false;
+    if (!in(device::kRam)) m->ramRgb = false;
+    if (!in(device::kOther)) m->gpuRgb = false;
+    for (Gear* g : {&m->keyboard, &m->mouse, &m->headsetGear, &m->controllerGear})
+        if (!in(g->device)) g->device = nullptr;
+    for (Gear& g : m->others)
+        if (!in(g.device)) g.device = nullptr;
+}
+
 std::vector<Rgb> Leds(Controller& ctl, const char* device, double t, int n, bool one = false) {
     std::vector<Rgb> out(static_cast<size_t>(n), kDark);
     if (!device) return out;
@@ -3202,7 +3103,21 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
 
     // Memory: the sticks in their slots, their light bars along the top edge.
     {
-        const std::vector<Rgb> leds = m.ramRgb ? Leds(ctl, device::kRam, t, 20) : std::vector<Rgb>(20, Rgb{70, 76, 90});
+        // Each stick its own five LEDs (and, in a setup effect, its own part).
+        std::vector<Rgb> leds(20, Rgb{70, 76, 90});
+        if (m.ramRgb) {
+            if (const fx::Params* live = LiveParams(ctl, device::kRam)) {
+                int ordinal = 0;
+                for (int s = 0; s < 4; ++s) {
+                    if (!m.ram[static_cast<size_t>(s)]) continue;
+                    const fx::Params stick = StickParams(ctl.prefs().setupRamApart, live, ordinal++);
+                    for (int i = 0; i < 5; ++i)
+                        leds[static_cast<size_t>(s * 5 + i)] = LiveAt(&stick, t, i, 5, LiveLevel(ctl, device::kRam));
+                }
+            } else {
+                std::fill(leds.begin(), leds.end(), Rgb{50, 54, 64});
+            }
+        }
         int shown = 0;
         for (int s = 0; s < 4; ++s) {
             if (!m.ram[static_cast<size_t>(s)]) continue;
@@ -3248,7 +3163,7 @@ void Build(s3d::Scene& sc, Controller& ctl, const Model& m, const Options& o, do
         std::vector<Rgb> all;
         const fx::Params* fp = m.fansRgb ? LiveParams(ctl, device::kFans) : nullptr;
         if (fp) {
-            fx::RenderFans(*fp, t, fl, &all);
+            fx::RenderFans(*fp, LiveT(*fp, t), fl, &all);
             const double level = LiveLevel(ctl, device::kFans);
             for (Rgb& c : all) c = Scale(c, level);
         }
@@ -3667,6 +3582,7 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     Prefs& prefs = ctl.prefs();
     const sensors::SystemSnapshot snap = ctl.monitor().Snapshot();
     Model m = Gather(ctl, snap);
+    if (mode == Mode::Lighting) KeepZone(&m, ctl, ui.zone);
     Options o;
     o.editSlots = mode == Mode::MySetup && ui.setupEdit;
     o.airflow = mode == Mode::MySetup && ui.setupAirflow;
@@ -3788,7 +3704,7 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
                 geometryChanged = true;
                 ctl.Changed();
             } else if (mode == Mode::Lighting) {
-                if (const char* d = DeviceOf(m, under)) ui.lightTarget = ui.lightTarget == d ? "" : d;
+                SelectDevice(ctl, ui, DeviceOf(m, under));
             } else if (canDrag) {
                 v.selected = DeskItemOf(m, under).empty() ? -1 : under;  // to turn it
             }
@@ -3814,6 +3730,7 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     // agree during orbiting and dragging instead of lagging behind the input.
     if (geometryChanged) {
         m = Gather(ctl, snap);
+        if (mode == Mode::Lighting) KeepZone(&m, ctl, ui.zone);
         sc = {};
         anchors.clear();
         texts.clear();
@@ -3885,9 +3802,9 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     for (int i = 0; i < static_cast<int>(std::max<size_t>(1, m.screens.size())); ++i) ids.push_back(kMonitor0 + i);
     for (int i = 0; i < pc::kSlots; ++i) ids.push_back(kFan0 + i);
     for (int i = 0; i < static_cast<int>(m.others.size()); ++i) ids.push_back(kOther0 + i);
-    if (mode == Mode::Lighting && !ui.lightTarget.empty())
+    if (mode == Mode::Lighting)
         for (int id : ids)
-            if (const char* d = DeviceOf(m, id); d && ui.lightTarget == d) outline(id, Hex(kAccentHover, 200), 1.6f);
+            if (const char* d = DeviceOf(m, id); ZoneSelected(ctl, ui, d)) outline(id, Hex(kAccentHover, 200), 1.6f);
     if (mode == Mode::MySetup && v.selected >= 0) {
         // What's selected: all of it (the whole case for a part of it), around its outer edge;
         // each monitor on its own.
@@ -3931,7 +3848,7 @@ void SetupView(Controller& ctl, UiState& ui, view3d::Mode mode, float height) {
     dl->PopClipRect();
 
     if (hovered && under >= 0 && v.dragObj < 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
-        ImGui::BeginTooltip();
+        BeginHoverTip();
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 320 * S());
         Describe(ctl, m, snap, under);
         if (mode == Mode::Lighting && DeviceOf(m, under)) Muted("Click to edit its lighting.");
@@ -4107,7 +4024,8 @@ void DrawBoardEmblem(ImDrawList* dl, ImVec2 c, float r, const std::vector<Rgb>& 
 // an angular emblem, or the TUF badge on those boards, else its LEDs along the edge), the CPU
 // socket, and the memory standing in its slots right of the CPU.
 void DrawBoard(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& leds, const SetupHardware& hw,
-               const std::array<bool, 4>& slots, bool ramLit, const fx::Params* ram, double t, double ramLevel) {
+               const std::array<bool, 4>& slots, bool ramLit, const fx::Params* ram, double t, double ramLevel,
+               bool ramApart) {
     const ImVec2 b(a.x + size.x, a.y + size.y);
     auto at = [&](float fx, float fy) { return ImVec2(a.x + fx * size.x, a.y + fy * size.y); };
     dl->AddRectFilled(a, b, Hex(0x0F1218), 6 * S());
@@ -4174,6 +4092,7 @@ void DrawBoard(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& le
     ImVec2 ra, rb;
     RamArea(a, size, &ra, &rb);
     const float pitch = (rb.x - ra.x) / 4, w = pitch * 0.5f;
+    int ordinal = 0;  // among the sticks in the slots
     for (int slot = 0; slot < 4; ++slot) {
         const float x0 = ra.x + slot * pitch + (pitch - w) / 2;
         const ImVec2 sa(x0, ra.y), sb(x0 + w, rb.y);
@@ -4184,7 +4103,8 @@ void DrawBoard(ImDrawList* dl, ImVec2 a, ImVec2 size, const std::vector<Rgb>& le
             dl->AddRectFilled(ImVec2(sa.x + w * 0.25f, sa.y), ImVec2(sb.x - w * 0.25f, sb.y), Hex(0x222938), 1 * S());
             continue;
         }
-        DrawStick(dl, sa, sb, hw.ram, ramLit ? ram : nullptr, t, ramLevel);
+        const fx::Params stick = StickParams(ramApart, ram, ordinal++);
+        DrawStick(dl, sa, sb, hw.ram, ramLit && ram ? &stick : nullptr, t, ramLevel);
     }
 }
 
@@ -4557,6 +4477,23 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable, bool overview)
         items.push_back({"other" + std::to_string(i), model.others[i].device, ImVec2(120 * S(), 26 * S()), -1, model.others[i].name,
                          SetupItem::Look::Bar, model.others[i].leds});
 
+    // A custom zone shows only its own devices (Everything shows all of them).
+    const bool zoneOnly = selectable && !ui.zone.empty();
+    if (zoneOnly) {
+        auto in = [&](const char* d) { return d && ctl.ZoneKey(d) == ui.zone; };
+        std::vector<SetupItem> kept;
+        for (SetupItem& it : items) {
+            if (it.item == device::kBoard) {
+                // The memory is drawn in the board: keep the board for it, unlit unless the board is in the zone.
+                if (!in(device::kBoard) && !in(device::kRam)) continue;
+                if (!in(device::kBoard)) it.device = nullptr;
+                kept.push_back(it);
+            } else if (in(it.device)) {
+                kept.push_back(it);
+            }
+        }
+        items = kept;
+    }
     // Auto uses a fitted overview rather than saved drag positions, so every device stays visible.
     const int columns = std::max(1, static_cast<int>(W / (160 * S())));
     const float cellW = W / columns, cellH = 124 * S();
@@ -4578,7 +4515,7 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable, bool overview)
     std::vector<Rgb> fanLeds, boardLeds, mouseLeds(8);
     const fx::Params* fanP = model.fansRgb ? LiveParams(ctl, device::kFans) : nullptr;
     if (fanP) {
-        fx::RenderFans(*fanP, t, layout, &fanLeds);
+        fx::RenderFans(*fanP, LiveT(*fanP, t), layout, &fanLeds);
         const double level = LiveLevel(ctl, device::kFans);
         for (Rgb& c : fanLeds) c = Scale(c, level);
     } else {
@@ -4638,7 +4575,7 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable, bool overview)
                 ui.dragItem2d.clear();
                 ctl.Changed();  // save the layout
             } else if (selectable && target) {
-                ui.lightTarget = ui.lightTarget == target ? "" : target;
+                SelectDevice(ctl, ui, target);
             }
         }
         const bool hoverRam = hovered && inRam(ImGui::GetIO().MousePos);
@@ -4666,7 +4603,8 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable, bool overview)
         }
         else if (it.fan >= 0) DrawFan(dl, a, it.size, fanLeds, it.fan, layout.LedsPerFan());
         else if (it.item == device::kBoard)
-            DrawBoard(dl, a, it.size, boardLeds, hw, slots, ramOn, LiveParams(ctl, device::kRam), t, LiveLevel(ctl, device::kRam));
+            DrawBoard(dl, a, it.size, boardLeds, hw, slots, ramOn, LiveParams(ctl, device::kRam), t, LiveLevel(ctl, device::kRam),
+                      prefs.setupRamApart);
         else if (it.item == device::kMouse) {
             // Another device's mouse (OpenRGB, ...) shows one color.
             if (isDev(device::kMouse)) DrawMouse(dl, a, it.size, mouseLeds);
@@ -4685,13 +4623,19 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable, bool overview)
             auto d = prefs.deviceLighting.find(id);
             return d != prefs.deviceLighting.end() && d->second.own;
         };
-        const bool selected = selectable && it.device && ui.lightTarget == it.device;
+        const bool selected = selectable && ZoneSelected(ctl, ui, it.device);
         if (selected || (hovered && !hoverRam))
             dl->AddRect(ImVec2(a.x - 4 * S(), a.y - 4 * S()), ImVec2(b.x + 4 * S(), b.y + 4 * S()),
                         Hex(selected ? kAccentHover : kBorder), 10 * S(), 0, (selected ? 2.f : 1.2f) * S());
+        // Which zone it is in: a dot in the zone's color (only once there are zones).
+        if (selectable && it.device && !prefs.zones.empty() && !ctl.prefs().zones.empty()) {
+            const unsigned zc = ZoneColor(prefs, ctl.ZoneKey(it.device));
+            dl->AddCircleFilled(ImVec2(a.x - 2 * S(), a.y - 2 * S()), 6 * S(), Hex(0x0B0E14), 16);
+            dl->AddCircleFilled(ImVec2(a.x - 2 * S(), a.y - 2 * S()), 4.5f * S(), Hex(zc), 16);
+        }
         if (isBoard && ramOn) {
             // The memory's outline and name, inside the board.
-            const bool ramSelected = selectable && ui.lightTarget == device::kRam;
+            const bool ramSelected = selectable && ZoneSelected(ctl, ui, device::kRam);
             if (ramSelected || hoverRam)
                 dl->AddRect(ImVec2(ra.x - 5 * S(), ra.y - 4 * S()), ImVec2(rb.x + 5 * S(), rb.y + 4 * S()),
                             Hex(ramSelected ? kAccentHover : kBorder), 6 * S(), 0, (ramSelected ? 2.f : 1.2f) * S());
@@ -4711,7 +4655,7 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable, bool overview)
         else if (isBoard && !hw.boardName.empty()) snprintf(label, sizeof label, "%s", hw.boardName.c_str());
         else snprintf(label, sizeof label, "%s", it.device ? device::Name(it.device) : "");
         if (overview) {
-            if (hovered) ImGui::SetTooltip("%s%s%s", label, isBoard && !hw.ramName.empty() ? "\n" : "",
+            if (hovered) Tooltip("%s%s%s", label, isBoard && !hw.ramName.empty() ? "\n" : "",
                                           isBoard ? hw.ramName.c_str() : "");
             if (isBoard) snprintf(label, sizeof label, "%s", hw.ramName.empty() ? "Motherboard" : "Motherboard + RAM");
             std::string clipped = label;
@@ -4735,7 +4679,8 @@ void SetupCanvas2d(Controller& ctl, UiState& ui, bool selectable, bool overview)
     }
     ImGui::PopID();
     if (items.empty()) {
-        const char* none = "No lights LumaBridge can control were found on this PC yet (Devices > Rescan devices).";
+        const char* none = zoneOnly ? "No devices in this zone yet. Pick them in the Devices tab."
+                                    : "No lights LumaBridge can control were found on this PC yet (Devices > Rescan devices).";
         const ImVec2 ns = ImGui::CalcTextSize(none);
         dl->AddText(ImVec2(o.x + W / 2 - ns.x / 2, o.y + H / 2 - ns.y / 2), Hex(kMuted), none);
     }
@@ -4752,68 +4697,6 @@ void SetupCanvas(Controller& ctl, UiState& ui, bool selectable) {
     }
     const float h = std::clamp(ImGui::GetContentRegionAvail().x * 0.5f, 320 * S(), 500 * S());
     SetupView(ctl, ui, selectable ? view3d::Mode::Lighting : view3d::Mode::Preview, h);
-}
-
-// Your own lighting travelling from device to device, by where they sit in the 2D layout.
-void FlowControls(Controller& ctl) {
-    Prefs& p = ctl.prefs();
-    ImGui::Dummy(ImVec2(0, 6 * S()));
-    ImGui::TextUnformatted("Let the effect travel across your setup");
-    static const char* kDirections[kFlowDirections] = {"Off", "Left to right", "Right to left", "Top down", "Bottom up"};
-    int dir = std::clamp(p.flowDirection, 0, kFlowDirections - 1);
-    if (Segmented("flow", &dir, kDirections, kFlowDirections, std::min(600 * S(), ImGui::GetContentRegionAvail().x))) {
-        p.flowDirection = dir;
-        ctl.Changed();
-    }
-    if (dir == 0) return;
-    if (LabeledSlider("From the first device to the last", &p.flowSeconds, 0.2f, 5.f, "%.1f seconds")) ctl.Changed();
-    Muted("Moving effects (breathing, color cycle, rainbows, comets) reach each device in turn, by where it sits in "
-          "the 2D layout. Fans on one hub all show the same thing, so they move as one. Games still light "
-          "everything at once.");
-}
-
-void ManualOverview(Controller& ctl, UiState& ui, const Fonts& f) {
-    const bool side = ImGui::GetContentRegionAvail().x >= 760 * S();
-    if (ImGui::BeginTable("manual-overview", side ? 2 : 1, ImGuiTableFlags_SizingStretchProp)) {
-        if (side) {
-            ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthFixed, 280 * S());
-            ImGui::TableSetupColumn("Setup", ImGuiTableColumnFlags_WidthStretch);
-        }
-        const bool native = !ui.lightTarget.empty() && DeviceNative(ctl.prefs(), ui.lightTarget);
-        ImGui::TableNextColumn();
-        ManualColorCard(ctl, ui, f);
-        if (side && !native) BrightnessCard(ctl, f, ui.lightTarget);
-        ImGui::TableNextColumn();
-        BeginCard("manual-setup");
-        const ImVec2 top = ImGui::GetCursorPos();
-        CardTitle(f, "Your setup", Icon::Grid);
-        const ImVec2 below = ImGui::GetCursorPos();
-        ImGui::SetCursorPos(ImVec2(ImGui::GetContentRegionMax().x - 120 * S(), top.y - 4 * S()));
-        int view = ctl.prefs().lighting3d ? 1 : 0;
-        const char* views[] = {"2D", "3D"};
-        if (Segmented("view2d3d", &view, views, 2, 120 * S())) {
-            ctl.prefs().lighting3d = view == 1;
-            ctl.Changed();
-        }
-        ImGui::SetCursorPos(below);
-        Muted(ctl.prefs().lighting3d ? "Click a lit component to edit its lighting."
-                                    : "Drag devices to arrange your setup. Click a lit component to edit its lighting.");
-        ImGui::Dummy(ImVec2(0, 6 * S()));
-        if (ctl.prefs().lighting3d) SetupCanvas(ctl, ui, true);
-        else SetupCanvas2d(ctl, ui, true);
-        if (ctl.prefs().lighting3d) {
-            if (SmallBtn("Reset view")) ui.lightView.camSet = false;
-        } else if (SmallBtn("Reset layout")) {
-            auto& spots = ctl.prefs().setupSpots;
-            for (auto it = spots.begin(); it != spots.end();)
-                it = it->first.rfind("desk:", 0) == 0 ? std::next(it) : spots.erase(it);
-            ctl.Changed();
-        }
-        FlowControls(ctl);
-        EndCard();
-        if (!side && !native) BrightnessCard(ctl, f, ui.lightTarget);
-        ImGui::EndTable();
-    }
 }
 
 // ---- My setup: the PC and the desk in 3D --------------------------------------------------
@@ -5093,12 +4976,7 @@ void MySetupPage(Controller& ctl, UiState& ui, const Fonts& f) {
 // Hands a device back to its own app, or takes it again. The fans and the motherboard share
 // one ASUS controller, so they go together.
 void SetNative(Controller& ctl, const std::string& id, bool native) {
-    auto& all = ctl.prefs().deviceLighting;
-    all[id].native = native;
-    if (id == device::kFans || id == device::kBoard) {
-        all[device::kFans].native = native;
-        all[device::kBoard].native = native;
-    }
+    ctl.SetDeviceNative(id, native);
 }
 
 void NativeNote(const std::string& id) {
@@ -5112,81 +4990,818 @@ void NativeNote(const std::string& id) {
         Muted("%s lights it again. LumaBridge leaves it alone, games included.", NativeApp(id));
 }
 
-// Lighting > Manual: the selected color and setup side by side, with editing controls below.
-void ManualPage(Controller& ctl, UiState& ui, const Fonts& f) {
-    Prefs& p = ctl.prefs();
-    // Which lighting to edit: everything, or one device.
-    std::vector<std::string> ids{""};
-    std::vector<const char*> labels{"All devices"};
-    for (const char* id : LitDeviceIds(ctl)) {
-        ids.push_back(id);
-        labels.push_back(device::Name(id));
-    }
-    int sel = 0;
-    for (size_t i = 0; i < ids.size(); ++i)
-        if (ids[i] == ui.lightTarget) sel = static_cast<int>(i);
-    ui.lightTarget = ids[static_cast<size_t>(sel)];  // a device that was turned off: back to all
-    ManualOverview(ctl, ui, f);
-    // A click in the preview can select another device in this frame.
-    for (size_t i = 0; i < ids.size(); ++i)
-        if (ids[i] == ui.lightTarget) sel = static_cast<int>(i);
-    ImGui::PushFont(f.bold);
-    ImGui::TextUnformatted("Lighting to edit");
-    ImGui::PopFont();
-    float targetWidth = 0;
-    for (const char* label : labels) targetWidth = std::max(targetWidth, ImGui::CalcTextSize(label).x + 28 * S());
-    if (targetWidth * labels.size() > ImGui::GetContentRegionAvail().x) {
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::Combo("##target", &sel, labels.data(), static_cast<int>(labels.size())))
-            ui.lightTarget = ids[static_cast<size_t>(sel)];
-    } else if (Segmented("target", &sel, labels.data(), static_cast<int>(labels.size()), ImGui::GetContentRegionAvail().x))
-        ui.lightTarget = ids[static_cast<size_t>(sel)];
-    ImGui::Dummy(ImVec2(0, 6 * S()));
+// ---- Lighting page: zones and one inspector -----------------------------------------------
 
-    if (ui.lightTarget.empty()) {
-        Look l = MainLook(p);
-        if (LookEditor(ctl, ui, f, l)) {
-            SetMainLook(p, l);
+// A zone being edited: one of the user's zones, or Everything (the devices in no zone, which
+// use the main lighting and the mode in the header).
+struct ZoneView {
+    Controller& ctl;
+    Prefs& p;
+    Zone* z;  // null: Everything
+
+    bool rest() const { return !z; }
+    std::string id() const { return z ? z->id : std::string(); }
+    std::string name() const { return z ? z->name : std::string("Everything"); }
+    Look GetLook() const { return z ? z->look : MainLook(p); }
+    void SetLook(const Look& l) {
+        if (z) z->look = l;
+        else SetMainLook(p, l);
+        ctl.Changed();
+    }
+    int& SetupEffect() const { return z ? z->setupEffect : p.setupEffect; }
+    Rgb& SetupColor1() const { return z ? z->setupColor1 : p.setupColor1; }
+    Rgb& SetupColor2() const { return z ? z->setupColor2 : p.setupColor2; }
+    float& SetupSpeed() const { return z ? z->setupSpeed : p.setupSpeed; }
+    int& Order() const { return z ? z->order : p.setupOrder; }
+    int& FlowDir() const { return z ? z->flowDirection : p.flowDirection; }
+    float& FlowSeconds() const { return z ? z->flowSeconds : p.flowSeconds; }
+    bool Manual() const { return z ? z->manual : p.mode == Mode::Manual; }
+    void SetManual(bool manual) {
+        if (z) z->manual = manual;
+        else p.mode = manual ? Mode::Manual : Mode::Auto;
+        ctl.Changed();
+    }
+    // The lit devices of this zone.
+    std::vector<std::string> Devices() const {
+        std::vector<std::string> out;
+        for (const char* d : LitDeviceIds(ctl))
+            if (ctl.ZoneKey(d) == id()) out.push_back(d);
+        return out;
+    }
+};
+
+std::string DeviceNames(const std::vector<std::string>& devices) {
+    std::string s;
+    for (const auto& d : devices) s += (s.empty() ? "" : ", ") + std::string(device::Name(d));
+    return s;
+}
+
+// Separate hit areas keep deleting a zone from also selecting its row.
+bool ZoneDeleteButton(const std::string& id, const std::string& name, ImVec2 at, float size) {
+    const ImVec2 cursor = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(at);
+    ImGui::PushID(id.c_str());
+    const bool clicked = ImGui::InvisibleButton("##delete-zone", ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered();
+    if (hovered) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        Tooltip("Delete %s. Its devices return to Everything.", name.c_str());
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (hovered) dl->AddRectFilled(at, ImVec2(at.x + size, at.y + size), Hex(kCardHover), 6 * S());
+    const ImVec2 center(at.x + size / 2, at.y + size / 2);
+    const float r = 4 * S();
+    const ImU32 color = Hex(hovered ? kRed : kMuted);
+    dl->AddLine(ImVec2(center.x - r, center.y - r), ImVec2(center.x + r, center.y + r), color, 1.5f * S());
+    dl->AddLine(ImVec2(center.x - r, center.y + r), ImVec2(center.x + r, center.y - r), color, 1.5f * S());
+    ImGui::PopID();
+    ImGui::SetCursorScreenPos(cursor);
+    return clicked;
+}
+
+void RemoveLightingZone(Controller& ctl, UiState& ui, const std::string& id) {
+    if (!DeleteZone(ctl.prefs().zones, id)) return;
+    if (ui.zone == id) {
+        ui.zone.clear();
+        ui.zoneNameFor.clear();
+        ui.lightTarget.clear();
+        ui.lightTab = 0;
+    }
+    ctl.Changed();
+}
+
+void NewZoneButton(Controller& ctl, UiState& ui, ImVec2 size);
+
+// The chips: Everything, each zone, and a button to make a new one.
+void ZoneBar(Controller& ctl, UiState& ui) {
+    Prefs& p = ctl.prefs();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    struct Chip {
+        std::string id, label;
+        int count;
+    };
+    std::vector<Chip> chips;
+    auto countIn = [&](const std::string& zone) {
+        int n = 0;
+        for (const char* d : LitDeviceIds(ctl)) n += ctl.ZoneKey(d) == zone;
+        return n;
+    };
+    chips.push_back({"", "Everything", static_cast<int>(LitDeviceIds(ctl).size())});
+    for (const Zone& z : p.zones) chips.push_back({z.id, z.name, countIn(z.id)});
+    const float avail = ImGui::GetContentRegionAvail().x, gap = 8 * S(), h = 34 * S();
+    std::string removeId;
+    float used = 0;  // width of the chips on this line
+    for (size_t i = 0; i < chips.size(); ++i) {
+        const Chip& c = chips[i];
+        const std::string count = std::to_string(c.count);
+        const float deleteW = c.id.empty() ? 0 : 28 * S();
+        const float w = deleteW + 18 * S() + ImGui::CalcTextSize(c.label.c_str()).x + 12 * S() + ImGui::CalcTextSize(count.c_str()).x + 18 * S();
+        if (used > 0 && used + gap + w > avail) used = 0;  // the next line
+        else if (used > 0) {
+            ImGui::SameLine(0, gap);
+            used += gap;
+        }
+        const ImVec2 a = ImGui::GetCursorScreenPos();
+        ImGui::PushID(static_cast<int>(i));
+        const bool clicked = ImGui::InvisibleButton("##zone", ImVec2(w - deleteW, h));
+        ImGui::PopID();
+        const bool hovered = ImGui::IsItemHovered(), selected = ui.zone == c.id;
+        if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        const ImVec2 b(a.x + w, a.y + h);
+        dl->AddRectFilled(a, b, Hex(selected || hovered ? kCardHover : kTrack), h / 2);
+        dl->AddRect(a, b, selected ? Hex(kAccentHover) : Hex(kBorder), h / 2, 0, selected ? 2 * S() : 1 * S());
+        const unsigned zc = ZoneColor(p, c.id);
+        dl->AddCircleFilled(ImVec2(a.x + 15 * S(), a.y + h / 2), 5 * S(), Hex(zc), 16);
+        const float th = ImGui::GetTextLineHeight();
+        dl->AddText(ImVec2(a.x + 28 * S(), a.y + (h - th) / 2), Hex(selected ? kText : kMuted), c.label.c_str());
+        dl->AddText(ImVec2(a.x + 28 * S() + ImGui::CalcTextSize(c.label.c_str()).x + 10 * S(), a.y + (h - th) / 2),
+                    Hex(kMuted, 160), count.c_str());
+        if (clicked) {
+            ui.zone = c.id;
+            ui.lightTarget.clear();
+        }
+        if (!c.id.empty() && ZoneDeleteButton(c.id, c.label,
+                ImVec2(a.x + w - deleteW, a.y + (h - 24 * S()) / 2), 24 * S())) removeId = c.id;
+        ImGui::SetCursorScreenPos(a);
+        ImGui::Dummy(ImVec2(w, h));  // reserve the complete chip for wrapping / SameLine
+        used += w;
+    }
+    if (!removeId.empty()) RemoveLightingZone(ctl, ui, removeId);
+    // New zone.
+    const float nw = 118 * S();
+    if (used > 0 && used + gap + nw <= avail) ImGui::SameLine(0, gap);
+    NewZoneButton(ctl, ui, ImVec2(nw, h));
+}
+
+// "+ New zone": the button and what it offers.
+void NewZoneButton(Controller& ctl, UiState& ui, ImVec2 size) {
+    Prefs& p = ctl.prefs();
+    const bool full = p.zones.size() >= kMaxZones;
+    ImGui::BeginDisabled(full);
+    if (Btn("+ New zone", size)) ImGui::OpenPopup("##new-zone");
+    ImGui::EndDisabled();
+    auto make = [&](const std::string& name, const std::vector<const char*>& wanted) {
+        if (p.zones.size() >= kMaxZones) return;
+        Zone z;
+        z.id = NewZoneId(p.zones);
+        z.name = name;
+        z.look = MainLook(p);
+        p.zones.push_back(z);
+        const auto lit = LitDeviceIds(ctl);
+        for (const char* d : wanted)
+            if (std::find_if(lit.begin(), lit.end(), [&](const char* l) { return std::string(l) == d; }) != lit.end())
+                MoveDevice(p.zones, d, z.id);
+        ui.zone = z.id;
+        ui.lightTab = 3;  // pick the devices
+        ctl.Changed();
+    };
+    if (ImGui::BeginPopup("##new-zone")) {
+        if (ImGui::Selectable("Choose yourself")) make("Zone " + std::to_string(p.zones.size() + 1), {});
+        ImGui::Separator();
+        if (ImGui::Selectable("Inside the PC (fans, memory, motherboard, Nollie)"))
+            make("Inside the PC", {device::kFans, device::kNollie, device::kBoard, device::kRam});
+        if (ImGui::Selectable("Desk (keyboard, mouse, controller, other)"))
+            make("Desk", {device::kKeyboard, device::kMouse, device::kController, device::kOther});
+        if (ImGui::Selectable("Keyboard and mouse")) make("Keyboard and mouse", {device::kKeyboard, device::kMouse});
+        ImGui::EndPopup();
+    }
+}
+
+struct EffectCategory {
+    const char* name;
+    std::vector<int> kinds;
+};
+const std::vector<EffectCategory>& EffectCategories() {
+    static const std::vector<EffectCategory> k{
+        {"Basic", {0, 1, 2}},
+        {"Rainbow", {3, 4}},
+        {"Moving", {5, 6, 7}},
+        {"Across the setup",
+         {fx::kFirstSetupEffect, fx::kFirstSetupEffect + 1, fx::kFirstSetupEffect + 2, fx::kFirstSetupEffect + 3,
+          fx::kFirstSetupEffect + 4, fx::kFirstSetupEffect + 5, fx::kFirstSetupEffect + 6, fx::kFirstSetupEffect + 7,
+          static_cast<int>(fx::Kind::FillSolid), static_cast<int>(fx::Kind::FillPulse),
+          static_cast<int>(fx::Kind::CenterSolid), static_cast<int>(fx::Kind::CenterPulse),
+          static_cast<int>(fx::Kind::IgniteSolid), static_cast<int>(fx::Kind::IgnitePulse)}},
+    };
+    return k;
+}
+// Eight parts of six LEDs: what a setup effect does across a setup, live.
+void SetupEffectPreview(const fx::Params& base, ImVec2 a, ImVec2 b) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    fx::Params e = base;
+    e.parts = 8;
+    // Repeat the demonstration so a one-shot reveal remains visible in the gallery.
+    const double t = fx::IsSettlingEffect(e.kind) && e.kind != fx::Kind::CenterPulse
+        ? std::fmod(ImGui::GetTime(), 8.0 / std::max(0.05, e.speed) + 5.0) : ImGui::GetTime();
+    const float w = b.x - a.x, partW = (w - 7 * 4 * S()) / 8;
+    for (int part = 0; part < 8; ++part) {
+        e.part = part;
+        const float x0 = a.x + part * (partW + 4 * S());
+        for (int led = 0; led < 6; ++led)
+            dl->AddRectFilled(ImVec2(x0 + partW * led / 6, a.y), ImVec2(x0 + partW * (led + 1) / 6, b.y), Col(fx::Render(e, t, led, 6)),
+                              led == 0 ? 3 * S() : 0, led == 0 ? ImDrawFlags_RoundCornersLeft : 0);
+    }
+}
+
+fx::Params SetupParamsOf(const ZoneView& v, int kind) {
+    fx::Params e;
+    e.kind = static_cast<fx::Kind>(kind);
+    e.color1 = v.SetupColor1();
+    e.color2 = v.SetupColor2();
+    e.speed = v.SetupSpeed();
+    return e;
+}
+
+// The zones as a list at the side: Everything first, then the custom zones. Each row shows the
+// zone's mode and what it shows right now.
+void ZoneList(Controller& ctl, UiState& ui, const Fonts& f) {
+    Prefs& p = ctl.prefs();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    struct Row {
+        std::string id, name;
+        int count;
+        bool manual;
+    };
+    std::vector<Row> rows;
+    rows.push_back({"", "Everything", static_cast<int>(LitDeviceIds(ctl).size()), p.mode == Mode::Manual});
+    for (const Zone& z : p.zones) {
+        int n = 0;
+        for (const char* d : LitDeviceIds(ctl)) n += ctl.ZoneKey(d) == z.id;
+        rows.push_back({z.id, z.name, n, z.manual});
+    }
+    const float w = ImGui::GetContentRegionAvail().x, h = 66 * S();
+    std::string removeId;
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const Row& r = rows[i];
+        if (i == 1) {
+            ImGui::Dummy(ImVec2(0, 2 * S()));
+            Muted("Your zones");
+        }
+        const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + w, a.y + h);
+        ImGui::PushID(static_cast<int>(i));
+        const float deleteW = r.id.empty() ? 0 : 36 * S();
+        const bool clicked = ImGui::InvisibleButton("##zone-row", ImVec2(w - deleteW, h));
+        ImGui::PopID();
+        const bool hovered = ImGui::IsItemHovered(), selected = ui.zone == r.id;
+        if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        dl->AddRectFilled(a, b, Hex(selected || hovered ? kCardHover : kTrack), 12 * S());
+        dl->AddRect(a, b, selected ? Hex(kAccentHover) : Hex(kBorder), 12 * S(), 0, selected ? 2 * S() : 1 * S());
+        dl->AddCircleFilled(ImVec2(a.x + 16 * S(), a.y + 18 * S()), 5 * S(), Hex(ZoneColor(p, r.id)), 16);
+        dl->AddText(ImVec2(a.x + 28 * S(), a.y + 10 * S()), Hex(selected ? kText : kMuted), Ellipsize(r.name, w - 40 * S() - deleteW).c_str());
+        const std::string meta = std::to_string(r.count) + (r.count == 1 ? " device" : " devices") + ", " + (r.manual ? "manual" : "auto");
+        dl->AddText(ImVec2(a.x + 28 * S(), a.y + 28 * S()), Hex(kMuted, 170), meta.c_str());
+        // What it shows now.
+        ZoneView zv{ctl, p, r.id.empty() ? nullptr : FindZone(p.zones, r.id)};
+        const ImVec2 sa(a.x + 12 * S(), b.y - 16 * S()), sb(b.x - 12 * S(), b.y - 8 * S());
+        if (zv.SetupEffect()) SetupEffectPreview(SetupParamsOf(zv, zv.SetupEffect()), sa, sb);
+        else EffectStrip(ToParams(zv.GetLook()), sa, sb, 3 * S());
+        if (clicked) {
+            ui.zone = r.id;
+            ui.lightTarget.clear();
+        }
+        if (!r.id.empty() && ZoneDeleteButton(r.id, r.name,
+                ImVec2(b.x - 34 * S(), a.y + 7 * S()), 28 * S())) removeId = r.id;
+        ImGui::SetCursorScreenPos(a);
+        ImGui::Dummy(ImVec2(w, h));
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+    }
+    if (!removeId.empty()) RemoveLightingZone(ctl, ui, removeId);
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    NewZoneButton(ctl, ui, ImVec2(w, 36 * S()));
+    (void)f;
+}
+
+// Effect tab: every effect as a tile that shows what it does, in groups (nothing hidden behind a tab).
+bool EffectTab(ZoneView& v, UiState& ui, const Fonts& f) {
+    (void)ui;
+    bool changed = false;
+    Look look = v.GetLook();
+    const int current = v.SetupEffect() ? v.SetupEffect() : static_cast<int>(look.effect);
+    const float gap = 8 * S();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const auto& cats = EffectCategories();
+    for (size_t ci = 0; ci < cats.size(); ++ci) {
+        const bool setupCat = ci == 3;
+        const auto& kinds = cats[ci].kinds;
+        ImGui::PushFont(f.bold);
+        ImGui::TextUnformatted(cats[ci].name);
+        ImGui::PopFont();
+        const float avail = ImGui::GetContentRegionAvail().x;
+        const int cols = std::max(1, static_cast<int>((avail + gap) / (150 * S() + gap)));
+        const float tileW = (avail - (cols - 1) * gap) / cols, tileH = 64 * S();
+        for (size_t i = 0; i < kinds.size(); ++i) {
+            const int kind = kinds[i];
+            if (i % static_cast<size_t>(cols)) ImGui::SameLine(0, gap);
+            const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + tileW, a.y + tileH);
+            ImGui::PushID(kind);
+            const bool clicked = ImGui::InvisibleButton("##fx", ImVec2(tileW, tileH));
+            ImGui::PopID();
+            const bool hovered = ImGui::IsItemHovered(), selected = current == kind;
+            if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            dl->AddRectFilled(a, b, Hex(selected || hovered ? kCardHover : kTrack), 10 * S());
+            dl->AddRect(a, b, selected ? Hex(kAccentHover) : Hex(kBorder), 10 * S(), 0, selected ? 2 * S() : 1 * S());
+            dl->AddText(ImVec2(a.x + 10 * S(), a.y + 7 * S()), Hex(selected ? kText : kMuted), EffectInfoFor(static_cast<fx::Kind>(kind)).name);
+            const ImVec2 pa(a.x + 10 * S(), a.y + 32 * S()), pb(b.x - 10 * S(), b.y - 10 * S());
+            if (setupCat) {
+                SetupEffectPreview(SetupParamsOf(v, kind), pa, pb);
+            } else {
+                Look sample = look;
+                sample.effect = static_cast<fx::Kind>(kind);
+                if (sample.effect != fx::Kind::Static && sample.speedHz <= 0) sample.speedHz = 0.5f;
+                EffectStrip(ToParams(sample), pa, pb, 5 * S());
+            }
+            if (clicked) {
+                if (setupCat) {
+                    v.SetupEffect() = kind;
+                } else {
+                    look.effect = static_cast<fx::Kind>(kind);
+                    const EffectInfo& e = EffectInfoFor(static_cast<fx::Kind>(kind));
+                    if (look.effect == fx::Kind::ColorCycle) look.speedHz = std::min(look.speedHz, 0.5f);
+                    else if (e.maxSpeed > 0) look.speedHz = std::clamp(look.speedHz, e.minSpeed, e.maxSpeed);
+                    v.SetLook(look);
+                    v.SetupEffect() = 0;
+                }
+                changed = true;
+            }
+        }
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+    }
+    Muted("%s", EffectInfoFor(static_cast<fx::Kind>(current)).help);
+    if (!v.SetupEffect()) {
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+        ImGui::TextUnformatted("Presets");
+        if (PresetTiles(v.ctl, look)) {
+            v.SetLook(look);
+            changed = true;
+        }
+    }
+    if (changed) v.ctl.Changed();
+    return changed;
+}
+
+// Color tab: the colors of the effect (or of the setup effect), one place for all of them.
+void ColorsTab(ZoneView& v, UiState& ui) {
+    if (v.SetupEffect()) {
+        const fx::Kind k = static_cast<fx::Kind>(v.SetupEffect());
+        if (k == fx::Kind::RainbowParts) {
+            Muted("This effect uses the rainbow's own colors. Change how vivid they are under a rainbow effect.");
+            return;
+        }
+        const bool two = fx::UsesSecondColor(k);
+        const float tabW = std::min(200 * S(), ImGui::GetContentRegionAvail().x / 2 - 6 * S());
+        if (!two) ui.setupColorSlot = 0;
+        if (ColorTab("Lit##zone-c1", v.SetupColor1(), ui.setupColorSlot == 0, tabW)) ui.setupColorSlot = 0;
+        if (two) {
+            ImGui::SameLine(0, 12 * S());
+            if (ColorTab("Unlit##zone-c2", v.SetupColor2(), ui.setupColorSlot == 1, tabW)) ui.setupColorSlot = 1;
+        }
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        Rgb* editing = ui.setupColorSlot == 0 ? &v.SetupColor1() : &v.SetupColor2();
+        if (ColorEditor(v.ctl, ui, editing, ui.setupColorSlot == 0 ? "zone-lit" : "zone-unlit")) v.ctl.Changed();
+        return;
+    }
+    Look look = v.GetLook();
+    bool changed = false;
+    if (IsRainbow(look.effect)) changed = RainbowBody(look, look.effect == ManualEffect::RainbowWave);
+    else changed = ColorsBody(v.ctl, ui, look);
+    if (changed) v.SetLook(look);
+}
+
+// Motion tab: speed, direction, how the effect travels across the zone, brightness.
+void MotionTab(ZoneView& v, UiState& ui) {
+    Controller& ctl = v.ctl;
+    Prefs& p = v.p;
+    if (v.SetupEffect()) {
+        const EffectInfo& e = EffectInfoFor(static_cast<fx::Kind>(v.SetupEffect()));
+        if (LabeledSlider("Speed", &v.SetupSpeed(), e.minSpeed, e.maxSpeed, e.speedFmt)) ctl.Changed();
+        ImGui::TextUnformatted("Order through the zone");
+        static const char* kOrders[] = {"Left to right", "Right to left", "Top down", "Bottom up"};
+        int order = std::clamp(v.Order(), 1, 4) - 1;
+        if (Segmented("zone-order", &order, kOrders, 4, std::min(560 * S(), ImGui::GetContentRegionAvail().x))) {
+            v.Order() = order + 1;
             ctl.Changed();
+        }
+        std::string way;
+        for (const auto& part : ctl.setupParts(v.id()).parts)
+            way += (way.empty() ? "" : "  >  ") + part.name + (part.count > 1 ? " (" + std::to_string(part.count) + ")" : "");
+        if (way.empty()) Muted("No lit devices in this zone yet.");
+        else Muted("%s. The order follows where the devices sit in Your setup: drag them to change it.", way.c_str());
+        const auto& parts = ctl.setupParts(v.id()).parts;
+        if (std::any_of(parts.begin(), parts.end(), [](const Controller::SetupPart& part) { return part.id == device::kRam; })) {
+            int apart = p.setupRamApart ? 0 : 1;
+            const char* modes[] = {"Each memory stick on its own", "All memory sticks together"};
+            if (Segmented("setup-ram", &apart, modes, 2, std::min(520 * S(), ImGui::GetContentRegionAvail().x))) {
+                p.setupRamApart = apart == 0;
+                ctl.Changed();
+            }
         }
     } else {
-        DeviceLighting& d = p.deviceLighting[ui.lightTarget];
-        const char* name = device::Name(ui.lightTarget);
-        BeginCard("device");
-        CardTitle(f, name, Icon::Lighting);
-        int mode = d.native ? 2 : d.own ? 1 : 0;
-        const std::string back = std::string("Back to ") + NativeApp(ui.lightTarget);
-        const char* modes[] = {"Same as all devices", "Its own lighting", back.c_str()};
-        bool modeChanged;
-        if (ImGui::GetContentRegionAvail().x < 640 * S()) {
-            ImGui::SetNextItemWidth(-1);
-            modeChanged = ImGui::Combo("##own", &mode, modes, 3);
+        Look look = v.GetLook();
+        const EffectInfo& e = EffectInfoFor(look.effect);
+        bool changed = false;
+        if (look.effect == ManualEffect::ColorCycle) {
+            float seconds = 1.f / std::max(look.speedHz, 0.02f);
+            if (LabeledSlider("One full cycle every", &seconds, 2.f, 60.f, "%.0f seconds")) {
+                look.speedHz = 1.f / seconds;
+                changed = true;
+            }
+        } else if (e.maxSpeed > 0) {
+            look.speedHz = std::clamp(look.speedHz, e.minSpeed, e.maxSpeed);
+            if (LabeledSlider("Speed", &look.speedHz, e.minSpeed, e.maxSpeed, e.speedFmt)) changed = true;
         } else {
-            modeChanged = Segmented("own", &mode, modes, 3, std::min(620 * S(), ImGui::GetContentRegionAvail().x));
+            Muted("This effect stays still.");
         }
-        if (modeChanged) {
-            if (mode == 1 && !d.own && d.look == Look{}) d.look = MainLook(p);  // start from what it shows now
-            if (mode != 2) d.own = mode == 1;
-            SetNative(ctl, ui.lightTarget, mode == 2);
+        if (look.effect == ManualEffect::RainbowWave || look.effect == ManualEffect::Gradient || look.effect == ManualEffect::Comet) {
+            if (DirectionRow("look-dir", &look.reverse)) changed = true;
+        }
+        if (changed) v.SetLook(look);
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+        ImGui::TextUnformatted("Travel across this zone");
+        static const char* kDirections[kFlowDirections] = {"Off", "Left to right", "Right to left", "Top down", "Bottom up"};
+        int dir = std::clamp(v.FlowDir(), 0, kFlowDirections - 1);
+        if (Segmented("zone-flow", &dir, kDirections, kFlowDirections, std::min(600 * S(), ImGui::GetContentRegionAvail().x))) {
+            v.FlowDir() = dir;
             ctl.Changed();
         }
-        if (d.native)
-            NativeNote(ui.lightTarget);
-        else if (ui.lightTarget == device::kKeyboard)
-            Muted("The Azoth shows the effect key by key, by cable or through its Omni receiver.");
-        else if (ui.lightTarget == device::kOther)
-            Muted("Devices with Windows' lighting standard (and OpenRGB's, if you use it) show this lighting, "
-                  "across each device from left to right.");
-        else if (ui.lightTarget == device::kMouse)
-            Muted("%s", ctl.logitech().mouseEffect() ? "It shows the effect LED by LED."
-                                                      : "Through G HUB it shows one color: the effect's first LED.");
-        else if (ui.lightTarget == device::kController)
-            Muted("The lightbar shows the effect's first color, by USB or Bluetooth.");
-        else if (!d.own)
-            Muted("It shows the same lighting as the rest. Pick \"Its own lighting\" to set it apart.");
-        EndCard();
-        if (d.own && !d.native && LookEditor(ctl, ui, f, d.look)) ctl.Changed();
+        if (dir != 0) {
+            if (LabeledSlider("From the first device to the last", &v.FlowSeconds(), 0.2f, 5.f, "%.1f seconds")) ctl.Changed();
+            Muted("Moving effects reach each device of this zone in turn, by where it sits in Your setup. Fans on one "
+                  "hub move as one. Games still light everything at once.");
+        } else {
+            Muted("Every device of this zone shows the same moment of the effect.");
+        }
     }
+    ImGui::Dummy(ImVec2(0, 8 * S()));
+    // Brightness: this zone's, on top of the overall one.
+    if (v.z) {
+        float b = v.z->brightness * 100.f;
+        if (LabeledSlider("Zone brightness", &b, 0.f, 100.f, "%.0f%%")) {
+            v.z->brightness = b / 100.f;
+            ctl.Changed();
+        }
+        Muted("On top of the overall brightness, %.0f%%.", ctl.config().auraCorrection.brightness * 100.0);
+    } else {
+        float b = static_cast<float>(ctl.config().auraCorrection.brightness * 100.0);
+        if (LabeledSlider("Overall brightness", &b, 0.f, 100.f, "%.0f%%")) {
+            ctl.config().auraCorrection.brightness = b / 100.0;
+            ctl.Changed();
+        }
+        Muted("For every device, in every zone.");
+    }
+    (void)ui;
+}
+
+// Devices tab: which devices follow this zone, and its name.
+void DevicesTab(ZoneView& v, UiState& ui) {
+    Controller& ctl = v.ctl;
+    Prefs& p = v.p;
+    if (v.z) {
+        if (ui.zoneNameFor != v.z->id) {
+            ui.zoneNameFor = v.z->id;
+            snprintf(ui.zoneName, sizeof ui.zoneName, "%s", v.z->name.c_str());
+        }
+        ImGui::TextUnformatted("Name");
+        ImGui::SetNextItemWidth(std::min(300 * S(), ImGui::GetContentRegionAvail().x));
+        if (ImGui::InputText("##zone-name", ui.zoneName, sizeof ui.zoneName)) {
+            v.z->name = ui.zoneName[0] ? ui.zoneName : "Zone";
+            ctl.Changed();
+        }
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        Muted("Pick the devices that follow this zone. A device is in one zone at a time: picking it here takes it out "
+              "of the zone it was in.");
+    } else {
+        Muted("Every device is listed. The ones in no zone use this lighting and the mode in the header; a device in a "
+              "zone uses that zone's lighting instead. To move a device, open its zone and pick it there.");
+    }
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    for (const char* d : LitDeviceIds(ctl)) {
+        const std::string dev = d;
+        const std::string zoneOf = ctl.ZoneKey(dev);
+        bool in = zoneOf == v.id();
+        const Zone* elsewhere = ZoneOf(p.zones, dev);
+        ImGui::BeginDisabled(!v.z);  // Everything is what's left: devices are moved out of it from a zone
+        if (Toggle(device::Name(d), &in) && v.z) {
+            MoveDevice(p.zones, dev, in ? v.z->id : "");
+            ctl.Changed();
+        }
+        ImGui::EndDisabled();
+        if (elsewhere && elsewhere->id != v.id()) {
+            ImGui::SameLine();
+            Muted("in %s", elsewhere->name.c_str());
+        } else if (!elsewhere && v.z) {
+            ImGui::SameLine();
+            Muted("in Everything");
+        }
+    }
+
+}
+
+// Games tab: what the zone shows between games (a running game always takes over its devices).
+void GamesTab(ZoneView& v, UiState& ui) {
+    Controller& ctl = v.ctl;
+    if (v.z) {
+        int idle = static_cast<int>(v.z->idle);
+        const char* labels[] = {"This zone's lighting", "Rainbow", "Off"};
+        if (Segmented("zone-idle", &idle, labels, 3, std::min(520 * S(), ImGui::GetContentRegionAvail().x))) {
+            v.z->idle = static_cast<ZoneIdle>(idle);
+            ctl.Changed();
+        }
+        Muted("%s", idle == 0 ? "Between games this zone shows the lighting set in the other tabs."
+                    : idle == 1 ? "Between games a slow rainbow turns around this zone's devices."
+                                : "Between games this zone stays dark.");
+    } else {
+        int idle = static_cast<int>(ctl.prefs().idle);
+        const char* labels[] = {"My lighting", "Rainbow", "Off", "Armoury Crate"};
+        if (Segmented("idle", &idle, labels, 4, std::min(560 * S(), ImGui::GetContentRegionAvail().x))) {
+            ctl.prefs().idle = static_cast<IdleBehavior>(idle);
+            ctl.Changed();
+        }
+        static const char* kIdleHelp[] = {
+            "Between games the lighting set in the other tabs shows.",
+            "A slow rainbow wave turns around the fans and motherboard between games.",
+            "The lights stay dark between games.",
+            "Between games LumaBridge hands devices outside your zones back to their own lighting. Zones keep their "
+            "lighting. Set up \"Armoury Crate hand-back\" on the Integrations page once to make ASUS hand-back silent.",
+        };
+        Muted("%s", kIdleHelp[idle]);
+        if (ctl.prefs().idle == IdleBehavior::Rainbow) {
+            ImGui::Dummy(ImVec2(0, 4 * S()));
+            Look l = MainLook(ctl.prefs());
+            if (RainbowBody(l, true)) {
+                SetMainLook(ctl.prefs(), l);
+                ctl.Changed();
+            }
+        }
+    }
+    Muted("A game's own lighting always takes over this zone's devices while it runs.");
+    (void)ui;
+}
+
+// The inspector: one card for the zone's mode, effect, colors, motion and devices.
+void ZoneInspector(Controller& ctl, UiState& ui, const Fonts& f, ZoneView& v) {
+    Prefs& p = ctl.prefs();
+    BeginCard("zone-inspector");
+    // Header: the zone and its mode.
+    const float modeW = 190 * S();
+    const ImVec2 head = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(head.x + 7 * S(), head.y + 12 * S()), 6 * S(), Hex(ZoneColor(p, v.id())), 16);
+    ImGui::Dummy(ImVec2(18 * S(), 0));
+    ImGui::SameLine(0, 4 * S());
+    ImGui::PushFont(f.title);
+    ImGui::TextUnformatted(v.name().c_str());
+    ImGui::PopFont();
+    const auto devices = v.Devices();
+    ImGui::SameLine(ImGui::GetContentRegionMax().x - modeW);
+    int mode = v.Manual() ? 0 : 1;
+    const char* modes[] = {"Manual", "Auto"};
+    if (Segmented("zone-mode", &mode, modes, 2, modeW)) v.SetManual(mode == 0);
+    if (devices.empty()) Muted("No devices yet. Pick them in the Devices tab.");
+    else if (v.rest()) Muted("Everything: %s. Zones replace this lighting for their own devices.", DeviceNames(devices).c_str());
+    else Muted("%s", DeviceNames(devices).c_str());
+    Muted("%s", v.Manual() ? "Manual: always shows the lighting below."
+                          : "Auto: follows the games you play, and shows the lighting below in between.");
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+
+    // What it shows now.
+    {
+        const ImVec2 a = ImGui::GetCursorScreenPos();
+        const float w = ImGui::GetContentRegionAvail().x, h = 26 * S();
+        if (v.SetupEffect()) SetupEffectPreview(SetupParamsOf(v, v.SetupEffect()), a, ImVec2(a.x + w, a.y + h));
+        else EffectStrip(ToParams(v.GetLook()), a, ImVec2(a.x + w, a.y + h), 8 * S());
+        ImGui::GetWindowDrawList()->AddRect(a, ImVec2(a.x + w, a.y + h), Hex(kBorder), 8 * S());
+        ImGui::Dummy(ImVec2(w, h + 6 * S()));
+    }
+
+    // Tabs.
+    std::vector<const char*> tabs{"Effect", "Color", "Motion", "Devices"};
+    if (!v.Manual()) tabs.push_back("Games");
+    if (ui.lightTab >= static_cast<int>(tabs.size())) ui.lightTab = 0;
+    Segmented("light-tab", &ui.lightTab, tabs.data(), static_cast<int>(tabs.size()), ImGui::GetContentRegionAvail().x);
+    ImGui::Dummy(ImVec2(0, 6 * S()));
+    switch (ui.lightTab) {
+    case 0: EffectTab(v, ui, f); break;
+    case 1: ColorsTab(v, ui); break;
+    case 2: MotionTab(v, ui); break;
+    case 3: DevicesTab(v, ui); break;
+    default: GamesTab(v, ui); break;
+    }
+    EndCard();
+}
+
+// "What's plugged in?": things LumaBridge found on USB that it can only light well when told
+// what is connected. Answers are kept; "ask me later" hides a question for this session.
+void PluggedInCard(Controller& ctl, UiState& ui, const Fonts& f) {
+    Prefs& p = ctl.prefs();
+    // Nollie hubs: the hub can't tell what is on its channels.
+    for (const NollieDevice& d : ctl.nollie().devices()) {
+        if (!d.problem.empty() || !p.nollieLighting) continue;
+        const nollie::Model* model = nollie::Find(d.vid, d.pid);
+        if (!model) continue;
+        bool configured = false;
+        for (const auto& [key, c] : p.nollieChannels)
+            if (key.rfind(d.id + ".", 0) == 0 && c.kind != nollie::Kind::Unused) configured = true;
+        const bool asked = std::find(p.nollieAsked.begin(), p.nollieAsked.end(), d.id) != p.nollieAsked.end();
+        const bool later = std::find(ui.pluggedLater.begin(), ui.pluggedLater.end(), d.id) != ui.pluggedLater.end();
+        if (configured || asked || later) continue;
+        BeginCard("plugged-in");
+        IconItem(Icon::Plug, 18 * S(), Hex(kAccent));
+        ImGui::SameLine(0, 10 * S());
+        ImGui::PushFont(f.bold);
+        ImGui::Text("I found a %s. What is plugged into it?", d.name.c_str());
+        ImGui::PopFont();
+        Muted("The hub can't tell me, so say what is on each channel: fans, an LED strip, or nothing. \"Light it\" "
+              "lights that channel so you can see which header it is. Fans each get their own lighting.");
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        const int shown = ui.pluggedAll ? d.channels : std::min(d.channels, 8);
+        for (int zone = 0; zone < shown; ++zone) {
+            const std::string key = nollie::Key(d.id, zone);
+            nollie::Channel c = p.nollieChannels.count(key) ? p.nollieChannels[key] : nollie::Channel{};
+            bool changed = false;
+            ImGui::PushID(zone);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(nollie::ChannelName(zone).c_str());
+            ImGui::SameLine(120 * S());
+            int kind = static_cast<int>(c.kind);
+            const char* kinds[] = {"Nothing", "LED strip", "Fans"};
+            if (Segmented("kind", &kind, kinds, 3, 260 * S())) {
+                c.kind = static_cast<nollie::Kind>(kind);
+                changed = true;
+            }
+            if (c.kind == nollie::Kind::Fans) {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(84 * S());
+                if (ImGui::InputInt("##fans", &c.fans, 1, 1)) {
+                    c.fans = std::clamp(c.fans, 1, 16);
+                    changed = true;
+                }
+                ImGui::SameLine();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("fans of");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(84 * S());
+                if (ImGui::InputInt("##per", &c.ledsPerFan, 1, 4)) {
+                    c.ledsPerFan = std::clamp(c.ledsPerFan, 1, 120);
+                    changed = true;
+                }
+                ImGui::SameLine();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("LEDs");
+            } else if (c.kind == nollie::Kind::Strip) {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(100 * S());
+                if (ImGui::InputInt("##len", &c.ledsPerFan, 1, 5)) {
+                    c.ledsPerFan = std::clamp(c.ledsPerFan, 1, d.maxLeds);
+                    changed = true;
+                }
+                ImGui::SameLine();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("LEDs");
+            }
+            if (c.kind != nollie::Kind::Unused) {
+                ImGui::SameLine();
+                const bool testing = ctl.nollieTest() == key;
+                if (SmallBtn(testing ? "Stop" : "Light it")) ctl.SetNollieTest(testing ? "" : key);
+            }
+            ImGui::PopID();
+            if (changed) {
+                p.nollieChannels[key] = c;
+                ctl.Changed();
+            }
+        }
+        if (d.channels > shown && SmallBtn("Show all channels")) ui.pluggedAll = true;
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        if (PrimaryButton("Done")) {
+            p.nollieAsked.push_back(d.id);
+            ctl.SetNollieTest("");
+            ctl.Changed();
+        }
+        ImGui::SameLine();
+        if (Btn("Ask me later")) {
+            ui.pluggedLater.push_back(d.id);
+            ctl.SetNollieTest("");
+        }
+        EndCard();
+    }
+    // The motherboard's ARGB header: how many fans are on it.
+    bool argb = false;
+    for (const auto& dev : ctl.auraStatus().devices) argb = argb || dev.type == 0x00011000;
+    if (argb && ctl.auraStatus().connected && !p.fansAsked && !ui.pluggedFansLater && ctl.config().argbFans == fx::FanLayout{}) {
+        BeginCard("plugged-fans");
+        IconItem(Icon::Plug, 18 * S(), Hex(kAccent));
+        ImGui::SameLine(0, 10 * S());
+        ImGui::PushFont(f.bold);
+        ImGui::TextUnformatted("Your motherboard has an ARGB header. How many fans are on it?");
+        ImGui::PopFont();
+        Muted("Fans chained on the header count in order. The fan's box says how many LEDs each has; \"Light them\" "
+              "shows each fan in its own color with one white LED, so you can check the count.");
+        fx::FanLayout& l = ctl.config().argbFans;
+        const float w = std::min(200 * S(), ImGui::GetContentRegionAvail().x / 2 - 8 * S());
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Fans");
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderInt("##plug-fans", &l.fans, 1, 8, "%d", ImGuiSliderFlags_AlwaysClamp)) ctl.Changed();
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 16 * S());
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("LEDs per fan");
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::InputInt("##plug-leds", &l.ledsPerFan, 1, 4)) {
+            l.ledsPerFan = l.LedsPerFan();
+            ctl.Changed();
+        }
+        ImGui::EndGroup();
+        bool test = ctl.fanTest();
+        if (Toggle("Light them", &test)) ctl.SetFanTest(test);
+        if (PrimaryButton("That's right")) {
+            p.fansAsked = true;
+            ctl.SetFanTest(false);
+            ctl.Changed();
+        }
+        ImGui::SameLine();
+        if (Btn("Ask me later")) {
+            ui.pluggedFansLater = true;
+            ctl.SetFanTest(false);
+        }
+        EndCard();
+    }
+}
+
+// The Lighting page: the zones at the side (Everything first, then your own), your setup live in
+// the middle, one inspector on the right. Narrower windows put the zones on top and stack the rest.
+void LightingPage(Controller& ctl, UiState& ui, const Fonts& f) {
+    Prefs& p = ctl.prefs();
+    PluggedInCard(ctl, ui, f);
+    if (!ui.zone.empty() && !FindZone(p.zones, ui.zone)) ui.zone.clear();
+    ZoneView v{ctl, p, ui.zone.empty() ? nullptr : FindZone(p.zones, ui.zone)};
+    // Adding or deleting a zone moves the others in memory: look the selected one up again.
+    auto refresh = [&] { v.z = ui.zone.empty() ? nullptr : FindZone(p.zones, ui.zone); };
+
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const bool three = avail >= 1240 * S();  // zones | setup | inspector
+    const bool two = avail >= 960 * S();     // setup | inspector, zones above
+    if (!three) {
+        ZoneBar(ctl, ui);
+        refresh();
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+    }
+    const int columns = three ? 3 : two ? 2 : 1;
+    if (ImGui::BeginTable("lighting-main", columns, ImGuiTableFlags_SizingStretchProp)) {
+        if (three) ImGui::TableSetupColumn("Zones", ImGuiTableColumnFlags_WidthFixed, 230 * S());
+        if (columns >= 2) {
+            ImGui::TableSetupColumn("Setup", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Inspector", ImGuiTableColumnFlags_WidthFixed, 470 * S());
+        }
+        if (three) {
+            ImGui::TableNextColumn();
+            ZoneList(ctl, ui, f);
+            refresh();
+        }
+        ImGui::TableNextColumn();
+        BeginCard("lighting-setup");
+        const ImVec2 top = ImGui::GetCursorPos();
+        CardTitle(f, v.rest() ? "Your setup" : ("Your setup: " + v.name()).c_str(), Icon::Grid);
+        const ImVec2 below = ImGui::GetCursorPos();
+        ImGui::SetCursorPos(ImVec2(ImGui::GetContentRegionMax().x - 120 * S(), top.y - 4 * S()));
+        int view = p.lighting3d ? 1 : 0;
+        const char* views[] = {"2D", "3D"};
+        if (Segmented("view2d3d", &view, views, 2, 120 * S())) {
+            p.lighting3d = view == 1;
+            ctl.Changed();
+        }
+        ImGui::SetCursorPos(below);
+        Muted("%s", v.rest() ? (p.lighting3d ? "Every device. Click one to edit its zone. What you choose shows here as it happens."
+                                             : "Every device. Click one to edit its zone, drag to arrange. Effects that travel follow this arrangement.")
+                             : "Only this zone's devices. Pick them in the Devices tab; Everything shows all of them.");
+        ImGui::Dummy(ImVec2(0, 6 * S()));
+        SetupCanvas(ctl, ui, true);
+        if (p.lighting3d) {
+            if (SmallBtn("Reset view")) ui.lightView.camSet = false;
+        } else if (SmallBtn("Reset layout")) {
+            auto& spots = p.setupSpots;
+            for (auto it = spots.begin(); it != spots.end();)
+                it = it->first.rfind("desk:", 0) == 0 ? std::next(it) : spots.erase(it);
+            ctl.Changed();
+        }
+        if (!ctl.output().label.empty()) {
+            ImGui::SameLine();
+            Muted("Now: %s", ctl.output().label.c_str());
+        }
+        EndCard();
+        if (columns >= 2) ImGui::TableNextColumn();
+        ZoneInspector(ctl, ui, f, v);
+        ImGui::EndTable();
+    }
+    refresh();
+
+    // Only Nollie hubs can do these: shown with the zone that has the Nollie fans.
+    const auto devices = v.Devices();
+    if (std::find(devices.begin(), devices.end(), device::kNollie) != devices.end() && !DeviceNative(p, device::kNollie)) {
+        ImGui::PushID("nollie-extras");
+        NollieLightingPage(ctl, ui, f);
+        ImGui::PopID();
+    }
+    const bool anyAuto = p.mode == Mode::Auto || std::any_of(p.zones.begin(), p.zones.end(), [](const Zone& z) { return !z.manual; });
+    if (anyAuto) AutoGamesCard(ctl, f);
 }
 
 void FansCard(Controller& ctl, const Fonts& f) {
@@ -5249,6 +5864,17 @@ DeviceStatus OpenRgbStatus(const Controller& ctl, const OpenRgbDevice& d) {
                                                       "LumaBridge lights this device directly, so it's left out here."};
     return ctl.output().stopped ? DeviceStatus{"Its own effect", kMuted}
                                 : DeviceStatus{"Following LumaBridge, via OpenRGB", kGreen};
+}
+
+DeviceStatus NollieStatus(const Controller& ctl, const NollieDevice& d) {
+    if (!d.problem.empty()) return {"Can't light it", kAmber, d.problem};
+    if (!ctl.prefs().nollieLighting) return {"Detected, control off", kMuted, "Enable Nollie lighting in Integrations."};
+    if (!ctl.NollieOn(d)) return {"Off", kMuted};
+    bool any = false;
+    for (const auto& [key, c] : ctl.prefs().nollieChannels)
+        if (key.rfind(d.id + ".", 0) == 0 && c.kind != nollie::Kind::Unused) any = true;
+    if (!any) return {"Set up its channels", kAmber, "LumaBridge doesn't know what is plugged in, so it sends nothing yet."};
+    return ctl.output().stopped ? DeviceStatus{"Its own effect", kMuted} : DeviceStatus{"Following LumaBridge", kGreen};
 }
 
 DeviceStatus LampArrayStatus(const Controller& ctl, const LampArrayDevice& d) {
@@ -5372,7 +5998,7 @@ void LogitechCard(Controller& ctl, const Fonts& f) {
     ImGui::Dummy(ImVec2(0, 2 * S()));
     bool enabled = ctl.prefs().logitechDevices;
     if (Toggle("Light Logitech devices", &enabled)) ctl.SetLogitechEnabled(enabled);
-    if (ImGui::IsItemHovered() && !lg.dllPath().empty()) ImGui::SetTooltip("%s", Utf8(lg.dllPath()).c_str());
+    if (ImGui::IsItemHovered() && !lg.dllPath().empty()) Tooltip("%s", Utf8(lg.dllPath()).c_str());
     bool force = ctl.prefs().logitechForce;
     if (Toggle("Keep them with LumaBridge, even when a game lights them", &force)) {
         ctl.prefs().logitechForce = force;
@@ -6623,7 +7249,7 @@ void PadLiveCard(Controller& ctl, const Fonts& f, const PadInput::Snapshot& snap
         ctl.Changed();
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Stick, trigger, touch and motion values, a few times a second.\n"
+        Tooltip("Stick, trigger, touch and motion values, a few times a second.\n"
                           "Off by default: they change many times a second.");
     ImGui::SameLine(lineEnd - 140 * S());
     int view = ctl.prefs().padView3d ? 1 : 0;
@@ -6818,12 +7444,58 @@ void DualSenseCard(Controller& ctl, const Fonts& f) {
     BeginCard("dualsense");
     CardTitle(f, "Settings", Icon::Gear);
     Muted("USB and Bluetooth lightbar control are confirmed working.");
-    Muted("The lightbar follows LumaBridge's effect as one color, by USB cable or Bluetooth. LumaBridge talks to "
+    Muted("The lightbar follows LumaBridge's effect, by USB cable or Bluetooth. For moving effects it shows the "
+          "average color of the effect, and the five player LEDs below the touchpad show the movement. LumaBridge talks to "
           "the controller directly (no Steam or extra software needed), and never saves anything to it, so it goes "
           "back to whatever the game or Steam set as soon as LumaBridge lets go.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
     bool enabled = ctl.prefs().dualsenseController;
     if (Toggle("Light the DualSense lightbar", &enabled)) ctl.SetDualSenseEnabled(enabled);
+    if (enabled) {
+        Prefs& prefs = ctl.prefs();
+        if (Toggle("Enable player indicator lights", &prefs.dualsensePlayerLeds)) ctl.Changed();
+        if (prefs.dualsensePlayerLeds) {
+            auto& options = prefs.dualsensePlayers;
+            const char* modes[] = {"Follow the lighting effect", "Steady", "Chase", "Breathing meter", "Blink"};
+            if (ImGui::Combo("Indicator pattern", &options.mode, modes, 5)) ctl.Changed();
+            if (options.mode >= 2) {
+                float speed = static_cast<float>(options.speed);
+                if (LabeledSlider("Indicator speed", &speed, 0.1f, 3.f, "%.1f cycles per second")) {
+                    options.speed = speed;
+                    ctl.Changed();
+                }
+            }
+            ImGui::TextUnformatted("Lights to use (left to right)");
+            for (int i = 0; i < 5; ++i) {
+                if (i) ImGui::SameLine();
+                bool on = (options.mask & (1 << i)) != 0;
+                const std::string label = std::to_string(i + 1) + "##player";
+                if (ImGui::Checkbox(label.c_str(), &on)) {
+                    options.mask = static_cast<uint8_t>(on ? options.mask | (1 << i) : options.mask & ~(1 << i));
+                    ctl.Changed();
+                }
+            }
+            if (ImGui::TreeNode("Enable indicators for effects")) {
+                if (Btn("Enable all##player-effects")) { options.effects = 0xFFFFFFFFu; ctl.Changed(); }
+                ImGui::SameLine();
+                if (Btn("Disable all##player-effects")) { options.effects = 0; ctl.Changed(); }
+                for (int kind = 0; kind < static_cast<int>(std::size(kEffects)); ++kind) {
+                    bool on = (options.effects & (uint32_t{1} << kind)) != 0;
+                    const std::string label = std::string(EffectInfoFor(static_cast<fx::Kind>(kind)).name) + "##player-effect";
+                    if (ImGui::Checkbox(label.c_str(), &on)) {
+                        const uint32_t bit = uint32_t{1} << kind;
+                        options.effects = on ? options.effects | bit : options.effects & ~bit;
+                        ctl.Changed();
+                    }
+                }
+                ImGui::TreePop();
+            }
+            Muted("These switches affect only the five white indicators. Customize the controller's color, effect, "
+                  "brightness and direction on the Lighting page. The indicators have no brightness dimmer; "
+                  "breathing uses a level meter. Follow mode leaves still colors and rainbows off.");
+        }
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+    }
     if (enabled) {
         ImGui::SameLine();
         using D_ = DualSenseOutput::State;
@@ -6904,11 +7576,12 @@ void HardwareCard(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f
     } else if (setUp && st == H::NoPawnIO) {
         Muted("The PawnIO driver isn't installed any more. Set up again to reinstall it.");
     }
+    if (hw.helperOutdated()) Muted("The installed helper is older than this app. Update hardware access to get the RAM and handoff fixes.");
     if (!setUp || st == H::NoPawnIO) {
         SetUpHelperButton(in, setup);
     } else {
         ImGui::BeginDisabled(in.Busy());
-        if (SmallBtn("Set up again")) in.Install("helper");
+        if (SmallBtn(hw.helperOutdated() ? "Update hardware access" : "Set up again")) in.Install("helper");
         ImGui::SameLine();
         if (SmallBtn("Remove")) in.Remove("helper");
         ImGui::EndDisabled();
@@ -6945,6 +7618,9 @@ void MemoryCard(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f) 
     Muted("HyperX / Kingston FURY RGB DDR4 sticks show LumaBridge's effect across their five LEDs (supported AMD and Intel chipsets; Intel is experimental). "
           "LumaBridge only ever writes the sticks' lighting registers, never their configuration chip. If the sticks "
           "flicker, Armoury Crate is lighting them too: switch the RAM off in Armoury Crate.");
+    if (hw.ramFrameMicros())
+        Muted("Latest RAM bus transaction: %.1f ms. %u frames delivered. Actual animation rate also depends on the effect and bus availability.",
+              hw.ramFrameMicros() / 1000.0, hw.ramFrames());
     if (on && setUp && hw.ramState() == HardwareHelper::RamState::Problem) {
         ImGui::PushStyleColor(ImGuiCol_Text, V4(kRed));
         ImGui::TextWrapped("%s", hw.ramProblem().c_str());
@@ -7070,25 +7746,30 @@ void DeviceLightingCard(Controller& ctl, UiState& ui, const Fonts& f, const char
             return;
         }
     }
-    if (own) {
+    if (const Zone* zone = ZoneOf(p.zones, ZoneDevice(id))) {
+        const ImVec2 a = ImGui::GetCursorScreenPos();
+        const float w = std::min(260 * S(), ImGui::GetContentRegionAvail().x);
+        EffectStrip(ToParams(zone->look), a, ImVec2(a.x + w, a.y + 16 * S()), 8 * S());
+        ImGui::Dummy(ImVec2(w, 16 * S()));
+        Muted("In the zone \"%s\" (%s).", zone->name.c_str(), zone->manual ? "manual" : "auto");
+    } else if (own) {
         const Look l = it->second.look;
         const ImVec2 a = ImGui::GetCursorScreenPos();
         const float w = std::min(260 * S(), ImGui::GetContentRegionAvail().x);
         EffectStrip(ToParams(l), a, ImVec2(a.x + w, a.y + 16 * S()), 8 * S());
         ImGui::Dummy(ImVec2(w, 16 * S()));
-        Muted("Its own lighting: %s.", kEffects[static_cast<int>(l.effect)].name);
+        Muted("Its own lighting: %s.", EffectInfoFor(l.effect).name);
     } else {
         Muted("It shows the main lighting, like the other devices.");
     }
-    Muted("Brightness: %.0f%% of the overall %.0f%%.%s", DeviceBrightness(p, id) * 100.0,
+    Muted("Brightness: %.0f%% of the overall %.0f%%.%s", ctl.Level(id) * 100.0,
           ctl.config().auraCorrection.brightness * 100.0, DeviceReversed(p, id) ? " Direction: left." : " Direction: right.");
     ImGui::Dummy(ImVec2(0, 2 * S()));
-    if (PrimaryButton("Change its lighting")) {
+    if (PrimaryButton("Change its lighting or zone")) {
         ui.page = Page::Lighting;
+        ui.zone = ctl.ZoneKey(id);
         ui.lightTarget = id;
     }
-    if (p.mode == Mode::Auto)
-        Muted("Its own lighting and colors are set in Manual mode; games light every device alike.");
     EndCard();
 }
 
@@ -7252,7 +7933,7 @@ void HardwareInventoryCard(Controller& ctl, UiState& ui, const Fonts& f, const s
                     ui.deviceDetail = "hardware:" + d.id;
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                    ImGui::SetTooltip("%s\n%s\nClick for details", d.manufacturer.empty() ? "Unknown manufacturer" : d.manufacturer.c_str(),
+                    Tooltip("%s\n%s\nClick for details", d.manufacturer.empty() ? "Unknown manufacturer" : d.manufacturer.c_str(),
                                       d.id.c_str());
                 }
                 ImGui::SetCursorPos(ImVec2(cell.x, cell.y + 3 * S()));
@@ -7320,6 +8001,534 @@ void MemorySticksCard(UiState& ui, const Fonts& f, const sensors::SystemSnapshot
         ImGui::EndTable();
     }
     EndCard();
+}
+
+// Lighting > Nollie hubs: a hub's travelling effects, sequence, gradient and refresh rate.
+void NollieHubEffects(Controller& ctl, UiState& ui, const Fonts& f, const NollieDevice& d, const nollie::Model* model) {
+    Prefs& p = ctl.prefs();
+    // Effects across the whole hub: travelling through the channels, sequences, gradient.
+    nollie::Hub& hub = p.nollieHubs[d.id];
+    BeginCard("nollie-travel");
+    CardTitle(f, "Travelling effects", Icon::Lighting);
+    int travel = static_cast<int>(hub.travel);
+    const char* travels[] = {"Same everywhere", "Travels, first to last", "Travels, last to first"};
+    if (Segmented("nollie-travel", &travel, travels, 3, std::min(620 * S(), ImGui::GetContentRegionAvail().x))) {
+        hub.travel = static_cast<nollie::Travel>(travel);
+        ctl.Changed();
+    }
+    if (hub.travel != nollie::Travel::Off) {
+        // The way the effect goes, as set up below.
+        std::vector<std::pair<int, nollie::Channel>> used;
+        for (int z = 0; z < d.channels; ++z) {
+            auto it = p.nollieChannels.find(nollie::Key(d.id, z));
+            if (it != p.nollieChannels.end() && it->second.kind != nollie::Kind::Unused) used.emplace_back(z, it->second);
+        }
+        if (hub.travel == nollie::Travel::Backward) std::reverse(used.begin(), used.end());
+        std::string way;
+        for (const auto& [z, c] : used) {
+            const int parts = c.Segments();
+            way += (way.empty() ? "" : "  >  ") + nollie::DisplayName(c, z) +
+                   (c.kind == nollie::Kind::Strip ? " (strip)" : parts > 1 ? " (" + std::to_string(parts) + " fans, one by one)" : " (fans)");
+        }
+        if (way.empty()) Muted("Set up a channel below: the effect travels through the channels you use.");
+        else Muted("The way it goes: %s.", way.c_str());
+        ImGui::Dummy(ImVec2(0, 2 * S()));
+        int smooth = hub.smooth ? 1 : 0;
+        const char* steps[] = {"Fan by fan", "Smooth, LED by LED"};
+        if (Segmented("nollie-smooth", &smooth, steps, 2, std::min(420 * S(), ImGui::GetContentRegionAvail().x))) {
+            hub.smooth = smooth == 1;
+            ctl.Changed();
+        }
+        Muted("%s", hub.smooth ? "Every LED has its own moment, so the effect flows from one fan into the next."
+                               : "Each fan (or strip) takes the effect a step after the one before it.");
+        if (LabeledSlider("From the first LED to the last", &hub.travelSeconds, 0.2f, 5.f, "%.2f seconds")) ctl.Changed();
+        Muted("Moving effects travel (rainbow wave, comet, breathing, color cycle, ...). Games light every channel at once.");
+    } else {
+        Muted("Every fan and strip shows the same moment of the effect. Pick a direction to make it start on one fan "
+              "and move on to the next.");
+    }
+    // A sequence across the fans, in place of the lighting.
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    ImGui::TextUnformatted("Sequence");
+    {
+        std::vector<const char*> names;
+        for (int i = 0; i < nollie::kSequences; ++i) names.push_back(i == 0 ? "None: the lighting above" : nollie::SequenceName(static_cast<nollie::Sequence>(i)));
+        int seq = static_cast<int>(hub.sequence.kind);
+        ImGui::SetNextItemWidth(std::min(360 * S(), ImGui::GetContentRegionAvail().x));
+        if (ImGui::Combo("##nollie-seq", &seq, names.data(), static_cast<int>(names.size()))) {
+            hub.sequence.kind = static_cast<nollie::Sequence>(seq);
+            ctl.Changed();
+        }
+    }
+    if (hub.sequence.kind != nollie::Sequence::None) {
+        static const char* kWhat[] = {"",
+            "Fan 1 fills up around its ring, then fan 2, and so on until every fan is lit; then they all go dark and it starts over.",
+            "The fans fill up one after another, then empty again in the same order.",
+            "One fan lights up and fades out, then the next.",
+            "The fans fill up one after another, each in its own color of the rainbow.",
+            "A comet runs through every fan and strip to the end and back.",
+            "A dot runs to the end and stays there; the next one stacks behind it until everything is lit."};
+        Muted("%s It goes in the travel's order (first to last unless set to last to first), and shows instead of each "
+              "channel's lighting. Games still light every channel at once.", kWhat[static_cast<int>(hub.sequence.kind)]);
+        float secs = static_cast<float>(hub.sequence.partSeconds);
+        if (LabeledSlider("Time per fan", &secs, 0.1f, 5.f, "%.2f seconds")) {
+            hub.sequence.partSeconds = secs;
+            ctl.Changed();
+        }
+        const float tabW = std::min(200 * S(), ImGui::GetContentRegionAvail().x / 2 - 6 * S());
+        const bool rainbow = hub.sequence.kind == nollie::Sequence::RainbowStack;
+        if (!rainbow) {
+            if (ColorTab("Lit##nollie-seq-c1", hub.sequence.color1, ui.nollieSeqColor == 0, tabW)) ui.nollieSeqColor = 0;
+            ImGui::SameLine(0, 12 * S());
+        } else {
+            ui.nollieSeqColor = 1;
+        }
+        if (ColorTab("Unlit##nollie-seq-c2", hub.sequence.color2, ui.nollieSeqColor == 1, tabW)) ui.nollieSeqColor = 1;
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        Rgb* editing = ui.nollieSeqColor == 0 ? &hub.sequence.color1 : &hub.sequence.color2;
+        if (ColorEditor(ctl, ui, editing, ui.nollieSeqColor == 0 ? "nollie-seq-lit" : "nollie-seq-unlit")) ctl.Changed();
+        if (Btn("Start over")) ctl.RestartNollieSequence(d.id);
+        ImGui::SameLine();
+        Muted("Each channel's brightness and direction still apply.");
+    }
+    ImGui::Dummy(ImVec2(0, 4 * S()));
+    int rate = hub.refreshHz >= 45 ? 1 : 0;
+    const char* rates[] = {"30 Hz", "60 Hz"};
+    ImGui::TextUnformatted("Refresh rate");
+    if (Segmented("nollie-hz", &rate, rates, 2, std::min(260 * S(), ImGui::GetContentRegionAvail().x))) {
+        hub.refreshHz = rate == 1 ? 60 : 30;
+        ctl.Changed();
+    }
+    if (ctl.nollie().state() == NollieOutput::State::Running && d.fps > 0.5)
+        Muted("Sending %.1f frames a second (only frames that change are sent; a still color is sent every 5 s).", d.fps);
+    else
+        Muted("Frames are timed to a fraction of a millisecond; only frames that change are sent.");
+    if (model && model->family == nollie::Family::Hs && hub.refreshHz == 60)
+        Muted("This hub needs a short pause after two of its channels every frame, so it may stay a little under 60.");
+    EndCard();
+
+    // A gradient along the fans, in place of the effects' main color.
+    BeginCard("nollie-gradient");
+    CardTitle(f, "Gradient", Icon::Palette);
+    nollie::Gradient& g = hub.gradient;
+    bool gradientOn = g.on;
+    if (Toggle("Color gradient across the fans", &gradientOn)) {
+        g.on = gradientOn;
+        ctl.Changed();
+    }
+    Muted("The colors run along your fans and strips in channel order, from the first LED to the last. They take "
+          "the place of the effect's main color, so a still color becomes a still gradient, breathing breathes in "
+          "the gradient, a comet changes color as it goes, and sequences light up in it. Rainbows keep their own "
+          "colors; games keep theirs.");
+    if (g.on) {
+        // The gradient itself, as a bar.
+        {
+            const ImVec2 a = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x, h = 18 * S();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const int steps = 64;
+            const double t = ImGui::GetTime();
+            for (int i = 0; i < steps; ++i) {
+                const float x0 = a.x + w * i / steps, x1 = a.x + w * (i + 1) / steps + 1;
+                dl->AddRectFilled(ImVec2(x0, a.y), ImVec2(x1, a.y + h), Col(nollie::GradientAt(g, (i + 0.5) / steps, t)));
+            }
+            dl->AddRect(a, ImVec2(a.x + w, a.y + h), Hex(kBorder), 4 * S());
+            ImGui::Dummy(ImVec2(w, h + 4 * S()));
+        }
+        if (ui.nollieStop >= static_cast<int>(g.stops.size())) ui.nollieStop = 0;
+        const float tabW = std::min(150 * S(), (ImGui::GetContentRegionAvail().x - 12 * S() * 5) / 6);
+        for (size_t i = 0; i < g.stops.size(); ++i) {
+            if (i) ImGui::SameLine(0, 12 * S());
+            const std::string label = "Color " + std::to_string(i + 1) + "##nollie-stop" + std::to_string(i);
+            if (ColorTab(label.c_str(), g.stops[i], ui.nollieStop == static_cast<int>(i), tabW)) ui.nollieStop = static_cast<int>(i);
+        }
+        if (g.stops.size() < nollie::kMaxGradientStops && SmallBtn("+ Color")) {
+            g.stops.push_back(g.stops.back());
+            ui.nollieStop = static_cast<int>(g.stops.size()) - 1;
+            ctl.Changed();
+        }
+        if (g.stops.size() > 2) {
+            ImGui::SameLine();
+            if (SmallBtn("- Remove this color")) {
+                g.stops.erase(g.stops.begin() + ui.nollieStop);
+                ui.nollieStop = 0;
+                ctl.Changed();
+            }
+        }
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+        const std::string slot = "nollie-stop-" + std::to_string(ui.nollieStop);
+        if (ColorEditor(ctl, ui, &g.stops[static_cast<size_t>(ui.nollieStop)], slot.c_str())) ctl.Changed();
+        float flow = static_cast<float>(g.flow);
+        if (LabeledSlider("Gradient moves", &flow, -1.f, 1.f, flow == 0 ? "Still" : "%.2f rounds a second")) {
+            g.flow = std::fabs(flow) < 0.02f ? 0 : flow;
+            ctl.Changed();
+        }
+        Muted("Still: from the first color to the last. Moving, it loops through the colors and back to the first; "
+              "below zero it moves the other way.");
+    }
+    EndCard();
+
+}
+
+// Lighting > Nollie hubs: one channel's lighting, or one of its fans'.
+void NollieChannelLighting(Controller& ctl, UiState& ui, const Fonts& f, const NollieDevice& d, int zone) {
+    Prefs& p = ctl.prefs();
+    const std::string key = nollie::Key(d.id, zone);
+    const std::string lightingId = nollie::LightingId(d.id, zone);
+    auto found = p.nollieChannels.find(key);
+    if (found == p.nollieChannels.end() || found->second.kind == nollie::Kind::Unused) return;
+    const nollie::Channel& c = found->second;
+    const std::string title = nollie::DisplayName(c, zone);
+
+    // With each fan on its own, pick the whole channel or one fan.
+    const int parts = c.Segments();
+    if (ui.nollieFan >= parts) ui.nollieFan = -1;
+    if (parts > 1) {
+        std::vector<std::string> names{"Whole channel"};
+        for (int i = 0; i < parts; ++i) names.push_back("Fan " + std::to_string(i + 1));
+        std::vector<const char*> labels;
+        for (const auto& n : names) labels.push_back(n.c_str());
+        int sel = ui.nollieFan + 1;
+        bool picked;
+        if (parts <= 5) {
+            picked = Segmented("nollie-fan", &sel, labels.data(), static_cast<int>(labels.size()),
+                               std::min(620 * S(), ImGui::GetContentRegionAvail().x));
+        } else {
+            ImGui::SetNextItemWidth(std::min(320 * S(), ImGui::GetContentRegionAvail().x));
+            picked = ImGui::Combo("##nollie-fan", &sel, labels.data(), static_cast<int>(labels.size()));
+        }
+        if (picked) ui.nollieFan = sel - 1;
+        ImGui::Dummy(ImVec2(0, 4 * S()));
+    }
+    if (parts > 1 && ui.nollieFan >= 0) {
+        // One fan: the channel's lighting, or its own.
+        const int fan = ui.nollieFan;
+        DeviceLighting& fl = p.deviceLighting[nollie::FanLightingId(d.id, zone, fan)];
+        BeginCard("nollie-fan-lighting");
+        const std::string fanTitle = "Fan " + std::to_string(fan + 1) + " of " + title;
+        CardTitle(f, fanTitle.c_str(), Icon::Fan);
+        int fanMode = fl.own ? 1 : 0;
+        const char* fanModes[] = {"Same as the channel", "Its own lighting"};
+        if (Segmented("nollie-fan-own", &fanMode, fanModes, 2, std::min(420 * S(), ImGui::GetContentRegionAvail().x))) {
+            if (fanMode == 1 && !fl.own && fl.look == Look{}) fl.look = DeviceLook(p, lightingId);
+            fl.own = fanMode == 1;
+            ctl.Changed();
+        }
+        float b = fl.brightness * 100.f;
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::SliderFloat("##nollie-fan-brightness", &b, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
+            fl.brightness = b / 100.f;
+            ctl.Changed();
+        }
+        Muted("Brightness of this fan, on top of the channel's. Fans count from the one the hub's cable goes into.");
+        EndCard();
+        if (fl.own && LookEditor(ctl, ui, f, fl.look)) ctl.Changed();
+        return;
+    }
+
+    // Its own lighting, like any other device.
+    DeviceLighting& l = p.deviceLighting[lightingId];
+    BeginCard("nollie-lighting");
+    CardTitle(f, "Lighting", Icon::Lighting);
+    int mode = l.native ? 2 : l.own ? 1 : 0;
+    const char* modes[] = {"Same as all devices", "Its own lighting", "Back to Nollie's app"};
+    if (Segmented("nollie-own", &mode, modes, 3, std::min(620 * S(), ImGui::GetContentRegionAvail().x))) {
+        if (mode == 1 && !l.own && l.look == Look{}) l.look = MainLook(p);
+        if (mode != 2) l.own = mode == 1;
+        ctl.SetDeviceNative(lightingId, mode == 2);
+        ctl.Changed();
+    }
+    if (l.native) {
+        Muted("LumaBridge sends nothing to this channel. Whatever the hub was last given stays until it loses power.");
+    } else {
+        float b = l.brightness * 100.f;
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::SliderFloat("##nollie-brightness", &b, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
+            l.brightness = b / 100.f;
+            ctl.Changed();
+        }
+        Muted("Brightness of this channel, on top of the overall %.0f%%.", ctl.config().auraCorrection.brightness * 100.0);
+        if (DirectionRow("nollie-dir", &l.reverse)) ctl.Changed();
+        Muted("Which way moving effects run on this channel.");
+    }
+    EndCard();
+    if (l.own && !l.native && LookEditor(ctl, ui, f, l.look)) ctl.Changed();
+}
+
+// Devices > a Nollie hub: the effect that plays when LumaBridge starts lighting the hub. The hub is
+// dark until a program sends it colors, so this is LumaBridge's own start-up show.
+void NollieBootCard(Controller& ctl, UiState& ui, const Fonts& f, const NollieDevice& d) {
+    nollie::Hub& hub = ctl.prefs().nollieHubs[d.id];
+    BeginCard("nollie-boot");
+    CardTitle(f, "Boot effect", Icon::Lighting);
+    bool boot = hub.boot;
+    if (Toggle("Play an effect at start-up", &boot)) {
+        hub.boot = boot;
+        ctl.Changed();
+    }
+    Muted("Plays when LumaBridge starts lighting this hub: when Windows starts (if LumaBridge starts with it), "
+          "when the PC wakes up, or when the hub is plugged in again. The hub is dark until then: it only shows "
+          "what a program sends it. Only channels you have set up play it.");
+    if (hub.boot) {
+        if (LabeledSlider("Plays for", &hub.bootSeconds, 1.f, 30.f, "%.0f seconds")) ctl.Changed();
+        if (Btn(ui.nollieBootEdit ? "Close the boot effect" : "Edit the boot effect")) ui.nollieBootEdit = !ui.nollieBootEdit;
+        ImGui::SameLine();
+        if (Btn("Play it now")) ctl.PlayNollieBoot(d.id);
+        Muted("It follows the hub's travelling effect order, if you set one on the Lighting page.");
+    }
+    EndCard();
+    if (hub.boot && ui.nollieBootEdit) {
+        BeginCard("boot-reveal");
+        CardTitle(f, "Across the hub at start-up", Icon::Lighting);
+        const char* reveals[] = {"Fill to solid", "Fill to pulse", "Center to solid", "Center to pulse", "Ignite to solid", "Ignite to pulse"};
+        int reveal = fx::IsSettlingEffect(hub.bootLook.effect) ? static_cast<int>(hub.bootLook.effect) - static_cast<int>(fx::Kind::FillSolid) : -1;
+        if (ImGui::Combo("Reveal", &reveal, reveals, 6)) {
+            hub.bootLook.effect = static_cast<fx::Kind>(static_cast<int>(fx::Kind::FillSolid) + reveal);
+            ctl.Changed();
+        }
+        Muted("The reveal fills the first part of the boot time, holds or pulses, then fades into your normal lighting.");
+        int parts = 0;
+        for (const auto& [key, channel] : ctl.prefs().nollieChannels)
+            if (key.rfind(d.id + ".", 0) == 0 && channel.kind != nollie::Kind::Unused) parts += channel.Segments();
+        if (parts > 0) {
+            ImGui::TextUnformatted("Boot reveal preview (before the handoff)");
+            const int shown = std::min(parts, 16);
+            const ImVec2 start = ImGui::GetCursorScreenPos();
+            const float width = ImGui::GetContentRegionAvail().x;
+            const double t = std::fmod(ImGui::GetTime(), hub.bootSeconds);
+            for (int i = 0; i < shown; ++i) {
+                const auto effect = nollie::BootEffect(hub, i * parts / shown, parts);
+                for (int led = 0; led < 5; ++led) {
+                    const float x = (i + led / 5.f) * width / shown;
+                    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(start.x + x, start.y),
+                        ImVec2(start.x + x + width / (shown * 5), start.y + 20 * S()), Col(fx::Render(effect, t, led, 5)));
+                }
+            }
+            ImGui::Dummy(ImVec2(width, 24 * S()));
+        }
+        EndCard();
+        if (LookEditor(ctl, ui, f, hub.bootLook, true)) ctl.Changed();
+    }
+}
+
+// A Nollie hub: switch it on or off, say what is plugged into each channel (nothing, an LED
+// strip, a chain of fans), and give each channel its own lighting.
+void NolliePage(Controller& ctl, UiState& ui, const Fonts& f, const NollieDevice& d) {
+    const nollie::Model* model = nollie::Find(d.vid, d.pid);
+    char vidpid[16];
+    snprintf(vidpid, sizeof vidpid, "%04X:%04X", d.vid, d.pid);
+    const std::string detail = std::to_string(d.channels) + " channels, up to " + std::to_string(d.maxLeds) +
+                               " LEDs on each (USB " + vidpid + ")";
+    if (!DeviceHeader(ui, f, Icon::Leds, d.name, NollieStatus(ctl, d), false, detail)) return;
+    Prefs& p = ctl.prefs();
+    BeginCard("nollie-device");
+    CardTitle(f, "Settings", Icon::Gear);
+    if (!d.problem.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, V4(kAmber));
+        ImGui::TextWrapped("%s.", d.problem.c_str());
+        ImGui::PopStyleColor();
+        Muted("Close Nollie's own app or SignalRGB, then wait a few seconds: LumaBridge tries again.");
+        EndCard();
+        return;
+    }
+    if (!p.nollieLighting && Btn("Enable Nollie lighting")) ctl.SetNollieEnabled(true);
+    bool on = ctl.NollieOn(d);
+    if (Toggle("Light it", &on)) {
+        p.nollieDevices[d.id] = on;
+        ctl.Changed();
+    }
+    Muted("The hub can't tell what is plugged in, so say it for each channel below. A channel set to "
+          "\"Not used\" is left alone. When LumaBridge lets go, the hub keeps its last colors until it "
+          "loses power.");
+    EndCard();
+    if (!model) return;
+    NollieBootCard(ctl, ui, f, d);
+
+    BeginCard("nollie-channels");
+    CardTitle(f, "Channels", Icon::Fan);
+    auto summary = [&](const nollie::Channel& c) -> std::string {
+        if (c.kind == nollie::Kind::Strip) return "LED strip, " + std::to_string(c.Leds(*model)) + " LEDs";
+        if (c.kind == nollie::Kind::Fans)
+            return std::to_string(c.Fans()) + (c.Fans() == 1 ? " fan, " : " fans, ") + std::to_string(c.LedsPerFan()) + " LEDs each";
+        return "Not used";
+    };
+    if (ImGui::BeginChild("##nollie-list", ImVec2(0, std::min(d.channels, 8) * 26 * S() + 8 * S()), false)) {
+        for (int z = 0; z < d.channels; ++z) {
+            auto it = p.nollieChannels.find(nollie::Key(d.id, z));
+            const nollie::Channel c = it != p.nollieChannels.end() ? it->second : nollie::Channel{};
+            const std::string label = nollie::DisplayName(c, z) + "  -  " + summary(c);
+            ImGui::PushID(z);
+            if (ImGui::Selectable(label.c_str(), ui.nollieChannel == z)) {
+                ui.nollieChannel = ui.nollieChannel == z ? -1 : z;
+                ui.nollieFan = -1;
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+    if (d.channels > 1) Muted("Pick a channel to say what is plugged into it. Its number is the one printed next to the header on the hub.");
+    if (PrimaryButton("Lighting and effects for this hub")) {
+        ui.page = Page::Lighting;
+        ui.zone = ctl.ZoneKey(device::kNollie);
+        ui.lightTarget = device::kNollie;
+        ui.nollieHub = d.id;
+    }
+    ImGui::SameLine();
+    Muted("Colors, travelling effects, sequences, gradients and the boot effect are on the Lighting page: pick "
+          "\"Nollie fans\" there (Manual mode).");
+    EndCard();
+    if (ui.nollieChannel < 0 || ui.nollieChannel >= d.channels) return;
+
+    const int zone = ui.nollieChannel;
+    const std::string key = nollie::Key(d.id, zone);
+    const std::string lightingId = nollie::LightingId(d.id, zone);
+    nollie::Channel& c = p.nollieChannels[key];
+    BeginCard("nollie-channel");
+    const std::string title = nollie::DisplayName(c, zone);
+    CardTitle(f, title.c_str(), Icon::Fan);
+    int kind = static_cast<int>(c.kind);
+    const char* kinds[] = {"Not used", "LED strip", "Fans"};
+    if (Segmented("nollie-kind", &kind, kinds, 3, std::min(420 * S(), ImGui::GetContentRegionAvail().x))) {
+        c.kind = static_cast<nollie::Kind>(kind);
+        ctl.Changed();
+    }
+    if (c.kind != nollie::Kind::Unused) {
+        const float w = std::min(220 * S(), ImGui::GetContentRegionAvail().x / 2 - 8 * S());
+        if (c.kind == nollie::Kind::Fans) {
+            ImGui::BeginGroup();
+            ImGui::TextUnformatted("Fans on this channel");
+            ImGui::SetNextItemWidth(w);
+            if (ImGui::SliderInt("##nollie-fans", &c.fans, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp)) ctl.Changed();
+            ImGui::EndGroup();
+            ImGui::SameLine(0, 16 * S());
+        }
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted(c.kind == nollie::Kind::Fans ? "LEDs per fan" : "LEDs in the strip");
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::InputInt("##nollie-leds", &c.ledsPerFan, 1, 5)) {
+            c.ledsPerFan = std::clamp(c.ledsPerFan, 1, c.kind == nollie::Kind::Fans ? 120 : d.maxLeds);
+            ctl.Changed();
+        }
+        ImGui::EndGroup();
+        const int wanted = c.kind == nollie::Kind::Fans ? c.Fans() * c.LedsPerFan() : c.ledsPerFan;
+        if (wanted > d.maxLeds) {
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(kAmber));
+            ImGui::TextWrapped("That is %d LEDs; the hub holds %d on one channel, so the rest are left out.", wanted, d.maxLeds);
+            ImGui::PopStyleColor();
+        }
+        if (c.kind == nollie::Kind::Fans) {
+            int span = c.repeatPerFan ? 0 : 1;
+            const char* modes[] = {"Each fan on its own", "One pattern across all fans"};
+            if (Segmented("nollie-span", &span, modes, 2, ImGui::GetContentRegionAvail().x)) {
+                c.repeatPerFan = span == 0;
+                ctl.Changed();
+            }
+            Muted("%s", c.repeatPerFan ? "Each fan shows the effect around its own ring, can have its own lighting, and "
+                                         "takes its own step when an effect travels through the hub."
+                                       : "The effect runs along all the fans of this channel as if they were one strip.");
+        }
+        if (ui.nollieNameKey != key) {
+            ui.nollieNameKey = key;
+            snprintf(ui.nollieName, sizeof ui.nollieName, "%s", c.name.c_str());
+        }
+        ImGui::TextUnformatted("Name");
+        ImGui::SetNextItemWidth(std::min(320 * S(), ImGui::GetContentRegionAvail().x));
+        if (ImGui::InputTextWithHint("##nollie-name", nollie::ChannelName(zone).c_str(), ui.nollieName, sizeof ui.nollieName)) {
+            c.name = ui.nollieName;
+            ctl.Changed();
+        }
+        bool test = ctl.nollieTest() == key;
+        if (Toggle("Show test pattern", &test)) ctl.SetNollieTest(test ? key : "");
+        ImGui::SameLine();
+        Muted("Each fan one solid color with a single white LED; a strip is lit with its first LED white. Use it "
+              "to find which header this is and to check the LED count.");
+    }
+    EndCard();
+}
+
+// Lighting > Nollie hubs: everything about how Nollie hubs light, kept apart from the rest of
+// the lighting. The hubs' channels are set up on Devices.
+void NollieLightingPage(Controller& ctl, UiState& ui, const Fonts& f) {
+    Prefs& p = ctl.prefs();
+    const auto hubs = ctl.nollie().devices();
+    BeginCard("nollie-intro");
+    IconItem(Icon::Fan, 18 * S(), Hex(kAccent));
+    ImGui::SameLine(0, 10 * S());
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted("Only on Nollie hubs");
+    ImGui::PopFont();
+    Muted("The Nollie fans follow the lighting above like every other device. What's below is extra, for the "
+          "fans and strips on Nollie hubs only; your other devices aren't affected. The start-up (boot) effect is on "
+          "the hub's page under Devices.");
+    if (!p.nollieLighting) {
+        Muted("Nollie lighting is switched off.");
+        if (Btn("Enable Nollie lighting")) ctl.SetNollieEnabled(true);
+    }
+    // Several hubs: which one.
+    if (hubs.size() > 1) {
+        std::vector<std::string> names;
+        int sel = 0;
+        for (size_t i = 0; i < hubs.size(); ++i) {
+            names.push_back(hubs[i].name + " (" + std::to_string(i + 1) + ")");
+            if (hubs[i].id == ui.nollieHub) sel = static_cast<int>(i);
+        }
+        std::vector<const char*> labels;
+        for (const auto& n : names) labels.push_back(n.c_str());
+        ImGui::SetNextItemWidth(std::min(360 * S(), ImGui::GetContentRegionAvail().x));
+        if (ImGui::Combo("##nollie-hub", &sel, labels.data(), static_cast<int>(labels.size()))) ui.nollieChannel = -1;
+        ui.nollieHub = hubs[static_cast<size_t>(sel)].id;
+    } else if (!hubs.empty()) {
+        ui.nollieHub = hubs[0].id;
+    }
+    EndCard();
+    const NollieDevice* d = nullptr;
+    for (const auto& h : hubs)
+        if (h.id == ui.nollieHub) d = &h;
+    if (!d) {
+        Muted("No Nollie hub is connected.");
+        return;
+    }
+    if (!d->problem.empty()) {
+        Muted("%s can't be lit: %s.", d->name.c_str(), d->problem.c_str());
+        return;
+    }
+    const nollie::Model* model = nollie::Find(d->vid, d->pid);
+    NollieHubEffects(ctl, ui, f, *d, model);
+
+    // Each channel's lighting (and each fan's, for fans on their own).
+    BeginCard("nollie-channel-lighting");
+    CardTitle(f, "Lighting per channel", Icon::Lighting);
+    std::vector<int> used;
+    for (int z = 0; z < d->channels; ++z) {
+        auto it = p.nollieChannels.find(nollie::Key(d->id, z));
+        if (it != p.nollieChannels.end() && it->second.kind != nollie::Kind::Unused) used.push_back(z);
+    }
+    if (used.empty()) {
+        Muted("No channel is set up yet: say what is plugged into the hub first.");
+    } else {
+        for (int z : used) {
+            const nollie::Channel& c = p.nollieChannels[nollie::Key(d->id, z)];
+            auto look = p.deviceLighting.find(nollie::LightingId(d->id, z));
+            const std::string how = look != p.deviceLighting.end() && look->second.native ? "back to Nollie's app"
+                                    : look != p.deviceLighting.end() && look->second.own   ? "its own lighting"
+                                                                                           : "same as all devices";
+            const std::string label = nollie::DisplayName(c, z) + "  -  " + how;
+            ImGui::PushID(z);
+            if (ImGui::Selectable(label.c_str(), ui.nollieChannel == z)) {
+                ui.nollieChannel = ui.nollieChannel == z ? -1 : z;
+                ui.nollieFan = -1;
+            }
+            ImGui::PopID();
+        }
+        Muted("Pick a channel to give it (or one of its fans) its own lighting. Without, it shows your main lighting.");
+        if (p.mode == Mode::Auto) Muted("Own lighting shows in Manual mode and between games; games light every channel at once.");
+    }
+    if (Btn("Set up the channels")) {
+        ui.page = Page::Devices;
+        ui.deviceDetail = "nollie:" + d->id;
+    }
+    EndCard();
+    if (std::find(used.begin(), used.end(), ui.nollieChannel) != used.end()) NollieChannelLighting(ctl, ui, f, *d, ui.nollieChannel);
 }
 
 void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f,
@@ -7584,6 +8793,17 @@ void DeviceDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Font
         Muted("This device isn't there any more.");
         return;
     }
+    if (id.rfind("nollie:", 0) == 0) {
+        const std::string identity = id.substr(7);
+        for (const auto& d : ctl.nollie().devices()) {
+            if (d.id != identity) continue;
+            NolliePage(ctl, ui, f, d);
+            return;
+        }
+        if (Btn("<  All devices")) ui.deviceDetail.clear();
+        Muted("This hub isn't there any more.");
+        return;
+    }
     if (id.rfind("openrgb:", 0) == 0) {
         const std::string identity = id.substr(8);
         for (const auto& d : ctl.openRgb().devices()) {
@@ -7649,7 +8869,7 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
         ImGui::SameLine();
         Muted("%d lighting device%s under LumaBridge control.", lit, lit == 1 ? "" : "s");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Includes Aura, RAM, NZXT, peripherals, Windows lighting and OpenRGB.\nFans on one header and RAM sticks controlled together count as one group.");
+            Tooltip("Includes Aura, RAM, NZXT, peripherals, Windows lighting and OpenRGB.\nFans on one header and RAM sticks controlled together count as one group.");
     } else {
         Pill("Waiting for devices", kAmber);
         Muted("No lighting devices are following LumaBridge right now. Check their status below.");
@@ -7728,6 +8948,10 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
         for (const auto& d : ctl.lampArray().devices())
             rows.push_back({"lamparray:" + d.id, d.name, std::string(lamparray::KindName(d.kind)) + ", Windows lighting standard",
                                 Icon::Leds, LampArrayStatus(ctl, d), d.lamps ? static_cast<int>(d.lamps) : -1});
+        for (const auto& d : ctl.nollie().devices()) {
+            rows.push_back({"nollie:" + d.id, d.name, "ARGB hub, " + std::to_string(d.channels) + " channels", Icon::Leds,
+                            NollieStatus(ctl, d), -1});
+        }
         const auto openRgbDevices = ctl.openRgb().devices();
         size_t openRgbIndex = 0;
         for (const auto& d : openRgbDevices) {
@@ -7815,7 +9039,7 @@ void DevicesPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts& f)
                 {
                     const std::string name = Ellipsize(r.name, ImGui::GetContentRegionAvail().x);
                     ImGui::TextUnformatted(name.c_str());
-                    if (name != r.name && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", r.name.c_str());
+                    if (name != r.name && ImGui::IsItemHovered()) Tooltip("%s", r.name.c_str());
                 }
                 ImGui::PopStyleColor();
                 if (!devicesNarrow) {
@@ -8321,7 +9545,7 @@ void GameDetailPage(Controller& ctl, Integrations& in, UiState& ui, const Fonts&
     if (g) {
         const LightingStatus st = GameLighting(ctl, *g, running, profile);
         Pill(st.text, st.pill ? st.color : kMuted);
-        if (!st.tip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", st.tip.c_str());
+        if (!st.tip.empty() && ImGui::IsItemHovered()) Tooltip("%s", st.tip.c_str());
     } else if (profile && profile->kind == games::ProfileKind::BuiltIn) {
         Pill("Built in", kGreen);
         ImGui::SameLine();
@@ -8481,7 +9705,7 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
             const std::string name = ToUtf8(g.name);
             bool hovered = false;
             const bool open = ClickableRow(&hovered);
-            if (hovered) ImGui::SetTooltip("%s", ToUtf8(g.exePath.empty() ? g.dir : g.exePath).c_str());
+            if (hovered) Tooltip("%s", ToUtf8(g.exePath.empty() ? g.dir : g.exePath).c_str());
             if (row.running) ImGui::PushFont(f.bold);
             ImGui::TextUnformatted(name.c_str());
             if (row.running) ImGui::PopFont();
@@ -8499,7 +9723,7 @@ void GamesListPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui, co
             if (st.pill) CellPill(st.text, st.color, st.tip);
             else {
                 CellText(st.text);
-                if (!st.tip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", st.tip.c_str());
+                if (!st.tip.empty() && ImGui::IsItemHovered()) Tooltip("%s", st.tip.c_str());
             }
             if (!gamesNarrow) {
                 RowCell(rowH);
@@ -8654,6 +9878,30 @@ void LampArrayCard(Controller& ctl, const Fonts& f) {
     ImGui::Dummy(ImVec2(0, 2 * S()));
     bool on = ctl.prefs().lampArray;
     if (Toggle("Enabled", &on)) ctl.SetLampArrayEnabled(on);
+    EndCard();
+}
+
+// Nollie ARGB hubs, lit directly over USB.
+void NollieCard(Controller& ctl, const Fonts& f) {
+    BeginCard("nollie");
+    IconItem(Icon::Plug, 18 * S(), Hex(kAccent));
+    ImGui::SameLine(0, 10 * S());
+    ImGui::PushFont(f.bold);
+    ImGui::TextUnformatted("Nollie ARGB hubs");
+    ImGui::PopFont();
+    ImGui::SameLine();
+    const auto hubs = ctl.nollie().devices();
+    char pill[48];
+    snprintf(pill, sizeof pill, "%d hub%s", static_cast<int>(hubs.size()), hubs.size() == 1 ? "" : "s");
+    if (!ctl.prefs().nollieLighting) Pill("Off", kMuted);
+    else if (!hubs.empty()) Pill(pill, kGreen);
+    else Pill("None found", kMuted);
+    Muted("Light the fans and strips on a Nollie 1, 8, 16 or 32 channel hub, each channel on its own. Nothing is "
+          "sent to a hub until you say what is plugged into its channels on the Devices page. Close Nollie's own "
+          "app and SignalRGB first: only one program can hold the hub.");
+    ImGui::Dummy(ImVec2(0, 2 * S()));
+    bool on = ctl.prefs().nollieLighting;
+    if (Toggle("Enabled", &on)) ctl.SetNollieEnabled(on);
     EndCard();
 }
 
@@ -8842,6 +10090,7 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
 
     ImGui::BeginDisabled(in.Busy());
     LampArrayCard(ctl, f);
+    NollieCard(ctl, f);
     OpenRgbCard(ctl, f);
     NzxtCard(ctl, f);
     ImGui::EndDisabled();
@@ -8851,6 +10100,19 @@ void IntegrationsPage(HWND hwnd, Controller& ctl, Integrations& in, UiState& ui,
 
 void SettingsPage(Controller& ctl, UiState& ui, const Fonts& f) {
     Config& cfg = ctl.config();
+
+    BeginCard("handoff-color");
+    CardTitle(f, "When LumaBridge lets go", Icon::Lighting);
+    if (Toggle("Leave a chosen color on the lights", &ctl.prefs().handoffColorEnabled)) ctl.Changed();
+    if (ctl.prefs().handoffColorEnabled) {
+        if (ColorEditor(ctl, ui, &ctl.prefs().handoffColor, "handoff-color")) ctl.Changed();
+        Muted("Applies to enabled devices when you stop lighting or close LumaBridge. A background companion "
+              "can apply it after a crash or forced close. Devices handed to another app are skipped. "
+              "Another lighting app or a device reset can replace this color. Recovery needs Windows and the companion to stay running.");
+    } else {
+        Muted("Restore the device or lighting app's usual behavior when LumaBridge lets go.");
+    }
+    EndCard();
 
     BeginCard("calibration");
     CardTitle(f, "Color calibration", Icon::Palette);
@@ -9027,7 +10289,7 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width, bool col
         const bool hovered = ImGui::IsItemHovered(), held = ImGui::IsItemActive();
         if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         if (clicked) ui.sidebarCollapsed = !ui.sidebarCollapsed;
-        if (collapsed && hovered) ImGui::SetTooltip(ui.sidebarCollapsed ? "Expand the menu" : "Collapse the menu");
+        if (collapsed && hovered) Tooltip(ui.sidebarCollapsed ? "Expand the menu" : "Collapse the menu");
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const float round = 10 * S(), lw = std::max(1.2f, 1.6f * S());
         dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Hex(held ? kBorder : hovered ? kCardHover : kCard), round);
@@ -9101,7 +10363,7 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width, bool col
                             it.label);
                 ImGui::PopFont();
             } else if (hovered) {
-                ImGui::SetTooltip("%s", it.label);
+                Tooltip("%s", it.label);
             }
             if (&it != &items[std::size(items) - 1]) ImGui::Dummy(ImVec2(0, 2 * S()));
         }
@@ -9174,8 +10436,8 @@ void Sidebar(Controller& ctl, UiState& ui, const Fonts& f, float width, bool col
             ImGui::PopFont();
         }
         dl->PopClipRect();
-        if (hovered && collapsed) ImGui::SetTooltip("%s: %s\nLumaBridge %s", mode, label.c_str(), kVersionText);
-        else if (hovered && cut) ImGui::SetTooltip("%s", label.c_str());
+        if (hovered && collapsed) Tooltip("%s: %s\nLumaBridge %s", mode, label.c_str(), kVersionText);
+        else if (hovered && cut) Tooltip("%s", label.c_str());
     }
 
     ImGui::EndChild();
@@ -9191,6 +10453,7 @@ void ApplyTheme(float scale) {
     s = ImGuiStyle();
     s.WindowPadding = ImVec2(0, 0);
     s.WindowBorderSize = 0;
+    s.WindowRounding = 14;
     s.ChildBorderSize = 1;
     s.FramePadding = ImVec2(12, 8);
     s.ItemSpacing = ImVec2(10, 10);
@@ -9199,7 +10462,8 @@ void ApplyTheme(float scale) {
     s.GrabRounding = 10;
     s.GrabMinSize = 14;
     s.ChildRounding = 14;
-    s.PopupRounding = 10;
+    s.PopupRounding = 14;
+    s.PopupBorderSize = 1;
     s.ScrollbarRounding = 8;
     s.ScrollbarSize = 12;
     s.CellPadding = ImVec2(8, 8);
@@ -9936,10 +11200,10 @@ void HelpBadge(const char* id, float size, void (*explain)()) {
     if (hovered) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16 * S(), 14 * S()));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12 * S());
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 14 * S());
         ImGui::PushStyleColor(ImGuiCol_PopupBg, V4(kCard));
         ImGui::PushStyleColor(ImGuiCol_Border, V4(kAccent, 0.5f));
-        ImGui::BeginTooltip();
+        BeginHoverTip();
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 340 * S());
         explain();
         ImGui::PopTextWrapPos();
@@ -10204,7 +11468,7 @@ void NoticeTile(UiState& ui, const Fonts& f, const notify::Notice& n, bool* clos
     const bool crossHovered = ImGui::IsItemHovered();
     if (crossHovered) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        ImGui::SetTooltip("Dismiss");
+        Tooltip("Dismiss");
         dl->AddCircleFilled(ImVec2(cp.x + cross / 2, cp.y + cross / 2), cross / 2, Faded(kBorder), 20);
     }
     const ImVec2 cc(cp.x + cross / 2, cp.y + cross / 2);
@@ -10232,7 +11496,7 @@ void NotificationBell(UiState& ui, const Fonts& f, const std::vector<notify::Not
     const auto shown = notify::Visible(all, &ui.noticesDismissed);
     ImGui::PushID("bell");
     ImGuiStorage* st = ImGui::GetStateStorage();
-    const ImGuiID openedAt = ImGui::GetID("opened-at"), wasOpen = ImGui::GetID("was-open");
+    const ImGuiID wasOpen = ImGui::GetID("was-open");
     const ImVec2 a = ImGui::GetCursorScreenPos();
     const bool clicked = ImGui::InvisibleButton("bell", ImVec2(size, size));
     const bool hovered = ImGui::IsItemHovered();
@@ -10241,12 +11505,11 @@ void NotificationBell(UiState& ui, const Fonts& f, const std::vector<notify::Not
     if (ImGui::IsItemActivated()) st->SetBool(wasOpen, ImGui::IsPopupOpen("notices"));
     if (hovered) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        if (shown.empty()) ImGui::SetTooltip("Notifications: all good");
-        else ImGui::SetTooltip("%d notification%s", static_cast<int>(shown.size()), shown.size() == 1 ? "" : "s");
+        if (shown.empty()) Tooltip("Notifications: all good");
+        else Tooltip("%d notification%s", static_cast<int>(shown.size()), shown.size() == 1 ? "" : "s");
     }
     if (clicked && !st->GetBool(wasOpen)) {
         ImGui::OpenPopup("notices");
-        st->SetFloat(openedAt, static_cast<float>(ImGui::GetTime()));
     }
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const bool open = ImGui::IsPopupOpen("notices");
@@ -10287,18 +11550,14 @@ void NotificationBell(UiState& ui, const Fonts& f, const std::vector<notify::Not
         ImGui::PopFont();
     }
 
-    // The list, right-aligned under the bell; it fades and slides in as it opens.
+    // The shared popup animation handles opening and closing for this list too.
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const float w = std::min(420 * S(), vp->WorkSize.x - 40 * S());
-    const float t = std::clamp((static_cast<float>(ImGui::GetTime()) - st->GetFloat(openedAt)) / 0.14f, 0.f, 1.f);
-    const float ease = 1.f - (1.f - t) * (1.f - t);
     const float top = a.y + size + 8 * S();
-    ImGui::SetNextWindowPos(ImVec2(a.x + size - w, top + (1.f - ease) * 6 * S()));
+    ImGui::SetNextWindowPos(ImVec2(a.x + size - w, top));
     ImGui::SetNextWindowSizeConstraints(ImVec2(w, 0), ImVec2(w, FLT_MAX));
     ImGui::PushStyleColor(ImGuiCol_PopupBg, V4(kCard));
     ImGui::PushStyleColor(ImGuiCol_Border, V4(kBorder));
-    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ease);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 14 * S());
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14 * S(), 14 * S()));
     if (ImGui::BeginPopup("notices")) {
         bool close = false;
@@ -10383,7 +11642,7 @@ void NotificationBell(UiState& ui, const Fonts& f, const std::vector<notify::Not
         if (close) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
-    ImGui::PopStyleVar(3);
+    ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);
     ImGui::PopID();  // the popup shares the bell's ID scope, so OpenPopup and BeginPopup agree
 }
@@ -10503,10 +11762,7 @@ void DrawUi(HWND hwnd, Controller& ctl, Integrations& integrations, UiState& ui,
     ui.lastPage = ui.page;
 
     switch (ui.page) {
-    case Page::Lighting:
-        if (ctl.prefs().mode == Mode::Auto) AutoPage(ctl, ui, f);
-        else ManualPage(ctl, ui, f);
-        break;
+    case Page::Lighting: LightingPage(ctl, ui, f); break;
     case Page::Devices: DevicesPage(ctl, integrations, ui, f); break;
     case Page::Dashboard: DashboardPage(hwnd, ctl, integrations, ui, f); break;
     case Page::MySetup: MySetupPage(ctl, ui, f); break;

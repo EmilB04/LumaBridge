@@ -4,6 +4,7 @@
 
 #include "helper_ipc.h"
 #include "hyperx_ram.h"
+#include "frame_clock.h"
 #include "log.h"
 
 namespace luma::app {
@@ -11,7 +12,7 @@ namespace {
 
 static_assert(helper::kRamLeds == ram::kMaxLeds, "the shared RAM colors cover every LED");
 
-constexpr DWORD kFrameMs = 50;
+constexpr double kFrameHz = 30;
 constexpr wchar_t kTask[] = L"\\LumaBridge\\Hardware helper";
 
 int RunHidden(std::wstring cmdLine, DWORD timeoutMs) {
@@ -62,7 +63,7 @@ void HardwareHelper::Start() {
 
 void HardwareHelper::Stop() {
     if (!thread_.joinable()) return;
-    stop_ = true;
+    RequestStop();
     thread_.join();
     state_ = State::Off;
 }
@@ -93,6 +94,7 @@ std::vector<sensors::Sensor> HardwareHelper::Sensors() const {
 }
 
 void HardwareHelper::Run() {
+    WorkerCancellation::Scope cancellable(cancellation_);
     HANDLE mapping = nullptr;
     helper::Shared* sh = nullptr;
 
@@ -100,6 +102,8 @@ void HardwareHelper::Run() {
     uint32_t seq = 0, lastSensorSeq = 0;
     std::array<Rgb, ram::kMaxLeds> last{};
     bool haveLast = false;
+    uint64_t pendingDelivery = 0;
+    uint32_t pendingSeq = 0;
     auto disconnect = [&] {
         if (sh) {
             sh->ramOwn = 0;
@@ -115,6 +119,7 @@ void HardwareHelper::Run() {
         }
         asus_ = helper::AsusLighting::Unknown;
         outdated_ = false;
+        ramFrameMicros_ = ramFrames_ = 0;
         if (mapping) CloseHandle(mapping);
         sh = nullptr;
         mapping = nullptr;
@@ -122,8 +127,10 @@ void HardwareHelper::Run() {
         std::lock_guard<std::mutex> lock(mutex_);
         sensors_.clear();
     };
+    // A steady beat on a precise timer (Sleep alone wanders by the system timer's ~16 ms steps).
+    FramePacer pacer(kFrameHz);
     while (!stop_) {
-        Sleep(kFrameMs);
+        pacer.Wait();
         fx::Params effect;
         double brightness;
         bool wanted, own;
@@ -152,6 +159,10 @@ void HardwareHelper::Run() {
                     disconnect();  // not ready yet, or a helper from another version
                     continue;
                 }
+                // A crashed producer may have left an unfinished (odd) frame marker.
+                if (sh->ramFrameProtocol == 1)
+                    InterlockedExchange(reinterpret_cast<volatile LONG*>(&sh->ramFrameSeq), 0);
+                seq = sh->ramSeq;  // do not mistake the previous process's acknowledgement for ours
                 sh->appBeat = ++appBeat;
                 sh->appPid = GetCurrentProcessId();
                 connectedAt = helperBeatAt = now;
@@ -229,9 +240,13 @@ void HardwareHelper::Run() {
         sh->pauseAsusLighting = pauseAsus_ ? 1 : 0;
         asus_ = sh->asusLighting;
         asusStops_ = sh->asusStops;
-        outdated_ = asus_ == helper::AsusLighting::Unknown && now - connectedAt > 5000;
+        outdated_ = sh->taskVersion < helper::kTaskVersion;
+        ramFrameMicros_ = sh->ramFrameMicros;
+        ramFrames_ = sh->ramFrames;
 
         // RAM.
+        if (pendingDelivery && sh->taskVersion >= 8 && sh->ramAppliedSeq == pendingSeq)
+            delivery_.Confirm(pendingDelivery);
         sh->ramRelease = static_cast<uint32_t>(release);
         sh->ramWanted = wanted ? 1 : 0;
         sh->ramOwn = wanted && own ? 1 : 0;
@@ -252,12 +267,29 @@ void HardwareHelper::Run() {
             continue;
         }
         std::array<Rgb, ram::kMaxLeds> colors{};
-        const double t = fx::Seconds(effect, now, since);
-        for (int led = 0; led < ram::kLedsPerStick; ++led) {
-            const Rgb c = Scale(fx::Render(effect, t, led, ram::kLedsPerStick), brightness);
-            for (int slot = 0; slot < ram::kSlots; ++slot) colors[static_cast<size_t>(slot * ram::kLedsPerStick + led)] = c;
+        const double t = fx::SecondsAt(effect, PreciseNowMs(), static_cast<double>(since));
+        if (fx::IsSetupEffect(effect.kind) && ramSticksApart_) {
+            // Setup effects: every stick a part of its own, in slot order.
+            int ordinal = 0;
+            for (int slot = 0; slot < ram::kSlots; ++slot) {
+                fx::Params stick = effect;
+                stick.part = effect.part + ordinal;
+                if ((sh->sticks >> slot) & 1) ++ordinal;
+                for (int led = 0; led < ram::kLedsPerStick; ++led)
+                    colors[static_cast<size_t>(slot * ram::kLedsPerStick + led)] =
+                        Scale(fx::Render(stick, t, led, ram::kLedsPerStick), brightness);
+            }
+        } else {
+            for (int led = 0; led < ram::kLedsPerStick; ++led) {
+                const Rgb c = Scale(fx::Render(effect, t, led, ram::kLedsPerStick), brightness);
+                for (int slot = 0; slot < ram::kSlots; ++slot) colors[static_cast<size_t>(slot * ram::kLedsPerStick + led)] = c;
+            }
         }
-        if (!haveLast || colors != last) {
+        if (!haveLast || colors != last || (effect.delivery && effect.delivery != pendingDelivery)) {
+            if (sh->ramFrameProtocol == 1) {
+                InterlockedIncrement(reinterpret_cast<volatile LONG*>(&sh->ramFrameSeq));
+                MemoryBarrier();
+            }
             for (int i = 0; i < ram::kMaxLeds; ++i) {
                 sh->ramColors[i][0] = colors[static_cast<size_t>(i)].r;
                 sh->ramColors[i][1] = colors[static_cast<size_t>(i)].g;
@@ -265,6 +297,12 @@ void HardwareHelper::Run() {
             }
             MemoryBarrier();
             sh->ramSeq = ++seq;
+            pendingSeq = seq;
+            pendingDelivery = effect.delivery;
+            if (sh->ramFrameProtocol == 1) {
+                MemoryBarrier();
+                InterlockedIncrement(reinterpret_cast<volatile LONG*>(&sh->ramFrameSeq));
+            }
             last = colors;
             haveLast = true;
         }

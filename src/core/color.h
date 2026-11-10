@@ -20,7 +20,7 @@ struct Rgb {
 };
 
 inline uint8_t ClampByte(double v) {
-    if (v <= 0.0) return 0;
+    if (!std::isfinite(v) || v <= 0.0) return 0;
     if (v >= 255.0) return 255;
     return static_cast<uint8_t>(v + 0.5);
 }

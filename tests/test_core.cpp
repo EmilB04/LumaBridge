@@ -11,7 +11,17 @@
 
 #include "color.h"
 #include "effects.h"
+#include "effect_labels.h"
+#include "effect_info.h"
+#include "settings_number.h"
+#include "popup_transition.h"
+#include "delivery_receipt.h"
 #include "azoth_oled_effects.h"
+#include "dualsense_effects.h"
+#include "lighting_zones.h"
+#include "nollie_hub.h"
+#include "nollie_sequence.h"
+#include "nollie_layout.h"
 #include "azoth_oled_music.h"
 #include "azoth_oled_bomb.h"
 #include "azoth_oled_upload.h"
@@ -97,6 +107,29 @@ static int g_failures = 0;
             ++g_failures;                                               \
         }                                                               \
     } while (0)
+
+static void TestPopupTransition() {
+    app::PopupTransition fade;
+    float previous = 0;
+    for (int i = 0; i < 20; ++i) {
+        const float alpha = fade.Advance(true, 0.01f);
+        CHECK(alpha >= previous && alpha <= 1);
+        previous = alpha;
+    }
+    CHECK(previous == 1);
+    const float closing = fade.Advance(false, 0.03f);
+    CHECK(closing > 0 && closing < 1);
+    CHECK(fade.Advance(true, 0) == closing);
+    CHECK(fade.Advance(true, 0.01f) > closing);
+    CHECK(fade.Advance(false, 1) == 0);
+    CHECK(fade.Advance(true, std::numeric_limits<float>::quiet_NaN()) == 0);
+    CHECK(fade.Advance(true, std::numeric_limits<float>::infinity()) == 0);
+    CHECK(fade.Advance(true, -1) == 0);
+    app::PopupTransition slow, fast;
+    for (int i = 0; i < 4; ++i) slow.Advance(true, 1.f / 30);
+    for (int i = 0; i < 16; ++i) fast.Advance(true, 1.f / 120);
+    CHECK(std::abs(slow.progress - fast.progress) < 0.00001f);
+}
 
 static void TestPercent() {
     CHECK(PercentToByte(0) == 0);
@@ -2930,10 +2963,663 @@ static void TestOpenRgb() {
     CHECK(std::strcmp(o::TypeName(6), "Mouse") == 0 && std::strcmp(o::TypeName(99), "Device") == 0);
 }
 
+static void TestNollie() {
+    namespace n = luma::app::nollie;
+    using luma::Rgb;
+    // The table: vendor and product find the hub; others are not Nollie.
+    const n::Model* h32 = n::Find(0x3061, 0x4714);
+    CHECK(h32 && h32->channels == 32 && h32->family == n::Family::Hs && h32->maxLeds == 256);
+    CHECK(n::Find(0x16D2, 0x1F01) && n::Find(0x16D2, 0x1F01)->channels == 8);
+    CHECK(n::Find(0x16D5, 0x2C08) && n::Find(0x16D5, 0x2C08)->interfaceNumber == 2);
+    CHECK(!n::Find(0x16D2, 0x0001) && !n::Find(0x046D, 0x4714));
+    // Every wiring is a permutation of its channels, so no two zones share a header.
+    for (const n::Model& m : n::Models()) {
+        std::vector<int> seen;
+        for (int z = 0; z < m.channels; ++z) seen.push_back(n::HardwareChannel(m, z));
+        std::sort(seen.begin(), seen.end());
+        CHECK(std::adjacent_find(seen.begin(), seen.end()) == seen.end());
+    }
+    CHECK(n::HardwareChannel(*h32, 0) == 5 && n::HardwareChannel(*h32, 31) == 10);
+    CHECK(n::ChannelName(0) == "Channel 1" && n::ChannelName(16) == "Channel ATX 1" &&
+          n::ChannelName(22) == "Channel GPU 1" && n::ChannelName(28) == "Channel EXT 1");
+
+    // 16 / 32 channel hubs: one report per channel, G R B, the count big-endian.
+    const n::Packet hs = n::HsPacket(3, {Rgb{1, 2, 3}, Rgb{4, 5, 6}});
+    CHECK(hs.bytes.size() == 1025 && hs.bytes[0] == 0 && hs.bytes[1] == 3 && hs.bytes[2] == 0);
+    CHECK(hs.bytes[3] == 0 && hs.bytes[4] == 2);
+    CHECK(hs.bytes[5] == 2 && hs.bytes[6] == 1 && hs.bytes[7] == 3 && hs.bytes[8] == 5 && hs.bytes[9] == 4);
+    CHECK(hs.delayMs == 0);
+    const n::Packet flag = n::HsPacket(15, std::vector<Rgb>(300, Rgb{9, 9, 9}));
+    CHECK(flag.bytes[2] == 1 && flag.delayMs == 8 && flag.bytes[3] == 1 && flag.bytes[4] == 44);
+    CHECK(n::HsPacket(31, {}).bytes[2] == 2);
+
+    // A frame on the 32-channel hub: used channels in hardware order, flag channels always.
+    std::vector<std::vector<Rgb>> zones(32);
+    zones[0] = {Rgb{1, 1, 1}};  // hardware channel 5
+    zones[4] = {Rgb{2, 2, 2}};  // hardware channel 1
+    const auto frame = n::Frame(*h32, zones);
+    std::vector<int> channels;
+    for (const auto& p : frame) channels.push_back(p.bytes[1]);
+    CHECK((channels == std::vector<int>{1, 5, 15, 31}));
+    // An 8-channel hub: 21 LEDs a report, packet numbers 6 apart per channel, then the update.
+    const n::Model* h8 = n::Find(0x16D2, 0x1F01);
+    std::vector<std::vector<Rgb>> z8(8);
+    z8[1] = std::vector<Rgb>(50, Rgb{10, 20, 30});
+    const auto f8 = n::Frame(*h8, z8);
+    CHECK(f8.size() == 4);  // 21 + 21 + 8 LEDs, update
+    CHECK(f8[0].bytes.size() == 65 && f8[0].bytes[1] == 6 && f8[1].bytes[1] == 7 && f8[2].bytes[1] == 8);
+    CHECK(f8[0].bytes[2] == 20 && f8[0].bytes[3] == 10 && f8[0].bytes[4] == 30);  // this hub takes G R B
+    CHECK(f8[2].bytes[2 + 7 * 3] == 20 && f8[2].bytes[2 + 8 * 3] == 0);          // 8 LEDs in the last
+    CHECK(f8[3].bytes[1] == 0xFF);
+    const n::Model* h28 = n::Find(0x16D2, 0x1617);
+    const auto f28 = n::Frame(*h28, {std::vector<Rgb>(1, Rgb{10, 20, 30})});
+    CHECK(f28[0].bytes[2] == 10 && f28[0].bytes[3] == 20 && f28[0].bytes[4] == 30);  // plain R G B
+    // More LEDs than the hub holds are dropped.
+    CHECK(n::Frame(*h8, {std::vector<Rgb>(500, Rgb{1, 1, 1})}).size() == 7);  // 126 LEDs = 6 reports + update
+
+    // Settings the hub needs.
+    const n::Model* h1 = n::Find(0x16D2, 0x1F11);
+    CHECK(n::ConfigPackets(*h1, {}, {0}).empty());
+    const auto init = n::ConfigPackets(*h1, {}, {300});
+    CHECK(init.size() == 1 && init[0].bytes[1] == 0xFE && init[0].bytes[2] == 3 && init[0].bytes[3] == 44 && init[0].bytes[4] == 1);
+    CHECK(n::ConfigPackets(*h1, {300}, {300}).empty());
+    std::vector<int> c32(32, 0);
+    c32[26] = 30;
+    const auto mos = n::ConfigPackets(*h32, {}, c32);
+    CHECK(mos.size() == 1 && mos[0].bytes[1] == 0x80 && mos[0].bytes[2] == 0);
+    CHECK(n::ConfigPackets(*h32, c32, c32).empty());
+    std::vector<int> short32 = c32;
+    short32[26] = 10;
+    CHECK(n::ConfigPackets(*h32, c32, short32).size() == 1 && n::ConfigPackets(*h32, c32, short32)[0].bytes[2] == 1);
+    CHECK(n::ConfigPackets(*h8, {}, {5, 5}).empty());
+
+    // Channels: what is plugged in decides the LEDs sent; a strip and fans render differently.
+    n::Channel strip;
+    strip.kind = n::Kind::Strip;
+    strip.ledsPerFan = 60;
+    CHECK(strip.Leds(*h8) == 60 && strip.Leds(*h28) == 60);
+    strip.ledsPerFan = 600;
+    CHECK(strip.Leds(*h8) == 126);  // what the hub holds
+    n::Channel fans;
+    fans.kind = n::Kind::Fans;
+    fans.fans = 3;
+    fans.ledsPerFan = 20;
+    CHECK(fans.Leds(*h8) == 60);
+    n::Channel none;
+    CHECK(none.Leds(*h8) == 0 && n::RenderChannel(none, *h8, luma::fx::Params{}, 0, 1).empty());
+    luma::fx::Params wave;
+    wave.kind = luma::fx::Kind::RainbowWave;
+    wave.speed = 0;
+    const auto onFans = n::RenderChannel(fans, *h8, wave, 0, 1);
+    CHECK(onFans.size() == 60 && onFans[0] == onFans[20] && onFans[0] == onFans[40]);  // each fan the whole pattern
+    fans.repeatPerFan = false;
+    const auto across = n::RenderChannel(fans, *h8, wave, 0, 1);
+    CHECK(across[0] != across[20]);
+    n::Channel s20;
+    s20.kind = n::Kind::Strip;
+    s20.ledsPerFan = 20;
+    const auto onStrip = n::RenderChannel(s20, *h8, wave, 0, 1);
+    CHECK(onStrip.size() == 20 && onStrip[0] != onStrip[10]);
+    luma::fx::Params white;
+    white.color1 = Rgb{200, 100, 50};
+    const auto dim = n::RenderChannel(s20, *h8, white, 0, 0.5);
+    CHECK(dim[0] == (Rgb{100, 50, 25}));
+    const auto test = n::TestChannel(fans, *h8);
+    CHECK(test.size() == 60 && test[0] == (Rgb{255, 255, 255}) && test[20] == (Rgb{255, 255, 255}) && test[1] != test[21]);
+
+    // Saved settings read back; garbage doesn't.
+    n::Channel back;
+    fans.name = "Front | fans";
+    CHECK(n::Decode(n::Encode(fans), &back));
+    CHECK(back.kind == n::Kind::Fans && back.fans == 3 && back.ledsPerFan == 20 && !back.repeatPerFan &&
+          back.name == "Front   fans");
+    CHECK(!n::Decode("", &back) && !n::Decode("9|1|1|1|x", &back) && !n::Decode("1|2|3", &back));
+    CHECK(n::DisplayName(none, 4) == "Channel 5" && n::DisplayName(fans, 4) == fans.name);
+    CHECK(n::LightingId("abc", 3) == "nollie.abc.3");
+
+    // Travelling: channels get their place along the way, first to last or the other way.
+    CHECK(n::TravelOffset(n::Travel::Off, 2, 4) == 0 && n::TravelOffset(n::Travel::Forward, 0, 1) == 0);
+    CHECK(n::TravelOffset(n::Travel::Forward, 0, 4) == 0 && n::TravelOffset(n::Travel::Forward, 3, 4) == 1);
+    CHECK(std::fabs(n::TravelOffset(n::Travel::Forward, 1, 4) - 1.0 / 3.0) < 1e-9);
+    CHECK(n::TravelOffset(n::Travel::Backward, 0, 4) == 1 && n::TravelOffset(n::Travel::Backward, 3, 4) == 0);
+    CHECK(n::TravelOffset(n::Travel::Forward, 4, 4) == 0);  // not a channel in use
+    {
+        // The effect on a later channel runs a little behind, by the travel time over the whole way.
+        luma::fx::Params wave2;
+        wave2.kind = luma::fx::Kind::RainbowWave;
+        wave2.speed = 0.5;
+        wave2.epoch = 100000;
+        const auto first = luma::app::Flowed(wave2, n::TravelOffset(n::Travel::Forward, 0, 3), 1.0);
+        const auto last = luma::app::Flowed(wave2, n::TravelOffset(n::Travel::Forward, 2, 3), 1.0);
+        CHECK(last.epoch - first.epoch == 1000);
+        CHECK(first.epoch < last.epoch && last.epoch == wave2.epoch);
+        const uint64_t now = 103000;  // the same moment for both
+        CHECK(luma::fx::Render(first, luma::fx::Seconds(first, now, 0), 3, 20) !=
+              luma::fx::Render(last, luma::fx::Seconds(last, now, 0), 3, 20));
+    }
+    // Each fan on its own: every fan shows its own effect around its ring.
+    {
+        n::Channel chain;
+        chain.kind = n::Kind::Fans;
+        chain.fans = 3;
+        chain.ledsPerFan = 8;
+        CHECK(chain.Segments() == 3);
+        luma::fx::Params red, green, blue;
+        red.color1 = Rgb{255, 0, 0};
+        green.color1 = Rgb{0, 255, 0};
+        blue.color1 = Rgb{0, 0, 255};
+        const auto lit = n::RenderSegments(chain, *h8, {{red, 0, 1}, {green, 0, 1}, {blue, 0, 0.5}});
+        CHECK(lit.size() == 24 && lit[0] == red.color1 && lit[7] == red.color1 && lit[8] == green.color1 &&
+              lit[23] == (Rgb{0, 0, 128}));
+        CHECK(n::RenderSegments(chain, *h8, {{red, 0, 1}})[8] == Rgb{});  // a fan without a plan stays dark
+        chain.repeatPerFan = false;  // one pattern across them: one part
+        CHECK(chain.Segments() == 1 && n::RenderSegments(chain, *h8, {{green, 0, 1}})[20] == green.color1);
+        n::Channel unused;
+        CHECK(unused.Segments() == 0);
+        // Travel steps: the user's setup, three fans on channels 1-3 and a strip on 4, or the
+        // three fans chained on channel 1 and the strip on 2. Either way four steps, fan to fan.
+        n::Channel oneFan;
+        oneFan.kind = n::Kind::Fans;
+        oneFan.fans = 1;
+        n::Channel strip4;
+        strip4.kind = n::Kind::Strip;
+        int count = 0;
+        auto steps = n::TravelSteps({{0, oneFan}, {1, oneFan}, {2, oneFan}, {3, strip4}}, &count);
+        CHECK(count == 4 && steps.size() == 4 && steps[3] == (std::pair<int, int>{3, 3}));
+        chain.repeatPerFan = true;
+        steps = n::TravelSteps({{0, chain}, {1, strip4}, {5, unused}}, &count);
+        CHECK(count == 4 && steps.size() == 2 && steps[1] == (std::pair<int, int>{1, 3}));
+        CHECK(n::TravelOffset(n::Travel::Forward, steps[1].second, count) == 1);
+        CHECK(n::FanLightingId("abc", 2, 1) == "nollie.abc.2.f1");
+        // Twinkle on fans on their own doesn't sparkle on the same LED of every fan.
+        luma::fx::Params tw;
+        tw.kind = luma::fx::Kind::Twinkle;
+        tw.speed = 1;
+        bool differs = false;
+        for (double t = 0; t < 1 && !differs; t += 0.05) {
+            const auto f = n::RenderSegments(chain, *h8, {{tw, t, 1}, {tw, t, 1}, {tw, t, 1}});
+            for (int i = 0; i < 8; ++i) differs = differs || f[i] != f[i + 8];
+        }
+        CHECK(differs);
+    }
+    // Smooth travel: every LED its own moment, continuing from one fan into the next.
+    {
+        const auto a = n::Place(n::Travel::Forward, true, 0, 4, 2.0);
+        const auto b = n::Place(n::Travel::Forward, true, 1, 4, 2.0);
+        CHECK(a.offset == 0 && std::fabs(b.offset - 0.25) < 1e-12 && std::fabs(a.lag - 0.5) < 1e-12);
+        const auto back = n::Place(n::Travel::Backward, true, 1, 4, 2.0);
+        CHECK(std::fabs(back.offset - 0.75) < 1e-12 && std::fabs(back.lag + 0.5) < 1e-12);
+        const auto stepwise = n::Place(n::Travel::Forward, false, 1, 4, 2.0);
+        CHECK(std::fabs(stepwise.offset - 1.0 / 3.0) < 1e-12 && stepwise.lag == 0);
+        CHECK(n::Place(n::Travel::Off, true, 1, 4, 2.0).offset == 0 && n::Place(n::Travel::Off, true, 1, 4, 2.0).lag == 0);
+        // The LED after a fan's last one carries on where that fan left off: fan 2's first LED
+        // runs exactly one LED's share behind fan 1's last LED.
+        luma::fx::Params cycle;
+        cycle.kind = luma::fx::Kind::ColorCycle;
+        cycle.speed = 1;
+        cycle.epoch = 50000;
+        n::Channel two;
+        two.kind = n::Kind::Fans;
+        two.fans = 2;
+        two.ledsPerFan = 10;
+        const double now = 53000;
+        std::vector<n::Segment> parts;
+        for (int i = 0; i < 2; ++i) {
+            const auto place = n::Place(n::Travel::Forward, true, i, 2, 1.0);
+            const auto e = luma::app::Flowed(cycle, place.offset, 1.0);
+            parts.push_back({e, (now - static_cast<double>(e.epoch)) / 1000.0, 1, place.lag});
+        }
+        // Same as one effect over 20 LEDs, each 1/20 s behind the one before.
+        const auto lit = n::RenderSegments(two, *h8, parts);
+        bool same = lit.size() == 20;
+        for (int i = 0; i < 20 && same; ++i) {
+            const double t = (now - (50000 - 1000)) / 1000.0 - i * (1.0 / 20);
+            const Rgb want = luma::fx::Render(cycle, t, i % 10, 10);
+            same = std::abs(lit[i].r - want.r) <= 1 && std::abs(lit[i].g - want.g) <= 1 && std::abs(lit[i].b - want.b) <= 1;
+        }
+        CHECK(same);
+        CHECK(n::ClampRefresh(60) == 60 && n::ClampRefresh(30) == 30 && n::ClampRefresh(144) == 60 && n::ClampRefresh(0) == 30);
+    }
+    // Sequences: fill each fan in turn, then all lit, then dark and again.
+    {
+        n::SequenceParams fill;
+        fill.kind = n::Sequence::FillCircles;
+        fill.color1 = Rgb{255, 0, 0};
+        fill.partSeconds = 1.0;
+        const double w = 1.0 / 10;  // ten LEDs a fan
+        auto at = [&](const n::SequenceParams& sp, double t, int part, int led) { return n::SequenceColor(sp, t, part, 3, led * w, w); };
+        // Half a second in: fan 1 half full, fans 2 and 3 dark.
+        CHECK(at(fill, 0.5, 0, 0) == fill.color1 && at(fill, 0.5, 0, 4) == fill.color1 && at(fill, 0.5, 0, 6) == Rgb{});
+        CHECK(at(fill, 0.5, 1, 0) == Rgb{} && at(fill, 0.5, 2, 0) == Rgb{});
+        // 1.5 s: fan 1 full, fan 2 half; 3.5 s: all full (held); 4.0 s: over again, all dark.
+        CHECK(at(fill, 1.5, 0, 9) == fill.color1 && at(fill, 1.5, 1, 3) == fill.color1 && at(fill, 1.5, 1, 7) == Rgb{});
+        CHECK(at(fill, 3.5, 0, 9) == fill.color1 && at(fill, 3.5, 2, 9) == fill.color1);
+        CHECK(at(fill, 4.05, 0, 5) == Rgb{} && at(fill, 4.05, 2, 9) == Rgb{});
+        // The LED at the edge of the fill comes on gradually.
+        const Rgb edge = at(fill, 0.45, 0, 4);
+        CHECK(edge.r > 0 && edge.r < 255);
+        // Fill, then empty: full at the turn, empty again at the end.
+        n::SequenceParams both = fill;
+        both.kind = n::Sequence::FillAndEmpty;
+        CHECK(at(both, 2.99, 2, 0) == fill.color1 && at(both, 3.5, 0, 2) == Rgb{} && at(both, 3.5, 0, 8) == fill.color1);
+        CHECK(at(both, 5.99, 2, 9).r < 30);
+        // One at a time: only the fan whose turn it is.
+        n::SequenceParams one = fill;
+        one.kind = n::Sequence::OneAtATime;
+        CHECK(at(one, 1.5, 1, 0) == fill.color1 && at(one, 1.5, 0, 0) == Rgb{} && at(one, 1.5, 2, 0) == Rgb{});
+        // Rainbow: each fan its own color.
+        n::SequenceParams rainbow = fill;
+        rainbow.kind = n::Sequence::RainbowStack;
+        CHECK(at(rainbow, 3.5, 0, 0) != at(rainbow, 3.5, 1, 0) && at(rainbow, 3.5, 1, 0) != at(rainbow, 3.5, 2, 0));
+        // Bounce: the head at the far end halfway through, back at the start at the end.
+        n::SequenceParams bounce = fill;
+        bounce.kind = n::Sequence::Bounce;
+        CHECK(at(bounce, 2.99, 2, 9).r > 100 && at(bounce, 2.99, 0, 0) == Rgb{} && at(bounce, 5.99, 0, 1).r > 100);
+        // Stack: everything lit at the end of stacking, dark after the hold.
+        n::SequenceParams stack = fill;
+        stack.kind = n::Sequence::Stack;
+        CHECK(at(stack, 0.01, 0, 0) == fill.color1 && at(stack, 0.01, 2, 9) == Rgb{});
+        CHECK(at(stack, 9.2, 0, 0) == fill.color1 && at(stack, 9.2, 2, 9) == fill.color1);  // 3 parts x 3 s, then held
+        CHECK(at(stack, 10.05, 0, 0) == fill.color1 && at(stack, 10.05, 1, 5) == Rgb{});  // over again: the first dot
+        // On a hub: three single-fan channels, the sequence counts across them; a chained
+        // channel counts its fans; backward counts down.
+        n::Channel chain3;
+        chain3.kind = n::Kind::Fans;
+        chain3.fans = 3;
+        chain3.ledsPerFan = 10;
+        const auto lit = n::RenderSequence(chain3, *h8, fill, 1.5, 0, 3, {}, false);
+        CHECK(lit.size() == 30 && lit[9] == fill.color1 && lit[13] == fill.color1 && lit[17] == Rgb{} && lit[25] == Rgb{});
+        const auto back = n::RenderSequence(chain3, *h8, fill, 1.5, 0, 3, {}, false, true);
+        CHECK(back[29] == fill.color1 && back[23] == fill.color1 && back[5] == Rgb{});
+        const auto dim = n::RenderSequence(chain3, *h8, fill, 3.5, 0, 3, {1, 0.5, 1}, false);
+        CHECK(dim[0] == fill.color1 && dim[10] == (Rgb{128, 0, 0}));
+        const auto rev = n::RenderSequence(chain3, *h8, fill, 0.5, 0, 3, {}, true);  // the ring fills the other way
+        CHECK(rev[9] == fill.color1 && rev[0] == Rgb{});
+        CHECK(std::string(n::SequenceName(n::Sequence::FillCircles)) == "Fill each fan, one after another");
+    }
+    // Gradients: from the first color to the last along the hub, in place of the main color.
+    {
+        n::Gradient g;
+        g.on = true;
+        g.stops = {Rgb{255, 0, 0}, Rgb{0, 0, 255}};
+        CHECK(n::GradientAt(g, 0, 0) == (Rgb{255, 0, 0}) && n::GradientAt(g, 1, 0) == (Rgb{0, 0, 255}));
+        CHECK(n::GradientAt(g, 0.5, 0) == (Rgb{128, 0, 128}));
+        g.stops.push_back(Rgb{0, 255, 0});
+        CHECK(n::GradientAt(g, 0.5, 0) == (Rgb{0, 0, 255}) && n::GradientAt(g, 1, 0) == (Rgb{0, 255, 0}));
+        // Moving: it loops back to the first color, and moves with time.
+        g.flow = 0.5;
+        CHECK(n::GradientAt(g, 0, 0) == (Rgb{255, 0, 0}) && n::GradientAt(g, 0.5, 1.0) == (Rgb{255, 0, 0}));
+        CHECK(n::GradientAt(g, 1.0 / 3, 0) == (Rgb{0, 0, 255}));
+        g.flow = 0;
+        g.stops = {Rgb{255, 0, 0}, Rgb{0, 0, 255}};
+        // Three fans on one channel, a still color: fan 1 red, fan 3 blue.
+        n::Channel chain;
+        chain.kind = n::Kind::Fans;
+        chain.fans = 3;
+        chain.ledsPerFan = 10;
+        luma::fx::Params still;
+        still.color1 = Rgb{9, 9, 9};
+        n::GradientPlace place;
+        place.gradient = &g;
+        place.first = 0;
+        place.parts = 3;
+        const auto lit = n::RenderSegments(chain, *h8, {{still, 0, 1}, {still, 0, 1}, {still, 0, 1}}, place);
+        CHECK(lit.size() == 30 && lit[0].r > 240 && lit[0].b < 15 && lit[29].b > 240 && lit[29].r < 15);
+        CHECK(lit[15].r > 100 && lit[15].b > 100);  // the middle fan between the two
+        // Breathing keeps breathing, in the gradient's colors.
+        luma::fx::Params breathe;
+        breathe.kind = luma::fx::Kind::Breathing;
+        breathe.speed = 1;
+        const auto half = n::RenderSegments(chain, *h8, {{breathe, 0.25, 1}, {breathe, 0.25, 1}, {breathe, 0.25, 1}}, place);
+        CHECK(half[0].r > 100 && half[0].r < 160);
+        // Rainbows keep their colors.
+        luma::fx::Params cycle;
+        cycle.kind = luma::fx::Kind::ColorCycle;
+        CHECK(n::RenderSegments(chain, *h8, {{cycle, 0, 1}, {cycle, 0, 1}, {cycle, 0, 1}}, place)[29] ==
+              n::RenderSegments(chain, *h8, {{cycle, 0, 1}, {cycle, 0, 1}, {cycle, 0, 1}})[29]);
+        // Off: as without.
+        g.on = false;
+        CHECK(n::RenderSegments(chain, *h8, {{still, 0, 1}, {still, 0, 1}, {still, 0, 1}}, place)[0] == still.color1);
+        g.on = true;
+        // A second channel after it continues the gradient: a strip as step 3 of 4.
+        n::Channel strip;
+        strip.kind = n::Kind::Strip;
+        strip.ledsPerFan = 10;
+        place.first = 3;
+        place.parts = 4;
+        const auto tail = n::RenderSegments(strip, *h8, {{still, 0, 1}}, place);
+        CHECK(tail[9].b > 240 && tail[0].r < 80);
+        // Sequences light up in the gradient.
+        n::SequenceParams fill;
+        fill.kind = n::Sequence::FillCircles;
+        fill.color1 = Rgb{9, 9, 9};
+        place.first = 0;
+        place.parts = 3;
+        const auto seq = n::RenderSequence(chain, *h8, fill, 3.5, 0, 3, {}, false, false, place);
+        CHECK(seq[0].r > 240 && seq[29].b > 240);
+    }
+    // The hub's own settings read back; garbage doesn't.
+    n::Hub hub;
+    hub.travel = n::Travel::Backward;
+    hub.travelSeconds = 2.5f;
+    hub.boot = true;
+    hub.bootSeconds = 6.f;
+    hub.bootLook.effect = luma::fx::Kind::Comet;
+    hub.bootLook.color1 = Rgb{1, 2, 3};
+    hub.smooth = false;
+    hub.refreshHz = 30;
+    hub.sequence.kind = n::Sequence::Bounce;
+    hub.sequence.partSeconds = 0.75;
+    hub.sequence.color2 = Rgb{9, 8, 7};
+    hub.gradient.on = true;
+    hub.gradient.stops = {Rgb{1, 2, 3}, Rgb{4, 5, 6}, Rgb{7, 8, 9}};
+    hub.gradient.flow = -0.25;
+    n::Hub hubBack;
+    CHECK(n::Decode(n::Encode(hub), &hubBack));
+    CHECK(hubBack.travel == n::Travel::Backward && std::fabs(hubBack.travelSeconds - 2.5f) < 1e-3 && hubBack.boot &&
+          std::fabs(hubBack.bootSeconds - 6.f) < 1e-3 && hubBack.bootLook.effect == luma::fx::Kind::Comet &&
+          hubBack.bootLook.color1 == (Rgb{1, 2, 3}) && !hubBack.smooth && hubBack.refreshHz == 30 &&
+          hubBack.sequence.kind == n::Sequence::Bounce && std::fabs(hubBack.sequence.partSeconds - 0.75) < 1e-6 &&
+          hubBack.sequence.color2 == (Rgb{9, 8, 7}) && hubBack.gradient.on && hubBack.gradient.stops.size() == 3 &&
+          hubBack.gradient.stops[2] == (Rgb{7, 8, 9}) && std::fabs(hubBack.gradient.flow + 0.25) < 1e-6);
+    CHECK(n::Hub{}.smooth && n::Hub{}.refreshHz == 60);
+    CHECK(!n::Decode("", &hubBack) && !n::Decode("7|1|1|4|1|60|0|1|000000|000000|0|000000,FFFFFF|0|x", &hubBack) && !n::Decode("1|1|1|4|1|60|0|1|000000|000000|0|000000|0|junk", &hubBack));
+}
+
+static void TestSetupEffects() {
+    namespace fx = luma::fx;
+    using luma::Rgb;
+    const Rgb on{255, 0, 0}, off{0, 0, 0};
+    auto make = [&](fx::Kind k, int part, int parts) {
+        fx::Params p;
+        p.kind = k;
+        p.color1 = on;
+        p.color2 = off;
+        p.speed = 1;  // a part a second
+        p.part = part;
+        p.parts = parts;
+        return p;
+    };
+    CHECK(fx::IsSetupEffect(fx::Kind::FillOneByOne) && !fx::IsSetupEffect(fx::Kind::Beat) && fx::IsPerLed(fx::Kind::Ripple));
+    // Regression: opening the boot editor used an eight-entry label table with setup
+    // effect IDs. Construct the same UI string for every supported kind, including reveals.
+    for (int kind = 0; kind < fx::kFirstSetupEffect + fx::kSetupEffects; ++kind) {
+        const auto effect = static_cast<fx::Kind>(kind);
+        const std::string label = std::string(luma::app::SecondaryColorLabel(effect)) + "##c2";
+        CHECK(!label.empty());
+        if (fx::IsSetupEffect(effect)) CHECK(label == "Unlit color##c2");
+    }
+    // One-shot reveals never reset, and every part joins the same gentle pulse.
+    for (auto kind : {fx::Kind::FillSolid, fx::Kind::FillPulse, fx::Kind::CenterSolid,
+                      fx::Kind::CenterPulse, fx::Kind::IgniteSolid, fx::Kind::IgnitePulse}) {
+        for (int part = 0; part < 4; ++part) {
+            auto p = make(kind, part, 4);
+            p.oneShot = true;  // boot playback retains its solid/pulsing finish
+            CHECK(fx::Render(p, 0, 0, 10) == off);
+            CHECK(fx::Render(p, 4, 9, 10) == on);
+            const bool pulse = kind == fx::Kind::FillPulse || kind == fx::Kind::CenterPulse || kind == fx::Kind::IgnitePulse;
+            CHECK(fx::Render(p, 6, 5, 10) == (pulse ? fx::detail::Lerp(off, on, 0.44) : on));
+            CHECK(fx::Render(p, 100, 5, 10) == on);
+        }
+    }
+    // Normal center-to-pulse: reveal for 4 s, breathe for 4 s, retreat for 4 s,
+    // then rest dark for 1 s. Test every LED, both directions and repeated cycles.
+    for (bool reverse : {false, true}) {
+        for (int part = 0; part < 4; ++part) {
+            auto p = make(fx::Kind::CenterPulse, part, 4);
+            p.reverse = reverse;
+            auto boot = p;
+            boot.oneShot = true;
+            CHECK(!fx::SameParams(p, boot));
+            for (int led = 0; led < 10; ++led) {
+                CHECK(fx::Render(p, 4, led, 10) == on);
+                CHECK(fx::Render(p, 8, led, 10) == on);
+                CHECK(fx::Render(p, 12.5, led, 10) == off);
+                CHECK(fx::Render(boot, 12, led, 10) == on);
+                for (double t : {0.0, 0.5, 2.25, 4.125, 7.5, 9.0, 11.875, 12.875}) {
+                    CHECK(fx::Render(p, t, led, 10) == fx::Render(p, t + 13, led, 10));
+                }
+                // Retreat traverses the same front back toward the center.
+                CHECK(fx::Render(p, 2, led, 10) == fx::Render(p, 10, led, 10));
+            }
+        }
+    }
+    // Even a single LED reaches complete darkness between cycles.
+    auto single = make(fx::Kind::CenterPulse, 0, 1);
+    CHECK(fx::Render(single, 0, 0, 1) == off && fx::Render(single, 6.5, 0, 1) == off);
+    CHECK(fx::Render(single, 0.001, 0, 1).r <= 1);
+    CHECK(fx::Render(single, 5.999, 0, 1).r <= 1);
+    CHECK(fx::Render(single, 0.5, 0, 1).r >= 127 && fx::Render(single, 0.5, 0, 1).r <= 128);
+    auto reveal = make(fx::Kind::FillSolid, 0, 4);
+    CHECK(fx::Render(reveal, 0.5, 0, 10) == on);
+    CHECK(fx::Render(reveal, 0.5, 9, 10) == off);
+    reveal.reverse = true;
+    CHECK(fx::Render(reveal, 0.5, 9, 10) == on);
+    CHECK(fx::Render(reveal, 0.5, 0, 10) == off);
+    luma::app::nollie::Hub boot;
+    boot.bootLook.effect = fx::Kind::CenterPulse;
+    luma::app::nollie::Hub decoded;
+    CHECK(luma::app::nollie::Decode(luma::app::nollie::Encode(boot), &decoded));
+    CHECK(decoded == boot);
+    // Fill one by one over four parts: part 0 half full at 0.5 s, part 1 still dark; all lit at 4.5 s; dark at 5.1 s.
+    CHECK(fx::Render(make(fx::Kind::FillOneByOne, 0, 4), 0.5, 1, 10) == on && fx::Render(make(fx::Kind::FillOneByOne, 0, 4), 0.5, 8, 10) == off);
+    CHECK(fx::Render(make(fx::Kind::FillOneByOne, 1, 4), 0.5, 0, 10) == off);
+    CHECK(fx::Render(make(fx::Kind::FillOneByOne, 3, 4), 4.5, 9, 10) == on && fx::Render(make(fx::Kind::FillOneByOne, 0, 4), 5.1, 5, 10) == off);
+    // Countdown: all lit first, then part 0 goes dark first.
+    CHECK(fx::Render(make(fx::Kind::Countdown, 2, 4), 0.5, 5, 10) == on && fx::Render(make(fx::Kind::Countdown, 0, 4), 2.0, 9, 10) == off &&
+          fx::Render(make(fx::Kind::Countdown, 3, 4), 2.0, 9, 10) == on);
+    // One at a time: only the part whose turn it is.
+    CHECK(fx::Render(make(fx::Kind::OneAtATime, 2, 4), 2.5, 0, 1) == on && fx::Render(make(fx::Kind::OneAtATime, 1, 4), 2.5, 0, 1) == off);
+    // Alternate: even parts lit, then swapped.
+    CHECK(fx::Render(make(fx::Kind::Alternate, 0, 4), 0.5, 0, 1) == on && fx::Render(make(fx::Kind::Alternate, 1, 4), 0.5, 0, 1) == off);
+    CHECK(fx::Render(make(fx::Kind::Alternate, 0, 4), 1.5, 0, 1) == off && fx::Render(make(fx::Kind::Alternate, 1, 4), 1.5, 0, 1) == on);
+    // Rainbow by part: neighbours differ.
+    CHECK(fx::Render(make(fx::Kind::RainbowParts, 0, 4), 0, 0, 1) != fx::Render(make(fx::Kind::RainbowParts, 1, 4), 0, 0, 1));
+    // Bounce: the head at the far end halfway through the round trip.
+    CHECK(fx::Render(make(fx::Kind::Bounce, 3, 4), 3.98, 9, 10).r > 100 && fx::Render(make(fx::Kind::Bounce, 0, 4), 3.98, 0, 10) == off);
+    // Ripple: starts in the middle.
+    CHECK(fx::Render(make(fx::Kind::Ripple, 2, 4), 0.01, 0, 10).r > 100 && fx::Render(make(fx::Kind::Ripple, 0, 4), 0.01, 0, 10) == off);
+    // Lightning: the same moment renders the same (stable), and over a while every part flashes.
+    CHECK(fx::Render(make(fx::Kind::Lightning, 1, 4), 3.3, 0, 1) == fx::Render(make(fx::Kind::Lightning, 1, 4), 3.3, 0, 1));
+    for (int part = 0; part < 4; ++part) {
+        bool flashed = false;
+        for (double t = 0; t < 30 && !flashed; t += 0.02) flashed = fx::Render(make(fx::Kind::Lightning, part, 4), t, 0, 1).r > 200;
+        CHECK(flashed);
+    }
+    // Fans on the Aura header: each fan its own part.
+    fx::FanLayout fans;
+    fans.fans = 3;
+    fans.ledsPerFan = 10;
+    std::vector<Rgb> f;
+    fx::RenderFans(make(fx::Kind::OneAtATime, 2, 6), 3.5, fans, &f);  // part 3 = the second fan
+    CHECK(f.size() == 30 && f[0] == off && f[10] == on && f[20] == off);
+    // Setup effects don't flow on top of their own order; parts count as a change.
+    fx::Params a = make(fx::Kind::FillOneByOne, 0, 4);
+    a.epoch = 10000;
+    CHECK(luma::app::Flowed(a, 0, 2.0).epoch == a.epoch);
+    fx::Params b = a;
+    b.part = 1;
+    CHECK(!fx::SameParams(a, b));
+}
+
+static void TestZones() {
+    using namespace luma::app;
+    using luma::Rgb;
+    std::vector<Zone> zones;
+    Zone a;
+    a.id = NewZoneId(zones);
+    a.name = "PC";
+    a.devices = {device::kRam, device::kFans, device::kBoard};
+    zones.push_back(a);
+    Zone b;
+    b.id = NewZoneId(zones);
+    b.name = "Desk | keys";
+    b.devices = {device::kKeyboard, device::kMouse, "nonsense", device::kFans};
+    b.manual = false;
+    b.idle = ZoneIdle::Rainbow;
+    b.setupEffect = fx::kFirstSetupEffect + 2;
+    b.setupColor1 = Rgb{1, 2, 3};
+    b.setupSpeed = 3.5f;
+    b.order = 3;
+    b.flowDirection = 2;
+    b.flowSeconds = 2.5f;
+    b.brightness = 0.4f;
+    b.reverse = true;
+    b.look.effect = fx::Kind::Comet;
+    b.look.color1 = Rgb{9, 8, 7};
+    zones.push_back(b);
+    CHECK(a.id == "z1" && b.id == "z2" && NewZoneId(zones) == "z3");
+    // A device is in one zone only; unknown devices go.
+    Normalize(zones);
+    CHECK(zones[0].devices.size() == 3 && zones[1].devices.size() == 2 && !zones[1].Has("nonsense") && !zones[1].Has(device::kFans));
+    CHECK(ZoneOf(zones, device::kRam) == &zones[0] && ZoneOf(zones, device::kMouse) == &zones[1] && !ZoneOf(zones, device::kController));
+    CHECK(ZoneDevice("nollie.abc.3.f1") == device::kNollie && ZoneDevice(device::kRam) == device::kRam);
+    // Moving a device between zones and back to Everything else.
+    MoveDevice(zones, device::kRam, "z2");
+    CHECK(!zones[0].Has(device::kRam) && zones[1].Has(device::kRam));
+    MoveDevice(zones, device::kRam, "");
+    CHECK(!ZoneOf(zones, device::kRam));
+    MoveDevice(zones, device::kMouse, "z1");
+    CHECK(zones[0].Has(device::kMouse) && !zones[1].Has(device::kMouse));
+    // Saved form round-trips, with a "|" in the name made harmless.
+    Zone back;
+    CHECK(Decode(Encode(zones[1]), &back));
+    CHECK(back.id == "z2" && back.name == "Desk   keys" && !back.manual && back.idle == ZoneIdle::Rainbow &&
+          back.setupEffect == fx::kFirstSetupEffect + 2 && back.setupColor1 == (Rgb{1, 2, 3}) &&
+          std::fabs(back.setupSpeed - 3.5f) < 1e-3 && back.order == 3 && back.flowDirection == 2 &&
+          std::fabs(back.flowSeconds - 2.5f) < 1e-3 && std::fabs(back.brightness - 0.4f) < 1e-3 && back.reverse &&
+          back.look.effect == fx::Kind::Comet && back.look.color1 == (Rgb{9, 8, 7}) && back.devices == zones[1].devices);
+    CHECK(!Decode("", &back) && !Decode("z9|x|1|0", &back) && !Decode("|x|1|0|0|2|1|0|1.5|1|0|000000|000000||0|0|000000|000000|0|1|0|0|0|1|0|0|0|1|0|0", &back));
+    Zone emptyDevices;
+    emptyDevices.id = "z7";
+    CHECK(Decode(Encode(emptyDevices), &back) && back.devices.empty() && back.name.empty());
+    // Devices that had a look of their own become zones, once.
+    std::map<std::string, DeviceLighting> lighting;
+    lighting[device::kKeyboard].own = true;
+    lighting[device::kKeyboard].look.effect = fx::Kind::Breathing;
+    lighting[device::kMouse].own = true;
+    lighting[device::kMouse].native = true;  // handed back: nothing to keep
+    lighting[device::kRam].own = false;
+    std::vector<Zone> none;
+    const auto made = ZonesFromOwnLooks(lighting, none);
+    CHECK(made.size() == 1 && made[0].devices == std::vector<std::string>{device::kKeyboard} &&
+          made[0].look.effect == fx::Kind::Breathing && made[0].name == device::Name(device::kKeyboard) && !lighting[device::kKeyboard].own);
+    CHECK(ZonesFromOwnLooks(lighting, made).empty());
+}
+
+static void TestDualSenseEffects() {
+    namespace d = luma::app::dualsense;
+    using luma::Rgb;
+    namespace fx = luma::fx;
+    // Still colors: the lightbar color, no player LEDs (as before).
+    fx::Params still;
+    still.color1 = Rgb{10, 200, 30};
+    d::Frame f = d::Compose(still, 3.0, 1.0, true);
+    CHECK(f.bar == still.color1 && f.players == 0);
+    // Brightness dims the lightbar only; turning player LEDs off keeps them off.
+    CHECK(d::Compose(still, 0, 0.5, true).bar == (Rgb{5, 100, 15}));
+    fx::Params comet;
+    comet.kind = fx::Kind::Comet;
+    comet.speed = 1;
+    comet.color1 = Rgb{255, 255, 255};
+    comet.color2 = Rgb{0, 0, 0};
+    CHECK(d::Compose(comet, 0.3, 1.0, false).players == 0);
+    // Indicator customization never changes the RGB lightbar, and gates every pattern.
+    d::PlayerOptions options;
+    options.mode = 1;
+    options.mask = 0x15;
+    CHECK(d::Compose(comet, 0.3, 1, true, options).players == 0x15);
+    CHECK(d::Compose(comet, 0.3, 1, true, options).bar == d::Compose(comet, 0.3, 1, false).bar);
+    options.effects &= ~(uint32_t{1} << static_cast<int>(fx::Kind::Comet));
+    CHECK(d::Compose(comet, 0.3, 1, true, options).players == 0);
+    CHECK(d::Compose(still, 0.3, 1, true, options).players == 0x15);
+    options.effects = 0xFFFFFFFFu;
+    options.mask = 0x1F;
+    options.mode = 4;
+    options.speed = 1;
+    CHECK(d::Compose(still, 0.1, 1, true, options).players == 0x1F);
+    CHECK(d::Compose(still, 0.7, 1, true, options).players == 0);
+    CHECK(d::Compose(still, 0.1, 1, false, options).players == 0);
+    CHECK(d::Compose(still, 0.1, 0, true, options).players == 0);
+    options.mode = 2;
+    CHECK(d::Compose(still, 0.3, 1, true, options).players != d::Compose(still, 0.7, 1, true, options).players);
+    options.mode = 3;
+    CHECK(d::Compose(still, 0, 1, true, options).players == 0x1F);
+    CHECK(d::Compose(still, 0.5, 1, true, options).players <= 1);
+    // A comet chases across the player LEDs: at different times different LEDs are lit, never all or none for a lap.
+    uint8_t seen = 0;
+    int onSomewhere = 0;
+    for (double t = 0; t < 1.0; t += 0.02) {
+        const d::Frame c = d::Compose(comet, t, 1.0, true);
+        seen = static_cast<uint8_t>(seen | c.players);
+        onSomewhere += c.players != 0;
+        CHECK(c.players != 0x1F);
+    }
+    CHECK(seen == 0x1F && onSomewhere > 10);
+    // The lightbar follows the comet smoothly (averaged), it doesn't just read the first LED.
+    double lo = 1e9, hi = -1;
+    for (double t = 0; t < 1.0; t += 0.02) {
+        const double l = d::Lightness(d::Compose(comet, t, 1.0, true).bar);
+        lo = std::min(lo, l);
+        hi = std::max(hi, l);
+    }
+    CHECK(hi > lo && hi < 0.9 && lo > 0.02);  // never fully off or fully on: the average of a moving comet
+    // Rainbows keep their hue on the lightbar (first LED) and leave the player LEDs off.
+    fx::Params rainbow;
+    rainbow.kind = fx::Kind::RainbowWave;
+    rainbow.speed = 0.5;
+    CHECK(d::Compose(rainbow, 0, 1.0, true).bar == fx::Render(rainbow, 0, 0, 1) && d::Compose(rainbow, 0.7, 1.0, true).players == 0);
+    CHECK(d::Compose(rainbow, 0, 1.0, true).bar != d::Compose(rainbow, 0.9, 1.0, true).bar);
+    // Strobe blinks every player LED together; breathing is a level meter, rising and falling.
+    fx::Params strobe;
+    strobe.kind = fx::Kind::Strobe;
+    strobe.speed = 1;
+    strobe.color1 = Rgb{255, 0, 0};
+    CHECK(d::Compose(strobe, 0.1, 1.0, true).players == 0x1F && d::Compose(strobe, 0.7, 1.0, true).players == 0);
+    fx::Params breathe;
+    breathe.kind = fx::Kind::Breathing;
+    breathe.speed = 1;
+    breathe.color1 = Rgb{0, 140, 255};
+    CHECK(d::Compose(breathe, 0.0, 1.0, true).players == 0x1F);  // full breath
+    const uint8_t low = d::Compose(breathe, 0.5, 1.0, true).players;  // empty breath
+    CHECK(low == 0x01 || low == 0x00 || low == 0x03);
+    uint8_t levels[6] = {0, 0, 0, 0, 0, 0};
+    for (double t = 0; t < 1.0; t += 0.01) {
+        const uint8_t m = d::Compose(breathe, t, 1.0, true).players;
+        int n = 0;
+        for (int i = 0; i < 5; ++i) n += (m >> i) & 1;
+        CHECK(m == (1 << n) - 1);  // always filled from the left
+        levels[n] = 1;
+    }
+    CHECK(levels[1] + levels[2] + levels[3] + levels[4] + levels[5] >= 4);
+    // Setup effects: a fill fills the player LEDs and brightens the lightbar as it goes.
+    fx::Params fill;
+    fill.kind = fx::Kind::FillOneByOne;
+    fill.speed = 1;
+    fill.color1 = Rgb{255, 255, 255};
+    fill.color2 = Rgb{0, 0, 0};
+    fill.part = 0;
+    fill.parts = 1;
+    const d::Frame f0 = d::Compose(fill, 0.1, 1.0, true), f1 = d::Compose(fill, 0.6, 1.0, true), f2 = d::Compose(fill, 0.99, 1.0, true);
+    CHECK(d::Lightness(f0.bar) < d::Lightness(f1.bar) && d::Lightness(f1.bar) < d::Lightness(f2.bar));
+    CHECK(f0.players == 0x01 || f0.players == 0x00);
+    CHECK(f2.players == 0x1F);
+    // The reports carry the player LEDs (USB byte 44, Bluetooth byte 46; the lightbar-color bit stays set on USB).
+    const auto usb = luma::app::dualsense::UsbReport(Rgb{1, 2, 3}, 0x15);
+    CHECK(usb[44] == (0x20 | 0x15) && usb[45] == 1 && usb[46] == 2 && usb[47] == 3);
+    CHECK(luma::app::dualsense::UsbReport(Rgb{1, 2, 3})[44] == 0x20);
+    const auto bt = luma::app::dualsense::BtReport(Rgb{1, 2, 3}, 0, 0x0A);
+    CHECK(bt[46] == 0x0A && bt[47] == 1 && luma::app::dualsense::BtReport(Rgb{1, 2, 3})[46] == 0);
+}
+
 static void TestDeviceCatalog() {
     namespace c = luma::app::catalog;
     CHECK(std::string(c::RgbBrand(0x1B1C, 0x1234)) == "Corsair");
     CHECK(std::string(c::RgbBrand(0x048D, 0x5702)) == "Gigabyte RGB Fusion");
+    CHECK(std::string(c::RgbBrand(0x3061, 0x4714)) == "Nollie");  // Nollie 32CH
+    CHECK(std::string(c::RgbBrand(0x16D5, 0x2A08)) == "Nollie");  // Nollie 8CH (OS2)
+    CHECK(c::RgbBrand(0x16D2, 0x0001) == nullptr);                // 0x16D2 isn't only Nollie
+    CHECK(c::RgbBrands({{0x3061, 0x4714}, {0x16D2, 0x1F01}}).size() == 1);
     CHECK(c::RgbBrand(0x048D, 0x1234) == nullptr);  // ITE makes more than RGB controllers
     CHECK(c::RgbBrand(0x0951, 0x1666) == nullptr);  // a Kingston USB stick isn't RGB gear
     const auto brands = c::RgbBrands({{0x1B1C, 1}, {0x1B1C, 2}, {0x046D, 3}, {0x1E71, 4}, {0x8086, 5}}, {0x046D});
@@ -3119,6 +3805,67 @@ static void TestAzothKeys() {
     CHECK(colors.size() == keys.size() && colors[0] == (luma::Rgb{100, 50, 25}));
 }
 
+static void TestReleaseRegressions() {
+    using namespace luma;
+    using namespace luma::app;
+    double n = 0;
+    for (const char* bad : {"", "nan", "NaN", "inf", "-inf", "1e999", "0.5junk"}) {
+        CHECK(!settings::Parse(std::string(bad), &n));
+        CHECK(settings::Number(std::string(bad), 0.5) == 0.5);
+    }
+    CHECK(settings::Parse(std::string("0.25"), &n) && n == 0.25);
+    CHECK(settings::Integer(std::string("2147483648"), 9) == 9);
+    CHECK(settings::Integer(std::string("1.5"), 9) == 9);
+    CHECK(settings::Clamped(std::string("99"), 1.f, 0.f, 2.f) == 2.f);
+    for (const char* invalid : {"nan", "inf", "bad", "1junk"}) {
+        DeviceLighting d;
+        CHECK(!DecodeDevice(std::string("1|5|FF1A00|0080FF|") + invalid + "|170|90|0.45|2|1", &d));
+    }
+    CHECK(ClampByte(std::numeric_limits<double>::quiet_NaN()) == 0);
+    CHECK(EffectInfoFor(static_cast<fx::Kind>(-1)).name == EffectInfoFor(fx::Kind::Static).name);
+    CHECK(EffectInfoFor(static_cast<fx::Kind>(999)).name == EffectInfoFor(fx::Kind::Static).name);
+    for (int kind = 0; kind < fx::kFirstSetupEffect + fx::kSetupEffects; ++kind)
+        CHECK(EffectInfoFor(static_cast<fx::Kind>(kind)).name[0] != 0);
+    nollie::Hub hub;
+    hub.bootLook.effect = fx::Kind::CenterPulse;
+    hub.bootSeconds = 10;
+    auto boot = nollie::BootEffect(hub, 2, 6);
+    CHECK(boot.oneShot && boot.part == 2 && boot.parts == 6 && std::fabs(boot.speed - 1) < 1e-6);
+    hub.travel = nollie::Travel::Backward;
+    CHECK(nollie::BootEffect(hub, 2, 6).part == 3);
+    auto saved = nollie::Encode(hub);
+    // Nonfinite hub timing falls back to the documented defaults.
+    const auto bar = saved.find('|'), second = saved.find('|', bar + 1);
+    saved.replace(bar + 1, second - bar - 1, "nan");
+    nollie::Hub loaded;
+    CHECK(nollie::Decode(saved, &loaded) && std::isfinite(loaded.travelSeconds));
+    Zone zone;
+    zone.id = "auto"; zone.devices = {device::kRam}; zone.manual = false;
+    CHECK(NeedsGameCapture(false, {zone}));
+    zone.manual = true;
+    CHECK(!NeedsGameCapture(false, {zone}) && NeedsGameCapture(true, {zone}));
+    const auto outside = DevicesOutsideZones({zone});
+    CHECK(std::find(outside.begin(), outside.end(), device::kRam) == outside.end());
+    CHECK(std::find(outside.begin(), outside.end(), device::kMouse) != outside.end());
+    DeliveryReceipt receipt;
+    CHECK(!receipt.Has(1) && !receipt.Has(0));
+    receipt.Confirm(4); receipt.Confirm(2);
+    CHECK(receipt.Has(4) && !receipt.Has(5) && receipt.value() == 4);
+}
+
+static void TestDeleteZone() {
+    using namespace luma::app;
+    Zone a, b;
+    a.id = "z1"; a.devices = {device::kRam, device::kBoard};
+    b.id = "z2"; b.devices = {device::kKeyboard};
+    std::vector<Zone> zones{a, b};
+    CHECK(!DeleteZone(zones, "") && !DeleteZone(zones, "missing") && zones.size() == 2);
+    CHECK(DeleteZone(zones, "z1") && zones.size() == 1);
+    CHECK(!ZoneOf(zones, device::kRam) && !ZoneOf(zones, device::kBoard));
+    CHECK(ZoneOf(zones, device::kKeyboard)->id == "z2");
+    CHECK(DeleteZone(zones, "z2") && zones.empty());
+}
+
 static void TestHyperXRam() {
     using namespace luma::app::ram;
     std::array<luma::Rgb, kMaxLeds> colors{};
@@ -3154,11 +3901,24 @@ static void TestHyperXRam() {
     // Fewer SPDs answered than the firmware lists (a busy bus): every slot is lit, and the app
     // is told the firmware's count. All found, or no count known: just the ones found.
     CHECK(SlotsToLight(0b0001, 3) == 0xF && SticksShown(0b0001, 3) == 0b0111);
-    CHECK(SlotsToLight(0b1101, 3) == 0b1101 && SticksShown(0b1101, 3) == 0b1101);
-    CHECK(SlotsToLight(0b0010, 0) == 0b0010 && SticksShown(0b0010, 0) == 0b0010);
+    CHECK(SlotsToLight(0b1101, 3) == 0xF && SticksShown(0b1101, 3) == 0b1101);
+    CHECK(SlotsToLight(0b0010, 0) == 0xF && SticksShown(0b0010, 0) == 0b0010);
     CHECK(SlotsToLight(0, 0) == 0xF && SticksShown(0, 0) == 0xF);  // no SPD answers at all
     CHECK(SlotsToLight(0, 2) == 0xF && SticksShown(0, 2) == 0b0011);
     CHECK(SticksShown(0b0001, 6) == 0xF);
+    // Even a complete SPD scan must not exclude a documented RGB group: the owner's
+    // three-stick SPD mask is 0xD, but board/controller group numbering can differ.
+    for (int mask = 0; mask < 16; ++mask) {
+        const auto all = Frame(SlotsToLight(static_cast<uint8_t>(mask), 3), colors);
+        for (int slot = 0; slot < kSlots; ++slot) {
+            bool found = false;
+            for (const auto& write : all) {
+                CHECK(IsAllowed(write.reg));
+                if (write.reg == SlotBase(slot)) found = true;
+            }
+            CHECK(found);
+        }
+    }
 }
 
 static void TestHwSensors() {
@@ -3653,6 +4413,7 @@ void TestIntegrationBatch() {
 }
 
 int main() {
+    TestPopupTransition();
     TestIntegrationBatch();
     TestPowerSuspend();
     TestSceneDepth();
@@ -3726,8 +4487,14 @@ int main() {
     TestPerf();
     TestDcs();
     TestDeviceCatalog();
+    TestDualSenseEffects();
+    TestZones();
+    TestSetupEffects();
+    TestNollie();
     TestDeviceInventory();
     TestHyperXRam();
+    TestDeleteZone();
+    TestReleaseRegressions();
     TestHwSensors();
     TestIpc();
     TestNoticeSummary();

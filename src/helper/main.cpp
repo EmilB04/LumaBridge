@@ -35,6 +35,7 @@
 #include <string>
 #include <vector>
 
+#include "frame_clock.h"
 #include "helper_ipc.h"
 #include "hw_sensors.h"
 #include "hyperx_ram.h"
@@ -239,8 +240,7 @@ public:
         // four (the registers of an empty slot are only written, never read back).
         light_ = ram::SlotsToLight(found, listed);
         sticks_ = ram::SticksShown(found, listed);
-        if (controller && light_ != found)
-            Log("RAM: %d stick(s) listed by the firmware, SPD found 0x%X - lighting all %d slots", listed, found, ram::kSlots);
+        Log("RAM: %d stick(s) listed by firmware, SPD mask 0x%X; updating all %d RGB groups", listed, found, ram::kSlots);
         Log("RAM: controller at 0x27 %s, DDR4 sticks 0x%X", controller ? "answers" : "doesn't answer", found);
         status_ = !controller ? helper::RamStatus::NoController
                   : !sticks_  ? helper::RamStatus::NoSticks
@@ -249,7 +249,7 @@ public:
 
     // Shows the colors in `sh` if they changed (or now and then, in case something else
     // lit the sticks); lets go of the sticks when the app stops asking.
-    void Update(const helper::Shared* sh, uint64_t now) {
+    void Update(helper::Shared* sh, uint64_t now) {
         if (status_ != helper::RamStatus::Ready && status_ != helper::RamStatus::Active &&
             status_ != helper::RamStatus::BusBusy)
             return;
@@ -262,22 +262,48 @@ public:
             lastWrite_ = 0;
             return;
         }
+        const uint32_t frameSeq = sh->ramFrameSeq;
+        if (frameSeq & 1) return;  // the app is still publishing this frame
+        MemoryBarrier();
         const uint32_t seq = sh->ramSeq;
-        if (seq == lastSeq_ && lastWrite_ && now - lastWrite_ < 3000) return;
+        // The same frame again every second: the sticks fall back to their own rainbow when nothing is written
+        // for a while, and an effect with a still stretch (a bounce's dark parts) writes nothing new.
+        if (seq == lastSeq_ && lastWrite_ && now - lastWrite_ < 1000) return;
         std::array<luma::Rgb, ram::kMaxLeds> colors{};
         for (int i = 0; i < ram::kMaxLeds; ++i)
             colors[static_cast<size_t>(i)] = luma::Rgb{sh->ramColors[i][0], sh->ramColors[i][1], sh->ramColors[i][2]};
+        MemoryBarrier();
+        if (sh->ramFrameSeq != frameSeq) return;  // wait for the next coherent frame
+        // Every register every frame: the sticks take a frame only whole (with fewer writes they
+        // fall back to their own rainbow until the next whole one).
         const auto writes = ram::Frame(light_, colors);
+        LARGE_INTEGER t0, t1, freq;
+        QueryPerformanceCounter(&t0);
         if (!lock_.Lock()) {
             status_ = helper::RamStatus::BusBusy;
             return;
         }
         bool ok = true;
-        for (const auto& w : writes) ok = Write(w.reg, w.value) && ok;
+        for (const auto& w : writes) {
+            if (!Write(w.reg, w.value)) { ok = false; break; }
+        }
         lock_.Unlock();
-        lastSeq_ = seq;
-        lastWrite_ = now;
+        QueryPerformanceCounter(&t1);
+        QueryPerformanceFrequency(&freq);
+        // How long a frame takes on the bus, in the log once after the first 200 frames: what
+        // limits the memory's frame rate.
+        const double elapsed = static_cast<double>(t1.QuadPart - t0.QuadPart) * 1000.0 / static_cast<double>(freq.QuadPart);
+        frameMs_ += elapsed;
+        sh->ramFrameMicros = static_cast<uint32_t>(elapsed * 1000);
+        if (ok) ++sh->ramFrames;
+        ++frames_;
+        if (frames_ == 1 || frames_ % 200 == 0)
+            Log("RAM: frame %d, all four RGB groups, %zu writes, %.1f ms (mean %.1f ms)",
+                frames_, writes.size(), elapsed, frameMs_ / frames_);
         if (ok) {
+            lastSeq_ = seq;
+            sh->ramAppliedSeq = seq;
+            lastWrite_ = now;
             failures_ = 0;
             owning_ = true;
             status_ = helper::RamStatus::Active;
@@ -328,6 +354,8 @@ private:
     helper::RamStatus status_ = helper::RamStatus::Off;
     uint8_t sticks_ = 0, light_ = 0;  // shown to the app; the slots written
     uint32_t lastSeq_ = 0;
+    int frames_ = 0;       // frames written, for the timing line in the log
+    double frameMs_ = 0;
     uint64_t lastWrite_ = 0;
     int failures_ = 0;
     bool owning_ = false;
@@ -765,7 +793,7 @@ helper::Shared* CreateShared(HANDLE* mapping) {
         ZeroMemory(s, sizeof *s);
         s->version = helper::kVersion;
         s->helperPid = GetCurrentProcessId();
-        s->taskVersion = 7;
+        s->taskVersion = helper::kTaskVersion;
         MemoryBarrier();
         s->magic = helper::kMagic;
     }
@@ -816,11 +844,20 @@ int wmain() {
 
     int ramRetries = 0;
     uint64_t nextSensors = 0, nextRamRetry = 0, appBeat = s->appBeat, appBeatAt = GetTickCount64();
+    s->ramFrameProtocol = 1;
     helper::RamStatus lastRam = helper::RamStatus::Off;
+    // Every 5 ms on a precise timer: a RAM frame from the app goes out as soon as it's there, so
+    // the sticks change at the app's even beat (polling every "30 ms", really 31 or 47, made the
+    // frames land unevenly).
+    luma::FramePacer pacer(200);
+    uint64_t lastBeat = 0;
     while (true) {
-        Sleep(30);
+        pacer.Wait();
         const uint64_t now = GetTickCount64();
-        s->helperBeat++;
+        if (now - lastBeat >= 30) {  // the heartbeat at its old pace
+            s->helperBeat++;
+            lastBeat = now;
+        }
         if (s->stopRequested) {
             Log("the app requested hardware handback");
             break;

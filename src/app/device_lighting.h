@@ -17,6 +17,7 @@
 
 #include "color.h"
 #include "effects.h"
+#include "settings_number.h"
 
 namespace luma::app {
 
@@ -54,6 +55,7 @@ inline fx::Params ToParams(const Look& l) {
 // The devices, in the order the Lighting page lists them.
 namespace device {
 constexpr const char* kFans = "fans";          // fans on the ARGB header (Aura)
+constexpr const char* kNollie = "nollie";      // fans and strips on Nollie hubs (each channel can have its own)
 constexpr const char* kBoard = "board";        // the motherboard's own LEDs (Aura)
 constexpr const char* kRam = "ram";            // HyperX / Kingston FURY memory
 constexpr const char* kMouse = "mouse";        // Logitech (G HUB / HID++)
@@ -61,11 +63,12 @@ constexpr const char* kKeyboard = "keyboard";  // ASUS ROG Azoth
 constexpr const char* kController = "controller";  // DualSense lightbar
 constexpr const char* kOther = "other";        // devices lit through OpenRGB
 inline const std::vector<const char*>& All() {
-    static const std::vector<const char*> kAll{kFans, kBoard, kRam, kMouse, kKeyboard, kController, kOther};
+    static const std::vector<const char*> kAll{kFans, kNollie, kBoard, kRam, kMouse, kKeyboard, kController, kOther};
     return kAll;
 }
 inline const char* Name(const std::string& id) {
     if (id == kFans) return "Fans";
+    if (id == kNollie) return "Nollie fans";
     if (id == kBoard) return "Motherboard";
     if (id == kRam) return "Memory";
     if (id == kMouse) return "Mouse";
@@ -95,6 +98,7 @@ inline const char* NativeApp(const std::string& id) {
     if (id == device::kMouse) return "G HUB";
     if (id == device::kController) return "the game or Steam";
     if (id == device::kOther) return "its own app";
+    if (id == device::kNollie || id.rfind("nollie.", 0) == 0) return "Nollie's own app";
     return "Armoury Crate";
 }
 
@@ -111,7 +115,7 @@ inline std::string EncodeDevice(const DeviceLighting& d) {
     return buf;
 }
 
-inline bool DecodeDevice(const std::string& s, DeviceLighting* out) {
+inline bool DecodeDevice(const std::string& s, DeviceLighting* out, bool allowSetup = false) {
     std::vector<std::string> f;
     for (size_t pos = 0;;) {
         const size_t bar = s.find('|', pos);
@@ -130,20 +134,21 @@ inline bool DecodeDevice(const std::string& s, DeviceLighting* out) {
     };
     DeviceLighting d;
     d.own = f[0] == "1";
-    const int kind = std::atoi(f[1].c_str());
-    if (kind < 0 || kind > static_cast<int>(fx::Kind::Twinkle)) return false;
+    const int kind = settings::Integer(f[1], -1);
+    if (kind < 0 || (kind > static_cast<int>(fx::Kind::Twinkle) &&
+        !(allowSetup && kind >= fx::kFirstSetupEffect && kind < fx::kFirstSetupEffect + fx::kSetupEffects))) return false;
     d.look.effect = static_cast<fx::Kind>(kind);
     if (!hex(f[2], &d.look.color1) || !hex(f[3], &d.look.color2)) return false;
     auto num = [](const std::string& x, float lo, float hi, float* v) {
-        const float n = static_cast<float>(std::atof(x.c_str()));
-        if (n < lo || n > hi) return false;
-        *v = n;
+        double n;
+        if (!settings::Parse(x, &n) || n < lo || n > hi) return false;
+        *v = static_cast<float>(n);
         return true;
     };
     if (!num(f[4], 0, 10, &d.look.speedHz) || !num(f[5], 0, 360, &d.look.hueStart) ||
         !num(f[6], 10, 360, &d.look.hueSpan) || !num(f[7], 0, 1, &d.look.saturation))
         return false;
-    d.look.spread = std::atoi(f[8].c_str());
+    d.look.spread = settings::Integer(f[8], 1);
     if (d.look.spread < 1 || d.look.spread > 4) d.look.spread = 1;
     d.look.reverse = f[9] == "1";
     if (f.size() >= 11 && !num(f[10], 0, 1, &d.brightness)) d.brightness = 1;
@@ -200,9 +205,9 @@ inline bool DecodeSpot(const std::string& s, Spot* out) {
     const size_t comma = s.find(',');
     if (comma == std::string::npos) return false;
     const size_t second = s.find(',', comma + 1);
-    Spot r = ClampSpot(Spot{static_cast<float>(std::atof(s.substr(0, comma).c_str())),
-                            static_cast<float>(std::atof(s.substr(comma + 1, second == std::string::npos ? std::string::npos : second - comma - 1).c_str()))});
-    if (second != std::string::npos) r.angle = static_cast<float>(std::fmod(std::atof(s.substr(second + 1).c_str()), 360.0));
+    Spot r = ClampSpot(Spot{static_cast<float>(settings::Number(s.substr(0, comma), 0.5)),
+                            static_cast<float>(settings::Number(s.substr(comma + 1, second == std::string::npos ? std::string::npos : second - comma - 1), 0.5))});
+    if (second != std::string::npos) r.angle = static_cast<float>(std::fmod(settings::Number(s.substr(second + 1)), 360.0));
     *out = r;
     return true;
 }
@@ -230,6 +235,8 @@ Spot FlowSpot(const std::string& id, int fans, SpotOf spot) {
         }
         return s;
     }
+    // The Nollie hub's fans are case fans too: they flow with the case's fans.
+    if (id == device::kNollie || id.rfind("nollie.", 0) == 0) return FlowSpot(device::kFans, fans, spot);
     if (id == device::kRam) {
         Spot s = spot(std::string(device::kBoard));
         s.x = s.x + 0.04f > 1 ? 1 : s.x + 0.04f;
@@ -266,7 +273,8 @@ inline std::map<std::string, double> FlowOffsets(const std::map<std::string, Spo
 // `seconds` from the first device to the last: the further along, the later its moment of the
 // effect. Only moving effects with a shared start flow; a game's Beat keeps its timing.
 inline fx::Params Flowed(fx::Params p, double offset, double seconds) {
-    if (!p.epoch || !fx::IsAnimated(p) || p.kind == fx::Kind::Beat || seconds <= 0) return p;
+    // Setup effects have their own order through the setup: they don't flow on top of it.
+    if (!p.epoch || !fx::IsAnimated(p) || p.kind == fx::Kind::Beat || fx::IsSetupEffect(p.kind) || seconds <= 0) return p;
     // Ahead rather than behind: the first device runs `seconds` early, so no device waits
     // frozen at the effect's start.
     const auto lead = static_cast<uint64_t>((1.0 - std::clamp(offset, 0.0, 1.0)) * seconds * 1000.0 + 0.5);

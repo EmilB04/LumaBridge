@@ -1,4 +1,5 @@
 #include "config.h"
+#include "settings_number.h"
 
 #include <windows.h>
 
@@ -32,9 +33,7 @@ double ReadNumber(const std::wstring& ini, const wchar_t* section, const wchar_t
                   double def) {
     std::wstring s = Trim(ReadString(ini, section, key, L""));
     if (s.empty()) return def;
-    wchar_t* end = nullptr;
-    double v = std::wcstod(s.c_str(), &end);
-    return end == s.c_str() ? def : v;
+    return settings::Number(s, def);
 }
 
 bool ReadBool(const std::wstring& ini, const wchar_t* section, const wchar_t* key, bool def) {
@@ -139,7 +138,7 @@ Config LoadConfig(const std::wstring& moduleDir) {
     cfg.auraEnabled = ReadBool(ini, L"Aura", L"Enabled", cfg.auraEnabled);
     cfg.auraUseSdk = _wcsicmp(Trim(ReadString(ini, L"Aura", L"Backend", L"usb")).c_str(), L"sdk") == 0;
     cfg.maxUpdateHz =
-        static_cast<int>(ReadNumber(ini, L"Aura", L"MaxUpdateHz", cfg.maxUpdateHz));
+        settings::Integer(Trim(ReadString(ini, L"Aura", L"MaxUpdateHz", L"")), cfg.maxUpdateHz);
     if (cfg.maxUpdateHz < 1) cfg.maxUpdateHz = 1;
     if (cfg.maxUpdateHz > 120) cfg.maxUpdateHz = 120;
     for (const auto& t : SplitList(ReadString(ini, L"Aura", L"DeviceTypes", L""))) {
@@ -155,8 +154,8 @@ Config LoadConfig(const std::wstring& moduleDir) {
     cfg.auraDisabledDevices = SplitList(ReadString(ini, L"Aura", L"DisabledDevices", L""), L'|');
     cfg.releaseControlOnShutdown =
         ReadBool(ini, L"Aura", L"ReleaseControlOnShutdown", cfg.releaseControlOnShutdown);
-    cfg.argbFans.fans = static_cast<int>(ReadNumber(ini, L"Aura", L"ArgbFans", cfg.argbFans.fans));
-    cfg.argbFans.ledsPerFan = static_cast<int>(ReadNumber(ini, L"Aura", L"ArgbLedsPerFan", cfg.argbFans.ledsPerFan));
+    cfg.argbFans.fans = settings::Integer(Trim(ReadString(ini, L"Aura", L"ArgbFans", L"")), cfg.argbFans.fans);
+    cfg.argbFans.ledsPerFan = settings::Integer(Trim(ReadString(ini, L"Aura", L"ArgbLedsPerFan", L"")), cfg.argbFans.ledsPerFan);
     cfg.argbFans.fans = cfg.argbFans.Fans();
     cfg.argbFans.ledsPerFan = cfg.argbFans.LedsPerFan();
     cfg.argbFans.repeatPerFan =
@@ -178,7 +177,7 @@ Config LoadConfig(const std::wstring& moduleDir) {
                                                 cfg.chromaReportDevicesConnected);
 
     cfg.gameSenseEnabled = ReadBool(ini, L"GameSense", L"Enabled", cfg.gameSenseEnabled);
-    cfg.gameSensePort = static_cast<int>(ReadNumber(ini, L"GameSense", L"Port", cfg.gameSensePort));
+    cfg.gameSensePort = settings::Integer(Trim(ReadString(ini, L"GameSense", L"Port", L"")), cfg.gameSensePort);
     if (cfg.gameSensePort < 0 || cfg.gameSensePort > 65535) cfg.gameSensePort = 49713;
     cfg.gameSenseCoreProps = Trim(ReadString(ini, L"GameSense", L"CorePropsPath", L""));
     cfg.gameSenseForwardToGG = ReadBool(ini, L"GameSense", L"ForwardToGG", cfg.gameSenseForwardToGG);

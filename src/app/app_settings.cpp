@@ -78,12 +78,12 @@ Prefs LoadPrefs(const std::wstring& ini) {
     for (const auto& e : kEffectNames)
         if (_wcsicmp(v.c_str(), e.name) == 0) p.effect = e.kind;
     v = Read(ini, L"App", L"ManualSpeed");
-    if (!v.empty()) p.speedHz = static_cast<float>(_wtof(v.c_str()));
+    if (!v.empty()) p.speedHz = static_cast<float>(settings::Number(v, 0.5));
     if (p.speedHz < 0.f || p.speedHz > 10.f) p.speedHz = 0.5f;
     auto num = [&](const wchar_t* key, float* out, float lo, float hi) {
         const std::wstring x = Read(ini, L"App", key);
         if (x.empty()) return;
-        const float f = static_cast<float>(_wtof(x.c_str()));
+        const float f = static_cast<float>(settings::Number(x, *out));
         if (f >= lo && f <= hi) *out = f;
     };
     num(L"RainbowHueStart", &p.rainbowHueStart, 0, 360);
@@ -109,10 +109,24 @@ Prefs LoadPrefs(const std::wstring& ini) {
     num(L"FlowDirection", &flow, 0, kFlowDirections - 1);
     p.flowDirection = static_cast<int>(flow);
     num(L"FlowSeconds", &p.flowSeconds, 0.2f, 5.f);
+    {
+        // Setup effects ([Effects]).
+        v = Read(ini, L"Effects", L"Effect");
+        const int e = v.empty() ? 0 : settings::Integer(v);
+        p.setupEffect = e >= fx::kFirstSetupEffect && e < fx::kFirstSetupEffect + fx::kSetupEffects ? e : 0;
+        FromHex(Narrow(Read(ini, L"Effects", L"Color1")), &p.setupColor1);
+        FromHex(Narrow(Read(ini, L"Effects", L"Color2")), &p.setupColor2);
+        v = Read(ini, L"Effects", L"Speed");
+        if (!v.empty()) p.setupSpeed = std::clamp(static_cast<float>(settings::Number(v, 0.5)), 0.1f, 10.f);
+        v = Read(ini, L"Effects", L"Order");
+        if (!v.empty()) p.setupOrder = std::clamp(settings::Integer(v), 1, kFlowDirections - 1);
+        v = Read(ini, L"Effects", L"RamSticksApart");
+        if (!v.empty()) p.setupRamApart = v != L"0";
+    }
     v = Read(ini, L"App", L"DashGraphs");
     if (!v.empty()) p.dashGraphs = v != L"0";
     v = Read(ini, L"App", L"PsuWatts");
-    if (!v.empty()) p.psuWatts = std::clamp(_wtoi(v.c_str()), 0, 5000);
+    if (!v.empty()) p.psuWatts = std::clamp(settings::Integer(v), 0, 5000);
 
     std::string recent = Narrow(Read(ini, L"App", L"RecentColors"));
     for (size_t pos = 0; pos < recent.size() && p.recentColors.size() < Prefs::kMaxRecent;) {
@@ -178,13 +192,13 @@ Prefs LoadPrefs(const std::wstring& ini) {
     v = Read(ini, L"Sleep", L"Logitech");
     if (!v.empty()) p.logitechSleep = v != L"0";
     v = Read(ini, L"Sleep", L"LogitechSeconds");
-    if (!v.empty() && _wtoi(v.c_str()) > 0) p.logitechSleepSec = _wtoi(v.c_str());
+    if (!v.empty() && settings::Integer(v) > 0) p.logitechSleepSec = settings::Integer(v);
     v = Read(ini, L"Sleep", L"LogitechIgnoreDynamic");
     if (!v.empty()) p.logitechSleepIgnoreDynamic = v != L"0";
     v = Read(ini, L"Sleep", L"Azoth");
     if (!v.empty()) p.azothSleep = v != L"0";
     v = Read(ini, L"Sleep", L"AzothSeconds");
-    if (!v.empty() && _wtoi(v.c_str()) > 0) p.azothSleepSec = _wtoi(v.c_str());
+    if (!v.empty() && settings::Integer(v) > 0) p.azothSleepSec = settings::Integer(v);
     v = Read(ini, L"Sleep", L"AzothIgnoreDynamic");
     if (!v.empty()) p.azothSleepIgnoreDynamic = v != L"0";
     v = Read(ini, L"App", L"AzothKeyboard");
@@ -192,29 +206,49 @@ Prefs LoadPrefs(const std::wstring& ini) {
     v = Read(ini, L"AzothOLED", L"Enabled");
     if (!v.empty()) p.azothOled.enabled = v != L"0";
     v = Read(ini, L"AzothOLED", L"Brightness");
-    if (!v.empty()) p.azothOled.brightness = _wtoi(v.c_str());
+    if (!v.empty()) p.azothOled.brightness = settings::Integer(v);
     v = Read(ini, L"AzothOLED", L"Content");
-    if (!v.empty()) p.azothOled.content = static_cast<azoth::OledContent>(_wtoi(v.c_str()));
+    if (!v.empty()) p.azothOled.content = static_cast<azoth::OledContent>(settings::Integer(v));
     v = Read(ini, L"AzothOLED", L"Animation");
-    if (!v.empty()) p.azothOled.animation = _wtoi(v.c_str());
+    if (!v.empty()) p.azothOled.animation = settings::Integer(v);
     v = Read(ini, L"AzothOLED", L"AnimationSource");
-    if (!v.empty()) p.azothOled.animationSource = static_cast<azoth::OledAnimationSource>(_wtoi(v.c_str()));
+    if (!v.empty()) p.azothOled.animationSource = static_cast<azoth::OledAnimationSource>(settings::Integer(v));
     v = Read(ini, L"AzothOLED", L"LumaAnimation");
-    if (!v.empty()) p.azothOled.lumaAnimation = _wtoi(v.c_str());
+    if (!v.empty()) p.azothOled.lumaAnimation = settings::Integer(v);
     v = Read(ini, L"AzothOLED", L"Clock12Hour");
     if (!v.empty()) p.azothOled.clock12Hour = v == L"1";
     v = Read(ini, L"AzothOLED", L"Cs2BombTimer");
     if (!v.empty()) p.azothOled.cs2BombTimer = v != L"0";
     v = Read(ini, L"AzothOLED", L"Cs2BombSeconds");
-    if (!v.empty()) p.azothOled.cs2BombSeconds = _wtoi(v.c_str());
+    if (!v.empty()) p.azothOled.cs2BombSeconds = settings::Integer(v);
     p.azothOled = azoth::NormalizeOled(p.azothOled);
     p.azothOledBanner = Read(ini, L"AzothOLED", L"Banner", p.azothOledBanner.c_str());
     v = Read(ini, L"AzothOLED", L"BannerSize");
-    if (!v.empty()) p.azothOledBannerSize = std::clamp(_wtoi(v.c_str()), 8, 48);
+    if (!v.empty()) p.azothOledBannerSize = std::clamp(settings::Integer(v), 8, 48);
     v = Read(ini, L"AzothOLED", L"BannerInvert");
     if (!v.empty()) p.azothOledBannerInvert = v == L"1";
     v = Read(ini, L"App", L"DualsenseController");
     if (!v.empty()) p.dualsenseController = v != L"0";
+    v = Read(ini, L"App", L"DualsensePlayerLeds");
+    if (!v.empty()) p.dualsensePlayerLeds = v != L"0";
+    v = Read(ini, L"App", L"HandoffColorEnabled");
+    if (!v.empty()) p.handoffColorEnabled = v == L"1";
+    v = Read(ini, L"App", L"HandoffColor");
+    if (!v.empty()) {
+        const std::string hex(v.begin(), v.end());
+        nollie::hubdetail::FromHex(hex, &p.handoffColor);
+    }
+    v = Read(ini, L"Controller", L"PlayerMode");
+    if (!v.empty()) p.dualsensePlayers.mode = std::clamp(settings::Integer(v), 0, 4);
+    v = Read(ini, L"Controller", L"PlayerMask");
+    if (!v.empty()) p.dualsensePlayers.mask = static_cast<uint8_t>(settings::Integer(v) & 31);
+    v = Read(ini, L"Controller", L"PlayerEffects");
+    if (!v.empty()) p.dualsensePlayers.effects = static_cast<uint32_t>(std::wcstoul(v.c_str(), nullptr, 10));
+    v = Read(ini, L"Controller", L"PlayerSpeed");
+    if (!v.empty()) {
+        const double speed = settings::Number(v, 0.5);
+        p.dualsensePlayers.speed = std::isfinite(speed) ? std::clamp(speed, 0.1, 3.0) : 0.5;
+    }
     v = Read(ini, L"Controller", L"Input");
     if (!v.empty()) p.padInput = v != L"0";
     v = Read(ini, L"Controller", L"ShowValues");
@@ -228,9 +262,9 @@ Prefs LoadPrefs(const std::wstring& ini) {
     v = Read(ini, L"Controller", L"MapMouseStick");
     if (!v.empty()) p.padMapping.rightStickMouse = v != L"0";
     v = Read(ini, L"Controller", L"MouseSpeed");
-    if (!v.empty()) p.padMapping.mouseSpeed = std::clamp(_wtoi(v.c_str()), 1, 30);
+    if (!v.empty()) p.padMapping.mouseSpeed = std::clamp(settings::Integer(v), 1, 30);
     v = Read(ini, L"Controller", L"Deadzone");
-    if (!v.empty()) p.padMapping.deadzone = std::clamp(_wtoi(v.c_str()), 0, 50);
+    if (!v.empty()) p.padMapping.deadzone = std::clamp(settings::Integer(v), 0, 50);
     for (int b = 0; b < pad::kButtonCount; ++b)
         p.padMapping.buttons[static_cast<size_t>(b)] =
             pad::DecodeBinding(Narrow(Read(ini, L"Controller", (L"Map." + Widen(pad::ButtonName(b))).c_str())));
@@ -257,7 +291,7 @@ Prefs LoadPrefs(const std::wstring& ini) {
     v = Read(ini, L"OpenRGB", L"Enabled");
     if (!v.empty()) p.openRgb = v != L"0";
     v = Read(ini, L"OpenRGB", L"Port");
-    if (!v.empty() && _wtoi(v.c_str()) > 0 && _wtoi(v.c_str()) < 65536) p.openRgbPort = _wtoi(v.c_str());
+    if (!v.empty() && settings::Integer(v) > 0 && settings::Integer(v) < 65536) p.openRgbPort = settings::Integer(v);
     {
         const std::string list = Narrow(Read(ini, L"OpenRGB", L"Devices"));  // "name=1|name=0"
         for (size_t pos = 0; pos < list.size();) {
@@ -269,8 +303,72 @@ Prefs LoadPrefs(const std::wstring& ini) {
             pos = bar + 1;
         }
     }
+    v = Read(ini, L"Nollie", L"Enabled");
+    if (!v.empty()) p.nollieLighting = v != L"0";
+    {
+        const std::string list = Narrow(Read(ini, L"Nollie", L"Devices"));  // "id=1|id=0"
+        for (size_t pos = 0; pos < list.size();) {
+            size_t bar = list.find('|', pos);
+            const std::string item = list.substr(pos, bar - pos);
+            const size_t eq = item.rfind('=');
+            if (eq != std::string::npos && eq > 0) p.nollieDevices[item.substr(0, eq)] = item.substr(eq + 1) == "1";
+            if (bar == std::string::npos) break;
+            pos = bar + 1;
+        }
+        const std::string hubs = Narrow(Read(ini, L"Nollie", L"Hubs"));  // "id,id"
+        for (size_t pos = 0; pos < hubs.size();) {
+            size_t comma = hubs.find(',', pos);
+            const std::string id = hubs.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+            nollie::Hub h;
+            if (!id.empty() && nollie::Decode(Narrow(Read(ini, L"Nollie", (L"Hub." + Widen(id)).c_str())), &h)) p.nollieHubs[id] = h;
+            if (comma == std::string::npos) break;
+            pos = comma + 1;
+        }
+        const std::string keys = Narrow(Read(ini, L"Nollie", L"Channels"));  // "id.0,id.5"
+        for (size_t pos = 0; pos < keys.size();) {
+            size_t comma = keys.find(',', pos);
+            const std::string key = keys.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+            nollie::Channel c;
+            if (!key.empty() && nollie::Decode(Narrow(Read(ini, L"Nollie", (L"Channel." + Widen(key)).c_str())), &c)) {
+                p.nollieChannels[key] = c;
+                DeviceLighting d;
+                if (DecodeDevice(Narrow(Read(ini, L"Nollie", (L"Look." + Widen(key)).c_str())), &d))
+                    p.deviceLighting["nollie." + key] = d;
+                for (int fan = 0; c.kind == nollie::Kind::Fans && fan < c.Fans(); ++fan) {  // each fan's own
+                    DeviceLighting fl;
+                    const std::string fanKey = key + ".f" + std::to_string(fan);
+                    if (DecodeDevice(Narrow(Read(ini, L"Nollie", (L"Look." + Widen(fanKey)).c_str())), &fl))
+                        p.deviceLighting["nollie." + fanKey] = fl;
+                }
+            }
+            if (comma == std::string::npos) break;
+            pos = comma + 1;
+        }
+    }
+    {
+        // Lighting zones ([Zones]).
+        v = Read(ini, L"Zones", L"Count");
+        const int count = v.empty() ? 0 : std::clamp(settings::Integer(v), 0, static_cast<int>(kMaxZones));
+        for (int i = 0; i < count; ++i) {
+            Zone z;
+            if (Decode(Narrow(Read(ini, L"Zones", (L"Zone" + std::to_wstring(i)).c_str())), &z)) p.zones.push_back(z);
+        }
+        Normalize(p.zones);
+        p.zonesMigrated = Read(ini, L"Zones", L"Migrated") == L"1";
+    }
+    p.fansAsked = Read(ini, L"App", L"FansAsked") == L"1";
+    {
+        const std::string asked = Narrow(Read(ini, L"Nollie", L"Asked"));  // "id,id"
+        for (size_t pos = 0; pos < asked.size();) {
+            const size_t comma = asked.find(',', pos);
+            const std::string id = asked.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+            if (!id.empty()) p.nollieAsked.push_back(id);
+            if (comma == std::string::npos) break;
+            pos = comma + 1;
+        }
+    }
     v = Read(ini, L"App", L"RamSlots");
-    if (!v.empty()) p.ramSlots = v == L"auto" ? -1 : (_wtoi(v.c_str()) & 15);
+    if (!v.empty()) p.ramSlots = v == L"auto" ? -1 : (settings::Integer(v) & 15);
     v = Read(ini, L"App", L"RamRelease");
     if (v == L"off") p.ramRelease = 1;
     if (v == L"keep") p.ramRelease = 2;
@@ -279,19 +377,24 @@ Prefs LoadPrefs(const std::wstring& ini) {
     v = Read(ini, L"App", L"LogitechKeepInGames");  // "LogitechForce" / "LogitechKeep" before 0.10.1
     if (!v.empty()) p.logitechForce = v != L"0";
     v = Read(ini, L"Games", L"ForzaPort");
-    if (!v.empty() && _wtoi(v.c_str()) > 0 && _wtoi(v.c_str()) < 65536) p.forzaPort = _wtoi(v.c_str());
+    if (!v.empty() && settings::Integer(v) > 0 && settings::Integer(v) < 65536) p.forzaPort = settings::Integer(v);
     for (auto [key, port] : {std::pair<const wchar_t*, int*>{L"BeamngPort", &p.beamngPort}, {L"DirtPort", &p.dirtPort},
                              {L"Ams2Port", &p.ams2Port}, {L"XplanePort", &p.xplanePort}, {L"WrcPort", &p.wrcPort}}) {
         v = Read(ini, L"Games", key);
-        if (!v.empty() && _wtoi(v.c_str()) > 0 && _wtoi(v.c_str()) < 65536) *port = _wtoi(v.c_str());
+        if (!v.empty() && settings::Integer(v) > 0 && settings::Integer(v) < 65536) *port = settings::Integer(v);
     }
     v = Read(ini, L"Games", L"F1Port");
-    if (!v.empty() && _wtoi(v.c_str()) > 0 && _wtoi(v.c_str()) < 65536) p.f1Port = _wtoi(v.c_str());
+    if (!v.empty() && settings::Integer(v) > 0 && settings::Integer(v) < 65536) p.f1Port = settings::Integer(v);
     v = Read(ini, L"Dashboard", L"LhmPort");
-    if (!v.empty()) p.lhmPort = _wtoi(v.c_str());
+    if (!v.empty()) p.lhmPort = settings::Integer(v);
     for (const char* id : device::All()) {
         DeviceLighting d;
         if (DecodeDevice(Narrow(Read(ini, L"Lighting", (L"Device." + Widen(id)).c_str())), &d)) p.deviceLighting[id] = d;
+    }
+    if (!p.zonesMigrated) {
+        // Before zones a device could have a look of its own; that is a zone of one now.
+        for (const Zone& z : ZonesFromOwnLooks(p.deviceLighting, p.zones)) p.zones.push_back(z);
+        p.zonesMigrated = true;
     }
     std::vector<std::string> items{device::kBoard, device::kRam, device::kMouse, device::kKeyboard};
     for (int i = 0; i < 8; ++i) items.push_back(FanItem(i));
@@ -339,6 +442,12 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"App", L"Lighting3d", p.lighting3d ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"FlowDirection", std::to_wstring(p.flowDirection));
     WriteConfigValue(ini, L"App", L"FlowSeconds", Num(p.flowSeconds));
+    WriteConfigValue(ini, L"Effects", L"Effect", std::to_wstring(p.setupEffect));
+    WriteConfigValue(ini, L"Effects", L"Color1", Widen(ToHex(p.setupColor1)));
+    WriteConfigValue(ini, L"Effects", L"Color2", Widen(ToHex(p.setupColor2)));
+    WriteConfigValue(ini, L"Effects", L"Speed", Num(p.setupSpeed));
+    WriteConfigValue(ini, L"Effects", L"Order", std::to_wstring(p.setupOrder));
+    WriteConfigValue(ini, L"Effects", L"RamSticksApart", p.setupRamApart ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"DashGraphs", p.dashGraphs ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"PsuWatts", std::to_wstring(p.psuWatts).c_str());
     WriteConfigValue(ini, L"App", L"SetupDone", p.setupDone ? L"1" : L"0");
@@ -354,6 +463,42 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
         std::string list;
         for (const auto& [name, on] : p.openRgbDevices) list += (list.empty() ? "" : "|") + name + (on ? "=1" : "=0");
         WriteConfigValue(ini, L"OpenRGB", L"Devices", Widen(list));
+    }
+    WriteConfigValue(ini, L"App", L"FansAsked", p.fansAsked ? L"1" : L"0");
+    {
+        std::string asked;
+        for (const std::string& id : p.nollieAsked) asked += (asked.empty() ? "" : ",") + id;
+        WriteConfigValue(ini, L"Nollie", L"Asked", Widen(asked));
+    }
+    WriteConfigValue(ini, L"Zones", L"Migrated", p.zonesMigrated ? L"1" : L"0");
+    WriteConfigValue(ini, L"Zones", L"Count", std::to_wstring(p.zones.size()));
+    for (size_t i = 0; i < kMaxZones; ++i)
+        WriteConfigValue(ini, L"Zones", (L"Zone" + std::to_wstring(i)).c_str(), i < p.zones.size() ? Widen(Encode(p.zones[i])) : L"");
+    WriteConfigValue(ini, L"Nollie", L"Enabled", p.nollieLighting ? L"1" : L"0");
+    {
+        std::string list, keys;
+        for (const auto& [id, on] : p.nollieDevices) list += (list.empty() ? "" : "|") + id + (on ? "=1" : "=0");
+        WriteConfigValue(ini, L"Nollie", L"Devices", Widen(list));
+        for (const auto& [key, c] : p.nollieChannels) {
+            keys += (keys.empty() ? "" : ",") + key;
+            WriteConfigValue(ini, L"Nollie", (L"Channel." + Widen(key)).c_str(), Widen(nollie::Encode(c)));
+            auto look = p.deviceLighting.find("nollie." + key);
+            if (look != p.deviceLighting.end())
+                WriteConfigValue(ini, L"Nollie", (L"Look." + Widen(key)).c_str(), Widen(EncodeDevice(look->second)));
+            for (int fan = 0; c.kind == nollie::Kind::Fans && fan < c.Fans(); ++fan) {
+                const std::string fanKey = key + ".f" + std::to_string(fan);
+                auto fl = p.deviceLighting.find("nollie." + fanKey);
+                if (fl != p.deviceLighting.end())
+                    WriteConfigValue(ini, L"Nollie", (L"Look." + Widen(fanKey)).c_str(), Widen(EncodeDevice(fl->second)));
+            }
+        }
+        WriteConfigValue(ini, L"Nollie", L"Channels", Widen(keys));
+        std::string hubs;
+        for (const auto& [id, h] : p.nollieHubs) {
+            hubs += (hubs.empty() ? "" : ",") + id;
+            WriteConfigValue(ini, L"Nollie", (L"Hub." + Widen(id)).c_str(), Widen(nollie::Encode(h)));
+        }
+        WriteConfigValue(ini, L"Nollie", L"Hubs", Widen(hubs));
     }
     std::string recent;
     for (size_t i = 0; i < p.recentColors.size(); ++i) recent += (i ? "," : "") + ToHex(p.recentColors[i]);
@@ -405,6 +550,14 @@ void SaveAll(const std::wstring& ini, const Prefs& p, const Config& cfg) {
     WriteConfigValue(ini, L"AzothOLED", L"BannerSize", Num(p.azothOledBannerSize));
     WriteConfigValue(ini, L"AzothOLED", L"BannerInvert", p.azothOledBannerInvert ? L"1" : L"0");
     WriteConfigValue(ini, L"App", L"DualsenseController", p.dualsenseController ? L"1" : L"0");
+    WriteConfigValue(ini, L"App", L"DualsensePlayerLeds", p.dualsensePlayerLeds ? L"1" : L"0");
+    WriteConfigValue(ini, L"App", L"HandoffColorEnabled", p.handoffColorEnabled ? L"1" : L"0");
+    const std::string handoffHex = nollie::hubdetail::Hex(p.handoffColor);
+    WriteConfigValue(ini, L"App", L"HandoffColor", std::wstring(handoffHex.begin(), handoffHex.end()).c_str());
+    WriteConfigValue(ini, L"Controller", L"PlayerMode", std::to_wstring(p.dualsensePlayers.mode).c_str());
+    WriteConfigValue(ini, L"Controller", L"PlayerMask", std::to_wstring(p.dualsensePlayers.mask).c_str());
+    WriteConfigValue(ini, L"Controller", L"PlayerEffects", std::to_wstring(p.dualsensePlayers.effects).c_str());
+    WriteConfigValue(ini, L"Controller", L"PlayerSpeed", std::to_wstring(p.dualsensePlayers.speed).c_str());
     WriteConfigValue(ini, L"Controller", L"Input", p.padInput ? L"1" : L"0");
     WriteConfigValue(ini, L"Controller", L"ShowValues", p.padShowValues ? L"1" : L"0");
     WriteConfigValue(ini, L"Controller", L"View3d", p.padView3d ? L"1" : L"0");

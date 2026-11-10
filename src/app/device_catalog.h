@@ -25,6 +25,14 @@ inline const std::vector<UsbEntry>& RgbUsb() {
         {0x1E71, 0, "NZXT"},          {0x2516, 0, "Cooler Master"},  {0x264A, 0, "Thermaltake"},
         {0x1462, 0, "MSI"},           {0x3434, 0, "Keychron"},
         {0x048D, 0x5702, "Gigabyte RGB Fusion"}, {0x048D, 0x8297, "Gigabyte RGB Fusion"},
+        // Nollie ARGB hubs, by product: as listed in OpenRGB's Nollie driver. Their vendor IDs
+        // (0x16D2, 0x16D5, 0x3061) are shared with other makers' chips, so no whole vendor.
+        {0x3061, 0x4714, "Nollie"}, {0x3061, 0x4716, "Nollie"}, {0x16D2, 0x1F01, "Nollie"},
+        {0x16D2, 0x1F11, "Nollie"}, {0x16D2, 0x1616, "Nollie"}, {0x16D2, 0x1617, "Nollie"},
+        {0x16D2, 0x1618, "Nollie"}, {0x16D5, 0x4714, "Nollie"}, {0x16D5, 0x4716, "Nollie"},
+        {0x16D5, 0x1F01, "Nollie"}, {0x16D5, 0x1F11, "Nollie"}, {0x16D5, 0x2A01, "Nollie"},
+        {0x16D5, 0x2A08, "Nollie"}, {0x16D5, 0x2A16, "Nollie"}, {0x16D5, 0x2A32, "Nollie"},
+        {0x16D5, 0x2C08, "Nollie"},
     };
     return k;
 }

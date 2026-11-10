@@ -3,6 +3,8 @@
 // colors, and collects the sensors it reads (fans, CPU / board temperatures) for the
 // dashboard. Own thread; about 20 RAM updates per second at most.
 #pragma once
+#include "delivery_receipt.h"
+#include "worker_cancellation.h"
 
 #include <windows.h>
 
@@ -41,6 +43,8 @@ public:
 
     ~HardwareHelper() { Stop(); }
     void Start();
+    void RequestStop() { stop_ = true; cancellation_.Cancel(); }
+    uint64_t delivered() const { return delivery_.value(); }
     void Stop();
     // Try starting the helper again now (e.g. right after it was set up).
     void Retry() { retry_ = true; }
@@ -50,6 +54,8 @@ public:
     // Keep Armoury Crate's lighting service (ASUS LightingService) stopped while `on`; the
     // helper starts it again when this goes false or LumaBridge exits.
     void SetPauseAsusLighting(bool on) { pauseAsus_ = on; }
+    // Setup effects: every stick a part of its own (true), or all sticks together as one.
+    void SetRamSticksApart(bool on) { ramSticksApart_ = on; }
     // That service's state, as the helper sees it (Unknown without a helper, or an older one).
     helper::AsusLighting asusLighting() const { return asus_; }
     // Bumped each time the helper stopped that service after it had started (helper::Shared).
@@ -60,22 +66,27 @@ public:
     State state() const { return state_; }
     RamState ramState() const { return ramState_; }
     std::string ramProblem() const;
+    uint32_t ramFrameMicros() const { return ramFrameMicros_; }
+    uint32_t ramFrames() const { return ramFrames_; }
     int sticks() const { return sticks_; }  // RAM sticks found
     std::string chip() const;               // the board's monitoring chip, "" if none
     // The latest sensors (empty when the helper isn't running).
     std::vector<sensors::Sensor> Sensors() const;
 
 private:
+    luma::DeliveryReceipt delivery_;
     void Run();
 
+    WorkerCancellation cancellation_;
     std::thread thread_;
     std::atomic<bool> stop_{false}, retry_{false};
     std::atomic<State> state_{State::Off};
     std::atomic<RamState> ramState_{RamState::Off};
+    std::atomic<bool> ramSticksApart_{true};
     std::atomic<int> sticks_{0};
     std::atomic<bool> pauseAsus_{false}, outdated_{false};
     std::atomic<helper::AsusLighting> asus_{helper::AsusLighting::Unknown};
-    std::atomic<uint32_t> asusStops_{0};
+    std::atomic<uint32_t> asusStops_{0}, ramFrameMicros_{0}, ramFrames_{0};
     mutable std::mutex mutex_;
     fx::Params effect_;
     double brightness_ = 1.0;

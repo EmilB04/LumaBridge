@@ -9,6 +9,7 @@
 #include "direct_mode_reclaim.h"
 #include "ipc.h"
 #include "usb_aura.h"
+#include "frame_clock.h"
 #include "log.h"
 
 namespace luma {
@@ -44,6 +45,23 @@ DWORD PumpingWait(HANDLE h, DWORD ms) {
             DispatchMessageW(&m);
         }
         if (left == 0) return WAIT_TIMEOUT;
+    }
+}
+
+// Waits for `wake` or the pacer's next frame, pumping messages (this is an STA thread). The
+// beat is steady and precise: animations move in even steps.
+DWORD PumpingWaitBeat(HANDLE wake, FramePacer& pacer) {
+    const double due = pacer.Next();
+    if (!pacer.Arm(due - PreciseNowMs())) return PumpingWait(wake, static_cast<DWORD>(pacer.period()));
+    HANDLE hs[2] = {wake, pacer.timer()};
+    for (;;) {
+        const DWORD r = MsgWaitForMultipleObjectsEx(2, hs, 1000, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        if (r != WAIT_OBJECT_0 + 2) return r;
+        MSG m;
+        while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
     }
 }
 
@@ -101,12 +119,19 @@ bool AuraMirror::Start(const Config& cfg, HMODULE self, const char* sourceName, 
     return true;
 }
 
-void AuraMirror::Stop() {
-    if (!thread_) return;
+void AuraMirror::RequestStop() {
     stop_ = true;
     Wake();
-    if (WaitForSingleObject(thread_, 5000) != WAIT_OBJECT_0)
-        LUMA_WARN("Aura mirror: worker did not stop within 5s");
+    if (thread_) CancelSynchronousIo(thread_);
+}
+
+void AuraMirror::Stop() {
+    if (!thread_) return;
+    RequestStop();
+    if (WaitForSingleObject(thread_, 5000) != WAIT_OBJECT_0) {
+        LUMA_WARN("Aura mirror: still stopping; retaining worker resources until it exits");
+        WaitForSingleObject(thread_, INFINITE);  // process-level exit watchdog remains the bound
+    }
     CloseHandle(thread_);
     thread_ = nullptr;
     CloseHandle(wake_);
@@ -290,7 +315,16 @@ void AuraMirror::Run() {
         return;
     }
 
-    const uint64_t framePeriodMs = std::max<uint64_t>(1, 1000 / cfg_.maxUpdateHz);
+    FramePacer pacer(cfg_.maxUpdateHz);
+    double lastPushPrecise = 0;  // lastPushAt on the precise clock, for the frame rate limit
+    // Too soon after the last frame (on the precise clock; GetTickCount64's 16 ms steps would
+    // make frames uneven): waits until it's time and says so.
+    auto tooSoon = [&]() {
+        const double due = lastPushPrecise + pacer.period() - 1.0;
+        if (PreciseNowMs() >= due) return false;
+        pacer.WaitUntil(due);
+        return true;
+    };
     const DWORD pid = GetCurrentProcessId();
     std::unique_ptr<LightingBackend> backend;
     if (cfg_.auraUseSdk) backend = std::make_unique<AuraBridge>();
@@ -362,17 +396,16 @@ void AuraMirror::Run() {
             }
             const uint32_t raw = ToAuraColor(color);  // the app applies calibration
             if (!havePushed || raw != lastPushed || now - lastPushAt >= kAppKeepAliveMs) {
-                if (havePushed && raw != lastPushed && now - lastPushAt < framePeriodMs) {
-                    Sleep(static_cast<DWORD>(framePeriodMs - (now - lastPushAt)));
-                    continue;
-                }
+                if (havePushed && raw != lastPushed && tooSoon()) continue;  // re-evaluate with the freshest state
                 SendToApp(app, ipc::MakeFrame(ipc::FrameKind::Color, pid, color.r, color.g, color.b,
                                               source_.c_str()));
                 havePushed = true;
                 lastPushed = raw;
                 lastPushAt = GetTickCount64();
+                lastPushPrecise = PreciseNowMs();
             }
-            PumpingWait(wake_, animating ? static_cast<DWORD>(framePeriodMs) : kIdleWaitMs);
+            if (animating) PumpingWaitBeat(wake_, pacer);
+            else PumpingWait(wake_, kIdleWaitMs);
             continue;
         }
         if (routeToApp_ && !cfg_.auraDirectFromGames) {
@@ -460,15 +493,12 @@ void AuraMirror::Run() {
         if (pattern.active) {
             if (backend->IsConnected() &&
                 (!havePushed || pattern.version != lastPattern || animating || now - lastPushAt >= kHardwareRefreshMs)) {
-                if (havePushed && now - lastPushAt < framePeriodMs) {
-                    Sleep(static_cast<DWORD>(framePeriodMs - (now - lastPushAt)));
-                    continue;
-                }
+                if (havePushed && tooSoon()) continue;  // re-evaluate with the freshest state
                 // The effects' shared clock (fx::Params::epoch), so the fans and board are in step
                 // with every other device.
-                const uint64_t at = GetTickCount64();
-                const double t = fx::Seconds(pattern.params, at, pattern.startedAt);
-                const double tb = fx::Seconds(pattern.board, at, pattern.startedAt);
+                const double at = PreciseNowMs();
+                const double t = fx::SecondsAt(pattern.params, at, static_cast<double>(pattern.startedAt));
+                const double tb = fx::SecondsAt(pattern.board, at, static_cast<double>(pattern.startedAt));
                 const auto& devs = backend->Devices();
                 frames.resize(devs.size());
                 for (size_t i = 0; i < devs.size(); ++i) {
@@ -482,10 +512,12 @@ void AuraMirror::Run() {
                     for (auto& c : f) c = ApplyCorrection(cc, level < 1.0 ? Scale(c, level) : c);
                 }
                 if (backend->SetFrames(frames)) {
+                    delivery_.Confirm(std::max(pattern.params.delivery, pattern.board.delivery));
                     havePushed = true;
                     lastPattern = pattern.version;
                     lastPushed = ~0u;  // a later single color always repaints
                     lastPushAt = GetTickCount64();
+                    lastPushPrecise = PreciseNowMs();
                 } else {
                     LUMA_WARN("Aura mirror: push failed, reconnecting in %llu ms",
                               static_cast<unsigned long long>(kReconnectDelayMs));
@@ -494,21 +526,20 @@ void AuraMirror::Run() {
                     publish();
                 }
             }
-            PumpingWait(wake_, animating ? static_cast<DWORD>(framePeriodMs) : kIdleWaitMs);
+            if (animating) PumpingWaitBeat(wake_, pacer);
+            else PumpingWait(wake_, kIdleWaitMs);
             continue;
         }
 
         const uint32_t out = ToAuraColor(ApplyCorrection(cc, color));
         if (backend->IsConnected() && (!havePushed || out != lastPushed || now - lastPushAt >= kHardwareRefreshMs)) {
             // Rate limit: coalesce bursts of game calls into one frame per period.
-            if (havePushed && now - lastPushAt < framePeriodMs) {
-                Sleep(static_cast<DWORD>(framePeriodMs - (now - lastPushAt)));
-                continue;  // re-evaluate with the freshest state
-            }
+            if (havePushed && tooSoon()) continue;  // re-evaluate with the freshest state
             if (backend->SetAll(out)) {
                 havePushed = true;
                 lastPushed = out;
                 lastPushAt = GetTickCount64();
+                lastPushPrecise = PreciseNowMs();
             } else {
                 LUMA_WARN("Aura mirror: push failed, reconnecting in %llu ms",
                           static_cast<unsigned long long>(kReconnectDelayMs));
@@ -520,7 +551,8 @@ void AuraMirror::Run() {
 
         // Animations need a steady tick; otherwise sleep until something changes
         // (or periodically, to retry a failed Aura connection / notice the app).
-        PumpingWait(wake_, animating ? static_cast<DWORD>(framePeriodMs) : kIdleWaitMs);
+        if (animating) PumpingWaitBeat(wake_, pacer);
+        else PumpingWait(wake_, kIdleWaitMs);
     }
 
     if (wasRouted && app)

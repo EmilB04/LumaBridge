@@ -7,19 +7,21 @@
 #include <algorithm>
 #include <map>
 
+#include "frame_clock.h"
 #include "log.h"
 #include "openrgb_protocol.h"
 
 namespace luma::app {
 namespace {
 
-constexpr DWORD kFrameMs = 33;
-constexpr uint64_t kRefreshMs = 5000;  // every LED again now and then
+constexpr double kFrameHz = 60;
+constexpr uint64_t kRefreshMs = 2000;  // every LED again now and then
 constexpr uint64_t kRetryMs = 5000;    // OpenRGB not running: look again
 
 // One connection to OpenRGB's SDK server.
 class Link {
 public:
+    explicit Link(const std::atomic<bool>& stop) : stop_(stop) {}
     ~Link() { Close(); }
     bool open() const { return s_ != INVALID_SOCKET; }
 
@@ -33,9 +35,18 @@ public:
         a.sin_family = AF_INET;
         a.sin_port = htons(port);
         inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+        u_long nonblocking = 1;
+        if (ioctlsocket(s_, FIONBIO, &nonblocking) != 0) { Close(); return false; }
         if (connect(s_, reinterpret_cast<sockaddr*>(&a), sizeof a) != 0) {
-            Close();
-            return false;
+            const int error = WSAGetLastError();
+            if (error != WSAEWOULDBLOCK && error != WSAEINPROGRESS) { Close(); return false; }
+            fd_set write, errors; FD_ZERO(&write); FD_ZERO(&errors); FD_SET(s_, &write); FD_SET(s_, &errors);
+            timeval wait{0, 200000};
+            if (select(0, nullptr, &write, &errors, &wait) <= 0 || stop_) { Close(); return false; }
+            int connectedError = 0, length = sizeof connectedError;
+            if (getsockopt(s_, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&connectedError), &length) != 0 || connectedError) {
+                Close(); return false;
+            }
         }
         const BOOL noDelay = TRUE;
         setsockopt(s_, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&noDelay), sizeof noDelay);
@@ -49,11 +60,17 @@ public:
         s_ = INVALID_SOCKET;
     }
 
-    bool Send(uint32_t device, uint32_t id, const openrgb::Bytes& data = {}) {
+    bool Send(uint32_t device, uint32_t id, const openrgb::Bytes& data = {}, bool finishing = false) {
         const openrgb::Bytes p = openrgb::Packet(device, id, data);
         size_t sent = 0;
+        const uint64_t deadline = GetTickCount64() + 500;
         while (sent < p.size()) {
+            if ((!finishing && stop_) || GetTickCount64() >= deadline) return false;
+            fd_set write; FD_ZERO(&write); FD_SET(s_, &write);
+            timeval wait{0, 50000};
+            if (select(0, nullptr, &write, nullptr, &wait) <= 0) continue;
             const int n = send(s_, reinterpret_cast<const char*>(p.data() + sent), static_cast<int>(p.size() - sent), 0);
+            if (n < 0 && WSAGetLastError() == WSAEWOULDBLOCK) continue;
             if (n <= 0) { broken_ = true; return false; }
             sent += static_cast<size_t>(n);
         }
@@ -94,6 +111,7 @@ public:
     }
 
 private:
+    const std::atomic<bool>& stop_;
     bool Readable(DWORD ms) {
         fd_set r;
         FD_ZERO(&r);
@@ -106,11 +124,13 @@ private:
         size_t got = 0;
         while (got < n) {
             const uint64_t now = GetTickCount64();
-            if (now >= until || !Readable(static_cast<DWORD>(until - now))) {
-                if (got) broken_ = true;  // a partial packet cannot be parsed as a new header
+            if (stop_ || now >= until) {
+                if (got) broken_ = true;
                 return false;
             }
+            if (!Readable(static_cast<DWORD>(std::min<uint64_t>(50, until - now)))) continue;
             const int k = recv(s_, reinterpret_cast<char*>(p + got), static_cast<int>(n - got), 0);
+            if (k < 0 && WSAGetLastError() == WSAEWOULDBLOCK) continue;
             if (k <= 0) {
                 broken_ = true;
                 return false;
@@ -153,7 +173,7 @@ void OpenRgbOutput::Start(uint16_t port) {
 
 void OpenRgbOutput::Stop() {
     if (!thread_.joinable()) return;
-    stop_ = true;
+    RequestStop();
     thread_.join();
     state_ = State::Off;
     std::lock_guard<std::mutex> lock(mutex_);
@@ -175,9 +195,10 @@ std::vector<OpenRgbDevice> OpenRgbOutput::devices() const {
 }
 
 void OpenRgbOutput::Run() {
+    WorkerCancellation::Scope cancellable(cancellation_);
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
-    Link link;
+    Link link(stop_);
     uint32_t version = 0;
     std::vector<openrgb::Controller> ctrls;
     std::vector<bool> custom;                 // LumaBridge has it in direct mode
@@ -188,9 +209,9 @@ void OpenRgbOutput::Run() {
 
     // Gives a device its own effect back (the mode it had before LumaBridge).
     auto release = [&](size_t i) {
-        if (i < custom.size() && custom[i] && link.open() && ctrls[i].activeMode >= 0 && !ctrls[i].activeModeData.empty())
+        if (!keepLastColor_ && i < custom.size() && custom[i] && link.open() && ctrls[i].activeMode >= 0 && !ctrls[i].activeModeData.empty())
             link.Send(static_cast<uint32_t>(i), openrgb::kUpdateMode,
-                      openrgb::UpdateMode(ctrls[i].activeMode, ctrls[i].activeModeData));
+                      openrgb::UpdateMode(ctrls[i].activeMode, ctrls[i].activeModeData), true);
         if (i < custom.size()) custom[i] = false;
     };
     auto enumerate = [&] {
@@ -247,8 +268,9 @@ void OpenRgbOutput::Run() {
         devices_.clear();
     };
 
+    FramePacer pacer(kFrameHz);
     while (!stop_) {
-        Sleep(kFrameMs);
+        pacer.Wait();
         const uint64_t now = GetTickCount64();
         if (!link.open()) {
             if (now < nextTry) continue;
@@ -302,7 +324,8 @@ void OpenRgbOutput::Run() {
             since = effectSince_;
             skip = skip_;
         }
-        const double t = fx::Seconds(effect, now, since);
+        const double t = fx::SecondsAt(effect, PreciseNowMs(), static_cast<double>(since));
+        bool deliveredAny = false, deliveredAll = true;
         for (size_t i = 0; i < ctrls.size(); ++i) {
             const openrgb::Controller& c = ctrls[i];
             const bool wanted = own && c.leds && std::find(skip.begin(), skip.end(), c.id) == skip.end();
@@ -342,13 +365,16 @@ void OpenRgbOutput::Run() {
                 custom[i] = true;
                 lastSent[i].clear();
             }
-            if (colors == lastSent[i] && now - sentAt[i] < kRefreshMs) continue;
-            if (!link.Send(static_cast<uint32_t>(i), openrgb::kUpdateLeds, openrgb::UpdateLeds(colors))) { drop(); break; }
+            if (colors == lastSent[i] && now - sentAt[i] < kRefreshMs && (!effect.delivery || delivery_.Has(effect.delivery))) continue;
+            if (!link.Send(static_cast<uint32_t>(i), openrgb::kUpdateLeds, openrgb::UpdateLeds(colors))) { deliveredAll = false; drop(); break; }
+            deliveredAny = true;
             lastSent[i] = colors;
             sentAt[i] = now;
         }
+        if (deliveredAny && deliveredAll && link.open()) delivery_.Confirm(effect.delivery);
     }
-    for (size_t i = 0; i < ctrls.size(); ++i) release(i);
+    if (!keepLastColor_)
+        for (size_t i = 0; i < ctrls.size(); ++i) release(i);
     link.Close();
     WSACleanup();
 }

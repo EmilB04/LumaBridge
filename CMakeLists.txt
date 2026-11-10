@@ -24,6 +24,10 @@ if(MSVC)
 else()
     add_compile_options(-Wall -Wextra)
 endif()
+if(MINGW AND LUMA_ARCH STREQUAL "x86")
+    # Match MSVC's SSE2 math; x87 excess precision changes color and audio rounding.
+    add_compile_options(-msse2 -mfpmath=sse)
+endif()
 
 # ---- Portable core tests (any OS) ----------------------------------------------------
 enable_testing()
@@ -34,6 +38,8 @@ add_test(NAME test_core COMMAND test_core)
 if(WIN32)
     find_program(LUMA_POWERSHELL NAMES powershell.exe)
     if(LUMA_POWERSHELL)
+        add_test(NAME test_helper_version COMMAND "${LUMA_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+                 -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_helper_version.ps1")
         add_test(NAME test_handback COMMAND "${LUMA_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
                  -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_handback.ps1")
     endif()
@@ -49,6 +55,7 @@ add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 if(MINGW)
     # Self-contained binaries for cross-compiled test builds.
     add_link_options(-static -static-libgcc -static-libstdc++)
+    target_link_options(test_core PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
 
 # ---- common + aura-bridge ------------------------------------------------------------
@@ -129,6 +136,10 @@ if(LUMA_ARCH STREQUAL "x64")
         ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp)
     target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
     target_link_libraries(imgui PUBLIC d3d11 d3dcompiler dxgi dwmapi)
+    add_executable(test_popup_animations tests/test_popup_animations.cpp src/app/popup_animations.cpp)
+    target_include_directories(test_popup_animations PRIVATE src/app)
+    target_link_libraries(test_popup_animations PRIVATE imgui)
+    add_test(NAME test_popup_animations COMMAND test_popup_animations)
     if(MSVC)
         target_compile_options(imgui PRIVATE /W0)
     else()
@@ -142,6 +153,7 @@ if(LUMA_ARCH STREQUAL "x64")
     add_executable(lumabridge_app WIN32
         src/app/main.cpp
         src/app/ui.cpp
+        src/app/popup_animations.cpp
         src/app/scene_gpu.cpp
         src/app/controller.cpp
         src/app/app_settings.cpp
@@ -159,7 +171,7 @@ if(LUMA_ARCH STREQUAL "x64")
         src/app/peripherals/logitech_output.cpp
         src/app/peripherals/azoth_output.cpp src/app/peripherals/azoth_music_source.cpp src/app/peripherals/dualsense_output.cpp src/app/peripherals/pad_input.cpp src/app/peripherals/hardware_helper.cpp
         src/app/peripherals/azoth_oled_assets.cpp
-        src/app/peripherals/openrgb_output.cpp src/app/peripherals/lamparray_output.cpp
+        src/app/peripherals/openrgb_output.cpp src/app/peripherals/lamparray_output.cpp src/app/peripherals/nollie_output.cpp
         src/app/peripherals/ghub_settings.cpp
         src/integrations/logitech/real_logiled.cpp
         src/app/res/app.rc)
@@ -175,6 +187,15 @@ if(LUMA_ARCH STREQUAL "x64")
         target_link_options(lumabridge_app PRIVATE -municode)
     endif()
     install(TARGETS lumabridge_app RUNTIME DESTINATION .)
+endif()
+
+# These workers belong to the x64 app; the SDK DLLs also build for Win32.
+if(LUMA_ARCH STREQUAL "x64")
+    add_executable(test_windows tests/test_windows.cpp src/app/app_settings.cpp src/app/game_feeds.cpp)
+    target_include_directories(test_windows PRIVATE src/core src/app src/app/games src/app/sensors src/app/peripherals)
+    target_link_libraries(test_windows PRIVATE gamesense aura_bridge luma_common winhttp ws2_32 shell32 ole32 advapi32 psapi)
+    add_test(NAME test_windows COMMAND test_windows)
+    set_tests_properties(test_windows PROPERTIES TIMEOUT 30)
 endif()
 
 # ---- tools ---------------------------------------------------------------------------

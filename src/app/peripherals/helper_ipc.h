@@ -20,6 +20,7 @@ namespace luma::app::helper {
 constexpr wchar_t kSharedName[] = L"Global\\LumaBridgeHelper";
 constexpr uint32_t kMagic = 0x5048424C;  // "LBHP"
 constexpr uint32_t kVersion = 2;
+constexpr uint32_t kTaskVersion = 8;
 
 enum class Status : uint32_t {
     Starting = 0,
@@ -97,6 +98,12 @@ struct Shared {
     uint32_t taskVersion;
     uint32_t stopRequested;  // app asks the helper to finish handback before exiting
     uint32_t stopped;        // helper finished releasing RAM and restoring ASUS service settings
+    // Optional coherent RAM frames and timing diagnostics; zero from older helpers.
+    uint32_t ramFrameProtocol;  // helper -> app: 1 supports ramFrameSeq
+    uint32_t ramFrameSeq;       // app -> helper: odd during color writes, even when stable
+    uint32_t ramFrames;         // helper -> app: successful hardware frames
+    uint32_t ramFrameMicros;    // helper -> app: latest complete transaction duration
+    uint32_t ramAppliedSeq;     // helper -> app: last successfully written ramSeq
 };
 
 constexpr size_t kSizeV2 = offsetof(Shared, pauseAsusLighting);

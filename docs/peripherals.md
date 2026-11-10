@@ -1,5 +1,78 @@
 # Keyboards, mice and RAM
 
+**Zones (Lighting page):** a zone is a group of devices (`Zone` in `lighting_zones.h`, saved
+in the INI's `[Zones]`) with a lighting of its own: manual (always its look) or auto (a game's
+lighting while one runs, else its look, a rainbow or dark), its own setup effect and order, its
+own travel across its devices, its own brightness. A device is in one zone at most; the devices
+in none are Everything, which uses the main lighting and the mode in the header.
+`Controller::ApplyZones` puts each zone's lighting on its devices on top of what Decide
+chose (`Output::devices`, `Output::gameFor` for the devices showing a game), so every output
+shows zones with no code of its own. Setup effects and travel work inside a zone: its parts
+(`Controller::setupParts(zoneId)`) are the zone's lit devices in the order of how they sit in
+Your setup. Devices that had a look of their own before zones became a zone of one when the
+settings were first read. Brightness is the device's times the zone's times the overall
+(`Controller::Level`). The idle choice "Armoury Crate" releases devices outside zones;
+active zones keep their lighting. Explicit Stop lighting releases every zone too.
+
+**Order follows the arrangement:** the order travel and setup effects use comes from where the
+devices sit in Your setup: the flat layout in 2D, the desk and the case in 3D
+(`Controller::ArrangedSpot`). The Nollie hub itself isn't in Your setup (it has no lights); its
+fans and strips count as the Nollie fans, in the case.
+
+**What's plugged in?:** things LumaBridge reads from USB it can only use well when told what is
+connected: a Nollie hub (what is on each channel) and the motherboard's ARGB header (how many
+fans). The Lighting page asks once, with "Light it" to find the right header; "Ask me later"
+hides it for the session, "Done" for good (`[Nollie] Asked`, `[App] FansAsked`).
+
+**Setup effects (all outputs):** `fx::Kind::FillOneByOne` and the kinds after it are effects
+across the whole setup: every part gets its place (`Params::part` of `Params::parts`) and
+`fx::Render` draws the part's LEDs from it, so every output shows them with no code of its own.
+`Controller::UpdateSetupParts` lists the lit devices, how many parts each has (each fan of the
+Aura header when each fan shows the pattern, each Nollie fan on its own and each strip, each
+memory stick (or all sticks as one: `[Effects] RamSticksApart=0`), one for the board, keyboard, mouse, controller and the other devices), and puts
+them in order by where they sit in Your setup (left to right by default). `RenderFans`, the
+Nollie plans and the RAM renderer give each of their parts its own number. They replace your
+lighting (and devices' own looks) while chosen; games still light everything at once; Nollie
+sequences and travel step aside; a Nollie gradient colors them.
+
+Across the setup also offers Fill to solid/pulse, Center to solid/pulse and Ignite to
+solid/pulse. Except for ongoing Center to pulse (which contracts and repeats), these play
+their reveal once, then hold the main color or pulse together on a
+four-second cycle between 44% and full intensity over the second color. Speed controls the
+reveal, while the final pulse stays gentle. Gallery previews repeat the reveal for browsing.
+
+**DualSense moving effects:** the lightbar is one color and the five player LEDs are on or off
+(`dualsense_effects.h`). For moving effects the lightbar shows the average color of the effect
+across the controller (a comet pulses as it passes, a fill brightens as it fills), or its first
+LED where the hue is what moves (rainbows, flowing gradients); the player LEDs show the motion: a
+comet chases across them, a fill fills them from the left, sparkles twinkle, a strobe blinks them
+all, breathing is a level meter. Still colors and rainbows leave them off. The report bytes are
+the ones Linux's hid-playstation driver documents (player LEDs in the common output block: USB
+byte 44, Bluetooth byte 46, five bits). Toggle: Devices > DualSense, "Show moving effects on the
+player LEDs" (`[App] DualsensePlayerLeds`). Not confirmed on a real controller: which end is
+LED 1, and whether Bluetooth takes the player bits as written.
+
+**Keep-alive (all outputs):** outputs only send frames that changed, and the same frame again
+every 1 to 2 seconds (RAM, the Logitech mouse, the DualSense and the Kraken every second; the
+Azoth, Windows lighting devices, OpenRGB and the Nollie hubs every 2 s; the Aura every second).
+Devices that go back to their own effect when they hear nothing for a while (the sticks'
+rainbow, the G502's color cycle) would otherwise show it during a still stretch of an effect,
+such as the dark parts of a bounce; it used to be 3 to 5 seconds.
+
+**Frame timing (all outputs):** every output thread paces its frames with `FramePacer`
+(`src/core/frame_clock.h`): a high-resolution waitable timer on a steady beat, and effect time
+from `PreciseNowMs` (the performance counter on GetTickCount64's scale) through
+`fx::SecondsAt`. `Sleep` and GetTickCount64 alone move in ~16 ms steps, which made 30 frames a
+second really 21 to 32, and effects jump. Rates: Aura up to `[Aura] MaxUpdateHz` (default 60
+for new settings; Settings > Maximum update rate), Nollie / LampArray / OpenRGB 60, Logitech 50,
+Azoth and DualSense 30 (the Azoth 20 through the Omni receiver, on its own beat), RAM 30, Kraken
+10. The Aura thread waits on the timer together with its wake event while pumping messages (it
+is an STA). The hardware helper looks for a new RAM frame every 5 ms (it polled every "30 ms",
+really 31 or 47, which made the app's 20 frames a second land unevenly). It writes every
+register every frame: tried writing only the changed ones, and the sticks then fell back to
+their own rainbow until the next whole frame. The helper log says how long a frame takes on the
+bus ("RAM: a frame (... writes) takes ... ms"), which is what limits the memory's rate.
+
 ## Logitech (G502 X Plus and other Logitech RGB gear)
 
 **Without G HUB:** LumaBridge tries direct HID++ lighting even when Logitech's LED SDK
@@ -347,6 +420,94 @@ Logitech through G HUB, the Aura controller) are off here by default. If Windows
 Dynamic Lighting also controls a device, the two take turns: turn it off for that device
 (Settings > Personalization > Dynamic Lighting). Not yet tried on a real LampArray device.
 
+## Nollie ARGB hubs
+
+Nollie 1, 8, 16 and 32 channel hubs (and the 28 series and Prism8) are lit over USB HID, with no
+other program: `nollie_protocol.h` (reports and device table, pure and tested),
+`nollie_layout.h` (what is on each channel), `nollie_output.cpp` (the thread). The protocol and
+the table of USB IDs, channel counts and wiring follow OpenRGB's Nollie driver
+(`Controllers/NollieController`); LumaBridge only sends colors and reads nothing back.
+
+- **16 / 32 channel hubs:** one 1025-byte report per channel (channel, flag, LED count
+  big-endian, then G R B per LED). Channels go out in hardware order; channels 15 and 31 always
+  go out (they carry the flag that ends a bank), with 8 ms after each. The zone numbers the user
+  sees map to hardware channels through a per-model table.
+- **Other hubs:** 64-byte reports of at most 21 LEDs (R G B, or G R B on some models), numbered
+  `packet + channel * interval`, then one update report (`0xFF`).
+- **Settings the hub is told:** the 1-channel hub gets its LED count (`0xFE 0x03 ...`); the
+  original 32-channel hub gets its power stage switched (`0x80 n`) when channel 27 is longer
+  than 20 LEDs.
+
+Where things are: the hub's page on Devices has its switch and the channel setup (what is
+plugged in, LED counts, names, the test pattern). On the Lighting page the hubs are one more
+device, "Nollie fans" (`device::kNollie`), next to the fans, motherboard and memory: they follow
+the main lighting, or a look of their own, with their own brightness and direction, appear in
+"Your setup" and take part in the flow across the setup (where the case's fans are). Picking
+them (Manual mode; at the end of the page in Auto mode) shows what only Nollie hubs can do,
+under "Only on Nollie hubs": travelling effects, sequences, gradients, the refresh rate, the
+and each channel's or fan's own lighting (a channel without one shows the Nollie
+fans' look); the boot effect is on the hub's page under Devices. Colors go through the same calibration as the Aura fans (Settings), so the same
+color looks the same on both.
+
+A hub can't say what is plugged in, so the Devices page asks per channel: not used, an LED
+strip (its length), or fans (how many, LEDs per fan, one pattern per fan or across them all).
+A hub with no channel set up is left alone, not even blanked. Each channel can have its own
+lighting, brightness and direction like any other device, be handed back, and show a test
+pattern (each fan one color with a white first LED). The settings are in the INI's `[Nollie]`
+section. When LumaBridge lets go it stops sending: the hub keeps its last colors until it
+loses power. Close Nollie's own app and SignalRGB first; only one program can hold the hub.
+Devices OpenRGB also lists as Nollie are off in OpenRGB by default while this output works.
+
+**Fans on their own:** a channel of chained fans can show one pattern across all of them, or
+(the default) each fan on its own: every fan renders the effect around its own ring
+(`RenderSegments`), can have its own look and brightness (`Look.<channel>.f<n>` in the INI;
+without one it shows the channel's), and is its own step when an effect travels.
+
+**Travelling effects** (their own section on the hub page): per hub, the effect can run through
+the parts in use (channels in order, each fan on its own a step, first to last or the reverse),
+fan by fan or smoothly LED by LED (`nollie::Place`: each part's first LED gets its place along
+the way through `Flowed`, and its LEDs run behind it in proportion, `Segment::lag`, so the
+effect flows from one fan into the next), over a set number of seconds, the same way the Lighting
+page's flow moves an effect across the setup (`Flowed`, `device_lighting.h`). Games still light
+every channel at once.
+
+**Sequences** (in Travelling effects): effects that know the order of the hub's parts
+(`nollie_sequence.h`), shown instead of each channel's lighting, in the travel's order: fill
+each fan around its ring one after another until all are lit, then dark and again; fill then
+empty; one fan at a time; rainbow fan by fan; a comet bouncing through all fans; dots stacking
+up. Each has a lit and an unlit color and a time per fan; channel brightness and direction
+apply; games still light every channel at once. A sequence starts over when it is changed or
+with "Start over".
+
+**Gradients:** a gradient of 2 to 6 colors runs along the parts in channel order and takes the
+place of the effect's main color LED by LED (`nollie::GradientAt`, `GradientPlace`): a still
+gradient, breathing or strobing in it, a comet changing color as it goes, sequences lit in it.
+It can move (loops back to its first color). Rainbows and games keep their own colors.
+
+**Refresh and timing:** frames go out at 30 or 60 Hz per hub (60 by default), on a steady
+beat from a high-resolution waitable timer (Windows 10 1803 and later; older Windows falls
+back to the system timer's steps, logged at start). Effect time comes from the performance
+counter aligned to GetTickCount64 (the effects' clock), so frames land to a fraction of a
+millisecond instead of GetTickCount64's ~16 ms steps. Only changed frames are sent; the hub
+page shows the frames actually sent per second. 16 / 32 channel hubs pause 8 ms after each
+flag channel per frame, so they can stay a little under 60.
+
+**Boot effect** (on the hub's page under Devices, not on the Lighting page): the hub sits on an internal USB header and is dark until a program sends it
+colors, and no way to save an effect in its firmware is documented, so LumaBridge plays the
+effect itself: when it starts lighting the hub (Windows start, if LumaBridge starts with
+Windows; wake from sleep; the hub plugged in again), for a set number of seconds, with its own
+look; it follows the travelling effect's order. The hub page has "Play it now". Only hubs with a
+channel set up play it. The boot editor also offers the six settling reveals above, ordered
+across the hub's configured fans and strips. The reveal occupies 60% of the selected boot
+duration, followed by its solid or pulsing finish. The final 20% (up to 0.8 seconds) blends
+into the current normal lighting, including sequences and gradients. Boot colors remain
+independent of the normal gradient.
+
+Confirmed on the owner's hub (on an internal USB header, three fans and an LED strip): the
+channels, fans on their own, the travelling effects and the sequences. Not checked on other
+models: which USB interface carries the reports on hubs that list several (the log lines
+"Nollie: ... opened" show the interface and report size found).
+
 ## OpenRGB (only if it's already on the PC)
 
 LumaBridge never needs OpenRGB, and the connection is off unless OpenRGB is installed or
@@ -355,7 +516,7 @@ follow it through OpenRGB, while OpenRGB runs with
 its SDK server on (OpenRGB's SDK Server tab > Start Server; port 6742 by default, changeable
 on the Integrations page). LumaBridge is a client of OpenRGB's documented network protocol
 (`src/app/peripherals/openrgb_protocol.h`): it asks for protocol version 1, lists the
-devices, puts each one in its direct mode and sends every LED's color (~30 times a second,
+devices, puts each one in its direct mode and sends every LED's color (up to 60 times a second,
 only when something changed; each zone shows the effect along its LEDs). When LumaBridge
 lets go (Stop, a game handing back, the device switched off), each device gets its original
 mode back, byte for byte as OpenRGB described it.
@@ -372,6 +533,8 @@ isn't a reference for those; OpenRGB writes them unpadded.
 
 ## Recognised, not lit natively
 
+(Nollie hubs are lit natively; see above. They are still in the catalogue so they can be named.)
+
 The setup guide and the Devices page name RGB hardware LumaBridge doesn't light itself
 (`src/app/device_catalog.h`): USB vendors that make RGB gear almost only (Razer,
 SteelSeries, Corsair, NZXT, Cooler Master, Thermaltake, MSI, Keychron, Alienware) and
@@ -380,3 +543,74 @@ Vengeance RGB / Dominator Platinum RGB, G.Skill Trident Z RGB / Neo / Royal / Z5
 whose IDs also cover everyday devices (USB sticks, printers, card readers, generic chips)
 are left out, so nothing is named wrongly. A brand whose device has Windows' lighting
 standard is lit directly instead of named here; the rest need their own app (or OpenRGB).
+
+## Final color when releasing lighting
+
+Settings > When LumaBridge lets go enables an optional solid handoff color. Closing the
+app or choosing Stop lighting sends that color to enabled outputs and configured Nollie
+channels, preserving brightness and native exclusions. Boot effects, Nollie sequences,
+gradients, device sleep and controller indicator animations step aside for the final frame.
+The default remains restoration of the usual device/app lighting. With a custom final
+color enabled, LumaBridge skips the Aura restart that would immediately replace it; RAM
+uses its keep-last-color release mode, OpenRGB keeps its direct frame and LampArray avoids
+an autonomous-mode reset.
+
+A companion process waits using inherited parent-process and clean-exit event handles.
+After unexpected parent termination it checks the single-instance mutex before loading
+fresh preferences and sending the color for five seconds. It exits without changing the
+user's saved effects or clearing the crash-loop flag. Recovery has a twenty-second process cap.
+Clean exits signal intent before worker cleanup, so cleanup delays do not trigger recovery. Restarting the app cancels recovery and waits for it to release ownership. Killing the whole process tree, powering down Windows, device
+resets, and other lighting software taking control can prevent or overwrite the color.
+Some SDKs (including Logitech's) restore their own profile on disconnect, so a final frame
+cannot guarantee that another app will keep it. No firmware settings are changed.
+
+DualSense player indicators have an independent pattern, speed, five-bit light selection
+and a per-effect enable mask. Turning them off or excluding an effect sends zero player
+bits while the RGB lightbar continues normally. Preferences are stored under [Controller]
+(PlayerMode, PlayerSpeed, PlayerMask, PlayerEffects), alongside the existing global
+[App] DualsensePlayerLeds switch.
+
+RAM updates now cover all four documented RGB register groups even after a complete SPD
+scan; SPD numbering alone is not used to exclude RGB groups. The app produces frames at
+30 Hz, while the helper's actual rate remains limited by SMBus transactions. New helpers
+advertise coherent frame publication (odd/even sequence) and report successful frame count
+and transaction duration in shared memory. The first transaction and every 200th are timed
+in helper.log. Failed transfers stop before applying a partial frame and are retried without
+consuming the app's frame sequence. Upgrade both the test app and hardware helper for these
+changes; an already running helper continues using its loaded executable until it exits.
+
+Center to pulse in ongoing lighting expands from the center, completes one four-second
+breath, contracts back to the center at the reveal speed, rests dark for one second and
+repeats. Boot parameters set `oneShot`, preserving the reveal-and-pulse finish and the
+existing smooth fade into normal lighting. The playback flag participates in parameter
+comparison and is derived by the boot planner rather than stored as a user setting.
+
+## Release stabilization checks
+
+Hardware helper task version 8 is required for coherent RAM frame acknowledgements and
+complete RGB group coverage. The app and helper use one version constant; a Windows test
+checks that the elevated installer agrees. The Memory page reports measured bus transaction
+time and delivered-frame count, rather than presenting its producer rate as measured FPS.
+
+Final-color requests carry a delivery token. Successful output writes acknowledge it;
+RAM acknowledges only after the SMBus transaction succeeds. Handoff waits within a deadline
+and logs missing acknowledgements. Bluetooth recovery allows its five-second connection
+handshake before requiring delivery. Individual native handbacks use the same final-color
+path. Another app or firmware can still overwrite a successfully delivered frame.
+
+Auto zones can request screen capture while Everything is Manual. Idle handback for
+Everything no longer disables active zones; devices outside zones are released. Explicit
+Stop lighting and the crash guard still stop every zone. Aura's board and headers share
+one ownership boundary with Armoury Crate; their native handback remains paired.
+
+Numeric settings reject nonfinite, out-of-range integer and trailing-junk input. Effect
+metadata is shared by the regular and boot editors, and unknown IDs use a safe fallback.
+Duration-driven boot reveals hide the ignored speed slider; their preview uses the same
+one-shot/duration planner as the output.
+
+`test_windows` exercises real GameSense client/listener shutdown, CS2 listener restart,
+INI persistence and synchronous I/O cancellation without device writes. `test_helper_version`
+checks upgrade consistency. `tools/dev/check-lifecycle.py` checks full-app clean exit,
+restart, forced-exit recovery and restart during recovery in an isolated Wine prefix.
+The older terminate-only failure did not include a usable stack; abort/terminate now records
+exception details, stack offsets and a minidump. Its exact historical cause is unconfirmed.

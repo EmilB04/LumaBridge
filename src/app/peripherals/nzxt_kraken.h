@@ -5,6 +5,8 @@
 // the LCD and pump/fan curves stay with CAM.
 // The parsing is pure and tested; the reading is in nzxt_kraken.cpp.
 #pragma once
+#include "delivery_receipt.h"
+#include "worker_cancellation.h"
 
 #include <atomic>
 #include <cstddef>
@@ -64,6 +66,8 @@ public:
     ~Kraken() { Stop(); }
     // `pid`: the Kraken's USB product ID (0: none), `screen`: a screen model.
     void Start(uint16_t pid, bool screen);
+    void RequestStop() { stop_ = true; cancellation_.Cancel(); lightingCancellation_.Cancel(); }
+    uint64_t delivered() const { return delivery_.value(); }
     void Stop();
     Status status() const {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -80,8 +84,10 @@ public:
     unsigned long lightingError() const { return lightingError_; }
 
 private:
+    luma::DeliveryReceipt delivery_;
     void Run(uint16_t pid, bool screen);
     void RunLighting(uint16_t pid);
+    WorkerCancellation cancellation_, lightingCancellation_;
     std::thread thread_;
     std::thread lightingThread_;
     std::atomic<bool> stop_{false};

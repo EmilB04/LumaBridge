@@ -30,7 +30,7 @@ void ScreenCapture::Start() {
 
 void ScreenCapture::Stop() {
     if (!thread_.joinable()) return;
-    stop_ = true;
+    RequestStop();
     thread_.join();
     std::lock_guard<std::mutex> lock(mutex_);
     have_ = false;
@@ -50,6 +50,7 @@ bool ScreenCapture::Latest(games::ScreenColors* out) const {
 }
 
 void ScreenCapture::Run() {
+    WorkerCancellation::Scope cancellable(cancellation_);
     LUMA_INFO("screen colors: started");
     ID3D11Device* device = nullptr;
     ID3D11DeviceContext* context = nullptr;

@@ -12,8 +12,12 @@
 #include "config.h"
 #include "device_lighting.h"
 #include "effects.h"
+#include "dualsense_effects.h"
 #include "pad_mapping.h"
 #include "azoth_oled.h"
+#include "lighting_zones.h"
+#include "nollie_hub.h"
+#include "nollie_layout.h"
 
 namespace luma::app {
 
@@ -109,6 +113,11 @@ struct Prefs {
     bool padShowValues = false, padShowTiming = false;
     bool padView3d = false;  // the live view: 2D with every input (default), or the 3D model
     bool dualsenseController = true;
+    // Moving effects also show on the DualSense's five player LEDs (the lightbar is one color).
+    bool dualsensePlayerLeds = true;
+    dualsense::PlayerOptions dualsensePlayers;
+    bool handoffColorEnabled = false;
+    Rgb handoffColor{0, 140, 255};
     // Light HyperX / Kingston FURY RGB memory through the elevated RAM helper.
     bool ramLighting = true;
     // Keep Armoury Crate's lighting service paused while LumaBridge has the lights (through the
@@ -127,6 +136,15 @@ struct Prefs {
     // Per OpenRGB device (by serial / location identity): switched on or off by the user; the rest follow
     // Controller::OpenRgbDefaultOn.
     std::map<std::string, bool> openRgbDevices;
+    // Light Nollie ARGB hubs over USB. Nothing is sent to a hub until a channel is set up.
+    bool nollieLighting = true;
+    // Per hub (by its identity): switched off by the user.
+    std::map<std::string, bool> nollieDevices;
+    // What is plugged into each channel, by nollie::Key. The channel's lighting is in
+    // deviceLighting under nollie::LightingId.
+    std::map<std::string, nollie::Channel> nollieChannels;
+    // Per hub: the travelling effect and the boot effect.
+    std::map<std::string, nollie::Hub> nollieHubs;
     // Which memory slots hold a stick (bit 0 A1 .. bit 3 B2, from the CPU outward), set by hand
     // on the Memory page; -1: as the system scan says.
     int ramSlots = -1;
@@ -140,6 +158,20 @@ struct Prefs {
     // Your own lighting travelling across the 2D layout (FlowDirection; 0 off), taking this
     // long from the first device to the last.
     int flowDirection = 0;
+    // Setup effects (Lighting > Setup effects): one of fx::Kind's setup effects across every part
+    // of the setup, in place of your lighting; 0: none.
+    int setupEffect = 0;
+    Rgb setupColor1{0, 140, 255}, setupColor2{0, 0, 0};
+    float setupSpeed = 2.f;   // parts a second
+    int setupOrder = 1;       // FlowDirection: the order of the parts (left to right by default)
+    bool setupRamApart = true;  // each memory stick a part of its own; false: all sticks as one
+    // Lighting zones (Lighting page): groups of devices with a lighting and a mode of their own.
+    // Devices in none are "Everything", which uses the main lighting and the header's mode.
+    std::vector<Zone> zones;
+    bool zonesMigrated = false;  // devices with a look of their own became zones (once)
+    // "What's plugged in?": answered for these Nollie hubs (identity), and for the ARGB header.
+    std::vector<std::string> nollieAsked;
+    bool fansAsked = false;
     float flowSeconds = 1.5f;
     // The case's fans and how it's turned (pc::Encode); "" until you correct LumaBridge's guess.
     std::string caseLayout;

@@ -3,6 +3,7 @@
 // summarises it ~12 times a second. The GPU shrinks each frame to a tiny mip level, so only
 // a few thousand pixels are read back. Runs only while a game uses Screen colors.
 #pragma once
+#include "worker_cancellation.h"
 
 #include <windows.h>
 
@@ -20,6 +21,7 @@ class ScreenCapture {
 public:
     ~ScreenCapture() { Stop(); }
     void Start();
+    void RequestStop() { stop_ = true; cancellation_.Cancel(); }
     void Stop();
     bool Running() const { return thread_.joinable(); }
 
@@ -36,6 +38,7 @@ private:
     void Run();
 
     std::atomic<bool> stop_{false};
+    WorkerCancellation cancellation_;
     std::thread thread_;
     mutable std::mutex mutex_;
     games::ScreenColors latest_{};

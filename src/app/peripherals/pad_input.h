@@ -3,6 +3,7 @@
 // and mouse movement (pad_mapping.h) when a mapping is on. Own thread; the controller's lighting
 // (dualsense_output.h) is separate and can run at the same time.
 #pragma once
+#include "worker_cancellation.h"
 
 #include <windows.h>
 
@@ -30,6 +31,7 @@ public:
 
     ~PadInput() { Stop(); }
     void Start();
+    void RequestStop() { stop_ = true; cancellation_.Cancel(); }
     void Stop();
     Snapshot Get() const;
     // The mapping to apply (copied). `mapping.enabled` off releases every key it holds.
@@ -38,6 +40,7 @@ public:
 private:
     void Run();
 
+    WorkerCancellation cancellation_;
     std::thread thread_;
     std::atomic<bool> stop_{false};
     mutable std::mutex mutex_;

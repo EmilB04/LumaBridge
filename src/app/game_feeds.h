@@ -62,6 +62,7 @@ public:
 
     ~GameFeeds() { Stop(); }
     void Start();
+    void RequestStop() { stop_ = true; }
     void Stop();
 
     void SetRocketLeaguePort(int port) { rlPort_ = port; }

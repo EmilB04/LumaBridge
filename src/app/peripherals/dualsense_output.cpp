@@ -8,13 +8,15 @@ extern "C" {
 
 #include <vector>
 
+#include "dualsense_effects.h"
 #include "dualsense_protocol.h"
+#include "frame_clock.h"
 #include "log.h"
 
 namespace luma::app {
 namespace {
 
-constexpr DWORD kFrameMs = 50;  // ~20 updates a second: plenty for a single-color lightbar
+constexpr DWORD kFrameMs = 33;  // ~30 updates a second: smooth fades on a single-color lightbar
 constexpr uint64_t kBluetoothStartupMs = 5000;  // let Sony's connection animation finish before the LED reset
 
 // Opens the Sony HID collection with the output-report size for USB or Bluetooth. Other
@@ -72,12 +74,12 @@ void DualSenseOutput::Start() {
 
 void DualSenseOutput::Stop() {
     if (!thread_.joinable()) return;
-    stop_ = true;
+    RequestStop();
     thread_.join();
     state_ = State::Off;
 }
 
-void DualSenseOutput::Set(const fx::Params& effect, double brightness, bool own) {
+void DualSenseOutput::Set(const fx::Params& effect, double brightness, bool own, bool playerLeds, const dualsense::PlayerOptions& options) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (effect_.kind != effect.kind || effect_.color1 != effect.color1 || effect_.color2 != effect.color2 ||
         effect_.speed != effect.speed)
@@ -85,9 +87,12 @@ void DualSenseOutput::Set(const fx::Params& effect, double brightness, bool own)
     effect_ = effect;
     brightness_ = brightness;
     own_ = own;
+    playerLeds_ = playerLeds;
+    playerOptions_ = options;
 }
 
 void DualSenseOutput::Run() {
+    WorkerCancellation::Scope cancellable(cancellation_);
     HANDLE dev = INVALID_HANDLE_VALUE;
     Link link = Link::Usb;
     uint64_t nextFind = 0, lastSent = 0, bluetoothResetAt = 0;
@@ -95,18 +100,23 @@ void DualSenseOutput::Run() {
     uint8_t sequence = 0;
     bool bluetoothReady = false;
     bool loggedMissing = false;
-    Rgb lastColor{};
+    dualsense::Frame lastFrame{};
+    // A steady beat on a precise timer (Sleep alone wanders by the system timer's ~16 ms steps).
+    FramePacer pacer(1000.0 / kFrameMs);
     while (!stop_) {
-        Sleep(kFrameMs);
+        pacer.Wait();
         fx::Params effect;
         double brightness;
-        bool own;
+        bool own, playerLeds;
+        dualsense::PlayerOptions playerOptions;
         uint64_t since;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             effect = effect_;
             brightness = brightness_;
             own = own_;
+            playerLeds = playerLeds_;
+            playerOptions = playerOptions_;
             since = effectSince_;
         }
         const uint64_t now = GetTickCount64();
@@ -151,16 +161,17 @@ void DualSenseOutput::Run() {
             lastWriteError_ = 0;
         }
         if (link == Link::Bluetooth && !bluetoothReady && now < bluetoothResetAt) continue;
-        const Rgb color = Scale(fx::Render(effect, fx::Seconds(effect, now, since), 0, 1), brightness);
-        if (lastSent && color == lastColor && now - lastSent < 3000) continue;  // resend now and then anyway
+        const dualsense::Frame frame =
+            dualsense::Compose(effect, fx::SecondsAt(effect, PreciseNowMs(), static_cast<double>(since)), brightness, playerLeds, playerOptions);
+        if (lastSent && frame == lastFrame && now - lastSent < 1000 && (!effect.delivery || delivery_.Has(effect.delivery))) continue;  // resend every second anyway
         DWORD written = 0;
         std::vector<uint8_t> buffer;
         const bool initializing = link == Link::Bluetooth && !bluetoothReady;
         if (link == Link::Usb) {
-            const auto r = dualsense::UsbReport(color);
+            const auto r = dualsense::UsbReport(frame.bar, frame.players);
             buffer = dualsense::HidWriteBuffer(r, outputLength);
         } else {
-            const auto r = initializing ? dualsense::BtResetReport(sequence++) : dualsense::BtReport(color, sequence++);
+            const auto r = initializing ? dualsense::BtResetReport(sequence++) : dualsense::BtReport(frame.bar, sequence++, frame.players);
             buffer = dualsense::HidWriteBuffer(r, outputLength);
         }
         // Windows WriteFile expects the collection's maximum output length. The CRC stays
@@ -181,7 +192,8 @@ void DualSenseOutput::Run() {
             LUMA_INFO("DualSense: Bluetooth lighting handshake sent");
             continue;  // give the reset a frame before sending the first color
         }
-        lastColor = color;
+        delivery_.Confirm(effect.delivery);
+        lastFrame = frame;
         lastSent = now;
         state_ = State::Active;
     }

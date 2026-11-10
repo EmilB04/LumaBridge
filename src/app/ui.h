@@ -5,6 +5,7 @@
 
 #include <array>
 #include <string>
+#include <vector>
 
 #include "scene3d.h"
 #include "setup_plan.h"
@@ -38,7 +39,17 @@ struct UiState {
     bool hexEditing = false;
     std::string hexSlot;  // which color editor the hex field being typed in belongs to
     int colorSlot = 0;    // Lighting > Manual: which of the two colors is being edited
-    std::string lightTarget;  // Lighting > Manual: the device being edited ("" = all devices)
+    std::string lightTarget;  // Lighting: the device last clicked in Your setup
+    std::string zone;         // Lighting: the zone being edited ("" : Everything)
+    int lightTab = 0;         // Lighting inspector: 0 effect, 1 color, 2 motion, 3 devices, 4 games
+    int effectCat = 0;        // Lighting > Effect: the category shown
+    std::string effectCatZone;  // the zone effectCat was last set from
+    std::string zoneNameFor;  // the zone whose name is in zoneName
+    char zoneName[48] = "";
+    bool pluggedAll = false;  // What's plugged in?: show every channel of a big hub
+    std::vector<std::string> pluggedLater;  // hubs "ask me later" was pressed for (this session)
+    bool pluggedFansLater = false;
+    std::string nollieHub;    // Lighting > Nollie hubs: the hub shown (its identity)
     std::string dragItem2d;   // Lighting's 2D preview: the device being dragged
     // The 3D views (see SetupView): each one's camera, and what the mouse is doing in them.
     struct View3d {
@@ -59,6 +70,15 @@ struct UiState {
     // Devices: the device whose page is open ("" = the list): "aura:<Aura name>" or a
     // device::k* id (memory, mouse, keyboard).
     std::string deviceDetail;
+    // Devices > a Nollie hub: the channel being edited, and the text of its name field.
+    int nollieChannel = -1;
+    int nollieFan = -1;  // with each fan on its own: the fan being edited (-1: the whole channel)
+    bool nollieBootEdit = false;
+    int nollieSeqColor = 0;
+    int nollieStop = 0;
+    int setupColorSlot = 0;  // Setup effects: the color being edited (0 lit, 1 unlit)      // the gradient color being edited  // the sequence's color being edited: 0 lit, 1 unlit  // the hub's boot effect is open for editing
+    std::string nollieNameKey;
+    char nollieName[48] = "";
     bool devicesLanding = true;  // select Lighting and readings when opening Devices
     int devicesTab = 0;          // 0 Lighting and readings, 1 All hardware
     char deviceFilter[128] = "";

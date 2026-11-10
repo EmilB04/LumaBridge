@@ -3,6 +3,8 @@
 // Crate's save command. OLED control is separately opt-in (experimental). One thread
 // serializes RGB frames and acknowledged display commands, and pauses both while asleep.
 #pragma once
+#include "delivery_receipt.h"
+#include "worker_cancellation.h"
 
 #include <windows.h>
 
@@ -27,6 +29,8 @@ public:
 
     ~AzothOutput() { Stop(); }
     void Start();
+    void RequestStop() { stop_ = true; cancellation_.Cancel(); }
+    uint64_t delivered() const { return delivery_.value(); }
     void Stop();
     // `brightness` 0..1 (LumaBridge's brightness slider); `own = false` stops sending (the
     // keyboard keeps the last color until it restarts; its saved lighting is untouched).
@@ -59,8 +63,10 @@ public:
     bool stuck() const { return stuck_; }
 
 private:
+    luma::DeliveryReceipt delivery_;
     void Run();
 
+    WorkerCancellation cancellation_;
     std::thread thread_;
     std::atomic<bool> stop_{false};
     std::atomic<State> state_{State::Off};

@@ -17,14 +17,15 @@ extern "C" {
 #include "azoth_oled_upload.h"
 #include "azoth_music_source.h"
 #include "azoth_oled_bomb.h"
+#include "frame_clock.h"
 #include "log.h"
 
 namespace luma::app {
 namespace {
 
-constexpr DWORD kFrameMs = 40;           // ~25 updates per second at most (only changed keys are sent)
+constexpr DWORD kFrameMs = 33;           // ~30 updates per second at most (only changed keys are sent)
 constexpr uint64_t kWirelessFrameMs = 50;   // through the Omni receiver: ~20 updates per second
-constexpr uint64_t kRefreshMs = 5000;    // re-send every key now and then (a keyboard waking up)
+constexpr uint64_t kRefreshMs = 2000;    // re-send every key now and then (a keyboard waking up, or going back to its own effect)
 
 struct ControlDevices {
     std::wstring wired, receiver;
@@ -191,7 +192,7 @@ void AzothOutput::Start() {
 
 void AzothOutput::Stop() {
     if (!thread_.joinable()) return;
-    stop_ = true;
+    RequestStop();
     thread_.join();
     state_ = State::Off;
     oledState_ = OledState::Vendor;
@@ -274,6 +275,7 @@ std::string AzothOutput::oledFailureDetails() const {
 }
 
 void AzothOutput::Run() {
+    WorkerCancellation::Scope cancellable(cancellation_);
     azoth::MusicSource music;
     uint64_t musicRevision = UINT64_MAX, nextMusic = 0;
     std::wstring lastSongTitle, lastSongArtist;
@@ -355,8 +357,14 @@ void AzothOutput::Run() {
         nextIdleApply = 0;
         resetSession();
     };
+    // A steady beat on a precise timer (Sleep alone wanders by the system timer's ~16 ms steps).
+    FramePacer pacer(1000.0 / kFrameMs);
     while (!stop_) {
-        Sleep(kFrameMs);
+        // By cable ~30 frames a second; through the Omni receiver ~20, sparing the 2.4 GHz link
+        // and the battery. Each on its own steady beat (a coarse "50 ms since the last" check on a
+        // 33 ms beat would send every other beat, unevenly).
+        pacer.SetRate(1000.0 / (link == azoth::Link::Wireless ? kWirelessFrameMs : kFrameMs));
+        pacer.Wait();
         fx::Params effect;
         double brightness;
         bool own;
@@ -807,7 +815,7 @@ void AzothOutput::Run() {
             }
         }
         if (!own) continue;
-        const double t = fx::Seconds(effect, now, since);
+        const double t = fx::SecondsAt(effect, PreciseNowMs(), static_cast<double>(since));
         auto lost = [&] {
             const DWORD err = GetLastError();
             LUMA_WARN("ROG Azoth: write failed (error %lu) - unplugged?", err);
@@ -820,11 +828,9 @@ void AzothOutput::Run() {
             if (oled.direct) oledState_ = OledState::NotFound;
             lastKeys.clear();
         };
-        // Every key its own color, by cable or through the Omni receiver. Over the receiver at
-        // most 10 updates a second, sparing the 2.4 GHz link and the keyboard's battery.
-        if (link == azoth::Link::Wireless && lastSent && now - lastSent < kWirelessFrameMs) continue;
+        // Every key its own color, by cable or through the Omni receiver (paced above).
         const std::vector<Rgb> keys = azoth::RenderKeys(effect, t, brightness);
-        const bool refresh = !lastSent || now - lastSent >= kRefreshMs;  // everything again now and then
+        const bool refresh = !lastSent || now - lastSent >= kRefreshMs || (effect.delivery && !delivery_.Has(effect.delivery));  // everything again now and then
         if (keys == lastKeys && !refresh) {
             state_ = State::Active;
             continue;
@@ -845,6 +851,7 @@ void AzothOutput::Run() {
             lost();
             continue;
         }
+        delivery_.Confirm(effect.delivery);
         lastKeys = keys;
         lastSent = now;
         state_ = State::Active;

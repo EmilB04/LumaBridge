@@ -236,7 +236,7 @@ void SystemMonitor::Start(int lhmPort) {
 
 void SystemMonitor::Stop() {
     if (!thread_.joinable()) return;
-    stop_ = true;
+    RequestStop();
     thread_.join();
 }
 
@@ -247,6 +247,7 @@ SystemSnapshot SystemMonitor::Snapshot() {
 }
 
 void SystemMonitor::Run() {
+    WorkerCancellation::Scope cancellable(cancellation_);
     // Names first (once): cheap, and the dashboard can show them straight away.
     {
         SystemSnapshot s;

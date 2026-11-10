@@ -14,7 +14,6 @@
 namespace luma::gamesense {
 namespace {
 
-constexpr DWORD kRecvTimeoutMs = 30000;
 
 std::wstring DefaultCorePropsPath() {
     wchar_t buf[MAX_PATH];
@@ -81,13 +80,11 @@ bool Server::Start(const Config& cfg, std::function<void()> onActivity) {
 void Server::Stop() {
     if (running_) {
         stop_ = true;
-        closesocket(listen_);  // unblocks accept()
-        listen_ = INVALID_SOCKET;
         if (acceptThread_.joinable()) acceptThread_.join();
-        {
-            std::lock_guard<std::mutex> lock(clientsMutex_);
-            for (SOCKET c : clients_) shutdown(c, SD_BOTH);  // Serve() threads then exit
-        }
+        closesocket(listen_);
+        listen_ = INVALID_SOCKET;
+        for (auto& worker : clientThreads_) if (worker.first.joinable()) worker.first.join();
+        clientThreads_.clear();
         forwarder_.Stop();
         RestoreCoreProps();
         running_ = false;
@@ -139,6 +136,14 @@ bool Server::Listen(int preferredPort) {
 
 void Server::AcceptLoop() {
     while (!stop_) {
+        for (auto it = clientThreads_.begin(); it != clientThreads_.end();) {
+            if (it->second->load()) { it->first.join(); it = clientThreads_.erase(it); }
+            else ++it;
+        }
+        fd_set ready; FD_ZERO(&ready); FD_SET(listen_, &ready);
+        timeval wait{0, 100000};
+        if (select(0, &ready, nullptr, nullptr, &wait) <= 0) continue;
+        if (stop_) break;
         SOCKET c = accept(listen_, nullptr, nullptr);
         if (c == INVALID_SOCKET) {
             if (stop_) break;
@@ -151,25 +156,35 @@ void Server::AcceptLoop() {
             std::lock_guard<std::mutex> lock(clientsMutex_);
             clients_.push_back(c);
         }
-        std::thread(&Server::Serve, this, c).detach();
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        clientThreads_.emplace_back(std::thread([this, c, done] {
+            Serve(c);
+            *done = true;
+        }), done);
     }
 }
 
 void Server::Serve(SOCKET s) {
-    DWORD timeout = kRecvTimeoutMs;
+    DWORD timeout = 200;
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof timeout);
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout), sizeof timeout);
 
     http::Parser parser;
     char buf[8192];
     bool open = true;
     while (open && !stop_) {
+        fd_set ready; FD_ZERO(&ready); FD_SET(s, &ready);
+        timeval wait{0, 100000};
+        const int readable = select(0, &ready, nullptr, nullptr, &wait);
+        if (readable == 0) continue;
+        if (readable < 0 || stop_) break;
         int n = recv(s, buf, sizeof buf, 0);
         if (n <= 0) break;
         parser.Feed(buf, static_cast<size_t>(n));
 
         http::Request req;
-        http::Parser::Status st;
-        while ((st = parser.Next(&req)) == http::Parser::Status::Done) {
+        http::Parser::Status st = http::Parser::Status::NeedMore;
+        while (!stop_ && (st = parser.Next(&req)) == http::Parser::Status::Done) {
             Engine::Response resp;
             if (req.method == "POST") {
                 std::lock_guard<std::mutex> lock(engineMutex_);

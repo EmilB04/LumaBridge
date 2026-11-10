@@ -7,6 +7,7 @@
 //     bundled PawnIO driver, once set up on the Devices page), else from LibreHardwareMonitor's
 //     web server when it's running.
 #pragma once
+#include "worker_cancellation.h"
 
 #include <windows.h>
 
@@ -51,6 +52,7 @@ class SystemMonitor {
 public:
     ~SystemMonitor() { Stop(); }
     void Start(int lhmPort);
+    void RequestStop() { stop_ = true; cancellation_.Cancel(); }
     void Stop();
     // The latest data; also keeps the poller awake for a few seconds.
     SystemSnapshot Snapshot();
@@ -63,6 +65,7 @@ private:
 
     std::atomic<bool> stop_{false};
     std::atomic<uint64_t> lastRequest_{0};
+    WorkerCancellation cancellation_;
     std::thread thread_;
     int lhmPort_ = 8085;
     std::mutex mutex_;

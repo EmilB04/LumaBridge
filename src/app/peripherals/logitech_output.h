@@ -9,6 +9,8 @@
 // frame by frame (the G502 X Plus, whose LED order is known).
 // Runs on its own thread (~20 updates per second) so a slow G HUB never stalls the UI.
 #pragma once
+#include "delivery_receipt.h"
+#include "worker_cancellation.h"
 
 #include <windows.h>
 
@@ -42,6 +44,8 @@ public:
     ~LogitechOutput() { Stop(); }
     // `proxyPath`: LumaBridge's own Logitech proxy, which must never be loaded here.
     void Start(const std::wstring& proxyPath);
+    void RequestStop() { stop_ = true; cancellation_.Cancel(); }
+    uint64_t delivered() const { return delivery_.value(); }
     void Stop();
 
     // What Logitech devices should show; `own = false` hands them back to G HUB (a game is
@@ -69,9 +73,11 @@ public:
     std::wstring dllPath() const;
 
 private:
+    luma::DeliveryReceipt delivery_;
     void Run();
 
     std::wstring proxyPath_;
+    WorkerCancellation cancellation_;
     std::thread thread_;
     std::atomic<bool> stop_{false};
     std::atomic<State> state_{State::Off};

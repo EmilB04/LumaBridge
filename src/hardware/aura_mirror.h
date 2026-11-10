@@ -9,6 +9,7 @@
 // touch Aura at all and instead sends each frame to the app (see ipc.h), which owns Aura.
 // The app itself uses a mirror with routeToApp = false.
 #pragma once
+#include "delivery_receipt.h"
 
 #include <windows.h>
 
@@ -42,6 +43,8 @@ public:
     // every few seconds, so this succeeds even if LightingService is down.
     bool Start(const Config& cfg, HMODULE self, const char* sourceName, bool routeToApp = true);
     // Stops the worker and, if configured, releases Aura control back to Armoury Crate.
+    void RequestStop();
+    uint64_t delivered() const { return delivery_.value(); }
     void Stop();
     bool IsRunning() const { return thread_ != nullptr; }
 
@@ -82,6 +85,7 @@ public:
     Status GetStatus() const;
 
 private:
+    luma::DeliveryReceipt delivery_;
     static DWORD WINAPI ThreadMain(LPVOID self);
     void Run();
     void Wake() {

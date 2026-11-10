@@ -11,6 +11,7 @@
 #include <shellapi.h>
 
 #include <csignal>
+#include <cstring>
 #include <cmath>
 #include <exception>
 #include <cwchar>
@@ -27,6 +28,7 @@
 #include "integrations.h"
 #include "ipc.h"
 #include "ui.h"
+#include "popup_animations.h"
 #include "scene_gpu.h"
 #include "setup_plan.h"
 
@@ -44,6 +46,7 @@ constexpr UINT_PTR kTickTimer = 1;
 constexpr UINT kTickMs = 50;
 enum : UINT { kMenuOpen = 1, kMenuAuto, kMenuManual, kMenuPause, kMenuExit };
 
+HANDLE g_cleanExit = nullptr;
 Controller g_ctl;
 Integrations g_integrations;
 UiState g_ui;
@@ -106,7 +109,7 @@ LONG CALLBACK OnFirstChance(EXCEPTION_POINTERS* ep) {
     const bool fatalLooking = code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_STACK_OVERFLOW ||
                               code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
                               code == EXCEPTION_PRIV_INSTRUCTION || code == 0xC0000374 /* heap corruption */ ||
-                              code == 0xC0000409 /* stack buffer overrun / fail fast */;
+                              code == 0xC0000409 /* stack buffer overrun / fail fast */ || code == 0xE04C554D /* C++ terminate/abort */;
     if (!fatalLooking || InterlockedIncrement(&logged) > 20) return EXCEPTION_CONTINUE_SEARCH;
     HMODULE mod = nullptr;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -118,11 +121,38 @@ LONG CALLBACK OnFirstChance(EXCEPTION_POINTERS* ep) {
               static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress) -
                                               reinterpret_cast<uintptr_t>(mod)),
               GetCurrentThreadId());
+    // Who called: the frames up the stack as module + offset, to look up in the build's symbols.
+    void* frames[32];
+    const USHORT n = CaptureStackBackTrace(0, 32, frames, nullptr);
+    for (USHORT i = 0; i < n; ++i) {
+        HMODULE m = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(frames[i]), &m);
+        char path[MAX_PATH] = "?";
+        if (m) GetModuleFileNameA(m, path, MAX_PATH);
+        const char* base = std::strrchr(path, '\\');
+        LUMA_WARN("  #%u %p %s+0x%llX", static_cast<unsigned>(i), frames[i], base ? base + 1 : path,
+                  static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(frames[i]) - reinterpret_cast<uintptr_t>(m)));
+    }
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
 void OnAbort(int) {
     LUMA_ERROR("CRASH: abort() called (thread %lu)", GetCurrentThreadId());
+    // SIGABRT normally bypasses the SEH filter, which left the previous terminate
+    // failure with neither a stack nor a dump. Capture the terminating thread too.
+    CONTEXT context{};
+    RtlCaptureContext(&context);
+    EXCEPTION_RECORD record{};
+    record.ExceptionCode = 0xE04C554D;
+#ifdef _WIN64
+    record.ExceptionAddress = reinterpret_cast<void*>(context.Rip);
+#else
+    record.ExceptionAddress = reinterpret_cast<void*>(context.Eip);
+#endif
+    EXCEPTION_POINTERS pointers{&record, &context};
+    OnFirstChance(&pointers);
+    OnCrash(&pointers);
 }
 
 // ---- Direct3D ------------------------------------------------------------------------
@@ -436,6 +466,8 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Windows ends the process right after this returns, so record the clean exit (and
         // hand back the lights) now; otherwise the next start would think LumaBridge crashed.
         if (wp) {
+            if (g_cleanExit) SetEvent(g_cleanExit);
+            WriteConfigValue(g_ctl.configPath(), L"App", L"Running", L"0");
             g_ctl.Shutdown(/*handBack=*/false);
             PostQuitMessage(0);
         }
@@ -468,23 +500,109 @@ LRESULT CALLBACK IpcProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 }  // namespace
 
+// The companion owns only inherited synchronization handles while the app runs. It never
+// opens devices until the parent has exited unexpectedly and no replacement app is running.
+void StartHandoffWatcher() {
+    SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    HANDLE clean = CreateEventW(&security, TRUE, FALSE, nullptr);
+    HANDLE parent = OpenProcess(SYNCHRONIZE, TRUE, GetCurrentProcessId());
+    if (!clean || !parent) {
+        if (clean) CloseHandle(clean);
+        if (parent) CloseHandle(parent);
+        return;
+    }
+    SIZE_T bytes = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &bytes);
+    std::vector<unsigned char> storage(bytes);
+    STARTUPINFOEXW startup{};
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
+    HANDLE handles[] = {parent, clean};
+    bool ready = InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &bytes) != FALSE;
+    if (ready) {
+        ready = UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                          handles, sizeof(handles), nullptr, nullptr) != FALSE;
+        wchar_t exe[32768]{};
+        GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(std::size(exe)));
+        std::wstring command = L"\"" + std::wstring(exe) + L"\" --handoff-watch " +
+            std::to_wstring(reinterpret_cast<uintptr_t>(parent)) + L" " +
+            std::to_wstring(reinterpret_cast<uintptr_t>(clean));
+        PROCESS_INFORMATION process{};
+        if (ready && CreateProcessW(exe, command.data(), nullptr, nullptr, TRUE,
+                                    EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW, nullptr, nullptr,
+                                    &startup.StartupInfo, &process)) {
+            g_cleanExit = clean;
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        } else LUMA_WARN("Handoff recovery companion could not start (error %lu)", GetLastError());
+        DeleteProcThreadAttributeList(startup.lpAttributeList);
+    }
+    CloseHandle(parent);
+    if (!g_cleanExit) CloseHandle(clean);
+}
+
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
-    HANDLE single = CreateMutexW(nullptr, TRUE, L"Local\\LumaBridgeApp");
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        if (HWND other = FindWindowW(kMainClass, nullptr)) PostMessageW(other, WM_SHOW_WINDOW, 0, 0);
+    if (wcsncmp(cmdLine, L"--handoff-watch ", 16) == 0) {
+        unsigned long long parentValue = 0, cleanValue = 0;
+        if (swscanf(cmdLine + 16, L"%llu %llu", &parentValue, &cleanValue) != 2) return 1;
+        HANDLE parent = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(parentValue));
+        HANDLE clean = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(cleanValue));
+        const DWORD waited = WaitForSingleObject(parent, INFINITE);
+        const bool unexpected = waited == WAIT_OBJECT_0 && WaitForSingleObject(clean, 0) == WAIT_TIMEOUT;
+        CloseHandle(parent);
+        CloseHandle(clean);
+        if (!unexpected) return 0;
+        HANDLE cancel = CreateEventW(nullptr, TRUE, FALSE, L"Local\\LumaBridgeRecoveryStop");
+        HANDLE lock = CreateMutexW(nullptr, TRUE, L"Local\\LumaBridgeApp");
+        const DWORD lockError = GetLastError();
+        if (!lock) return 1;
+        // The original process's mutex can still exist after death (for example in a crash
+        // reporter). Acquire an abandoned mutex, but never compete with a restarted app.
+        if (lockError == ERROR_ALREADY_EXISTS) {
+            const DWORD got = WaitForSingleObject(lock, 0);
+            if (got != WAIT_OBJECT_0 && got != WAIT_ABANDONED) { CloseHandle(lock); return 0; }
+        }
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        // A disconnected device must not keep a recovery process alive indefinitely.
+        std::thread([] { Sleep(20000); ExitProcess(1); }).detach();
+        g_ctl.RecoverHandoffColor(cancel);
+        if (cancel) CloseHandle(cancel);
+        CoUninitialize();
+        ReleaseMutex(lock);
+        CloseHandle(lock);
         return 0;
+    }
+
+    HANDLE single = CreateMutexW(nullptr, TRUE, L"Local\\LumaBridgeApp");
+    if (!single) return 1;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        if (HWND other = FindWindowW(kMainClass, nullptr)) {
+            PostMessageW(other, WM_SHOW_WINDOW, 0, 0);
+            CloseHandle(single);
+            return 0;
+        }
+        // A deliberate restart takes precedence over background color recovery.
+        HANDLE recovery = OpenEventW(EVENT_MODIFY_STATE, FALSE, L"Local\\LumaBridgeRecoveryStop");
+        if (recovery) { SetEvent(recovery); CloseHandle(recovery); }
+        const DWORD got = WaitForSingleObject(single, recovery ? 8000 : 0);
+        if (got != WAIT_OBJECT_0 && got != WAIT_ABANDONED) { CloseHandle(single); return 0; }
     }
 
     SetUnhandledExceptionFilter(OnCrash);
     AddVectoredExceptionHandler(1, OnFirstChance);
     std::signal(SIGABRT, OnAbort);
     std::set_terminate([] {
-        LUMA_ERROR("CRASH: std::terminate (unhandled C++ exception?), thread %lu", GetCurrentThreadId());
+        if (auto exception = std::current_exception()) {
+            try { std::rethrow_exception(exception); }
+            catch (const std::exception& error) { LUMA_ERROR("CRASH: unhandled C++ exception: %s", error.what()); }
+            catch (...) { LUMA_ERROR("CRASH: unhandled non-standard C++ exception"); }
+        } else LUMA_ERROR("CRASH: terminate without an active exception (thread %lu)", GetCurrentThreadId());
         std::abort();
     });
     ImGui_ImplWin32_EnableDpiAwareness();
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);  // file dialogs
     g_ctl.Init();
+    StartHandoffWatcher();
     // Until the setup guide is done, the window opens even when started with Windows.
     const bool startHidden = wcsstr(cmdLine, L"--minimized") && g_ctl.prefs().startMinimized && g_ctl.prefs().setupDone;
 
@@ -543,6 +661,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
         UpdateWindow(g_main);
     }
 
+    PopupAnimations popupAnimations;
     bool running = true;
     while (running) {
         if (!IsWindowVisible(g_main) || IsIconic(g_main)) {
@@ -569,6 +688,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
         }
         if (g_rebuildFonts) {
             g_rebuildFonts = false;
+            popupAnimations.Reset();
             ApplyTheme(g_dpiScale);
             LoadFonts(g_dpiScale);
             ImGui_ImplDX11_InvalidateDeviceObjects();
@@ -579,6 +699,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
         ImGui::NewFrame();
         DrawUi(g_main, g_ctl, g_integrations, g_ui, g_fonts);
         ImGui::Render();
+        popupAnimations.Render();
         const float clear[4] = {0.055f, 0.063f, 0.078f, 1.f};
         g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
         g_context->ClearRenderTargetView(g_rtv, clear);
@@ -592,11 +713,16 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     // Exiting must end the process: if something hangs while shutting down (a device that
     // stops answering), end it anyway after a few seconds.
     std::thread([] {
-        Sleep(8000);
+        Sleep(20000);
         LUMA_WARN("shutdown took too long; ending the process");
         ExitProcess(0);
     }).detach();
+    // User intent is known before cleanup starts. A slow driver must not turn an
+    // intentional exit into crash recovery or a false crash-loop pause next start.
+    if (g_cleanExit) SetEvent(g_cleanExit);
+    WriteConfigValue(g_ctl.configPath(), L"App", L"Running", L"0");
     g_ctl.Shutdown();
+    popupAnimations.Reset();
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     if (g_logo) g_logo->Release();
@@ -607,6 +733,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     DestroyWindow(g_ipc);
     if (g_trayIcon) DestroyIcon(g_trayIcon);
     CoUninitialize();
+    if (g_cleanExit) CloseHandle(g_cleanExit);
     CloseHandle(single);
     return 0;
 }

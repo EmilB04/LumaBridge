@@ -3,6 +3,8 @@
 // vendor software. When LumaBridge lets go, each device runs its own effect again.
 // Runs on its own thread; looks for new devices every 15 seconds.
 #pragma once
+#include "delivery_receipt.h"
+#include "worker_cancellation.h"
 
 #include <atomic>
 #include <cstdint>
@@ -31,20 +33,26 @@ public:
 
     ~LampArrayOutput() { Stop(); }
     void Start();
+    void RequestStop() { stop_ = true; cancellation_.Cancel(); }
+    uint64_t delivered() const { return delivery_.value(); }
     void Stop();
 
     // What the devices should show. `own = false` gives every device its own effect back;
     // `skip`: identities of devices LumaBridge leaves alone (lit natively, or switched off).
     void Set(const fx::Params& effect, double brightness, bool own, const std::vector<std::string>& skip);
 
+    void KeepLastColor(bool keep) { keepLastColor_ = keep; }
     State state() const { return state_; }
     std::vector<LampArrayDevice> devices() const;
 
 private:
+    luma::DeliveryReceipt delivery_;
     void Run();
 
+    WorkerCancellation cancellation_;
     std::thread thread_;
     std::atomic<bool> stop_{false};
+    std::atomic<bool> keepLastColor_{false};
     std::atomic<State> state_{State::Off};
     mutable std::mutex mutex_;
     fx::Params effect_;

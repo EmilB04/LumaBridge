@@ -1,6 +1,7 @@
 // "Integrations" page: which game-lighting SDKs are hooked up, and one-click install / remove
 // (wrapping the PowerShell scripts shipped next to the app, elevated when needed).
 #pragma once
+#include "helper_ipc.h"
 
 #include <windows.h>
 
@@ -74,7 +75,7 @@ private:
 // HKLM\SOFTWARE\LumaBridge\HandbackTaskVersion); an older task needs setting up again.
 constexpr DWORD kHandbackTaskVersion = 7;
 // Same for the hardware helper (Install-Helper.ps1, HKLM\SOFTWARE\LumaBridge\HelperTaskVersion).
-constexpr DWORD kHelperTaskVersion = 7;  // 7: prevents ASUS lighting service restarts while paused
+constexpr DWORD kHelperTaskVersion = helper::kTaskVersion;  // coherent RAM frames, complete RGB group coverage and timing
 
 std::wstring AppDirectory();
 // Folder picker; empty when cancelled.

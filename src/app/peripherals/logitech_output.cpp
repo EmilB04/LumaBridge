@@ -10,6 +10,7 @@ extern "C" {
 #include <string>
 #include <vector>
 
+#include "frame_clock.h"
 #include "log.h"
 #include "device_sleep.h"
 #include "logitech_hidpp.h"
@@ -269,7 +270,7 @@ void LogitechOutput::Start(const std::wstring& proxyPath) {
 
 void LogitechOutput::Stop() {
     if (!thread_.joinable()) return;
-    stop_ = true;
+    RequestStop();
     thread_.join();
     state_ = State::Off;
 }
@@ -296,6 +297,7 @@ std::string LogitechOutput::directName() const {
 }
 
 void LogitechOutput::Run() {
+    WorkerCancellation::Scope cancellable(cancellation_);
     bool sdkLoaded = real::Load(L"", proxyPath_) && real::LogiLedSetLighting;
     if (!sdkLoaded) {
         LUMA_INFO("Logitech devices: G HUB's LED SDK not found - trying direct HID++ control");
@@ -345,8 +347,10 @@ void LogitechOutput::Run() {
         mouseEffect_ = false;
         wasAsleep = true;
     };
+    // A steady beat on a precise timer (Sleep alone wanders by the system timer's ~16 ms steps).
+    FramePacer pacer(1000.0 / kFrameMs);
     while (!stop_) {
-        Sleep(kFrameMs);
+        pacer.Wait();
         fx::Params effect;
         double level;
         bool own;
@@ -463,16 +467,17 @@ void LogitechOutput::Run() {
         if (want) want->intensity = static_cast<uint8_t>(level * 100 + 0.5);
         if (want) {
             // Slider drags change the speed many times a second: at most 4 sends a second.
-            if ((!onMouse || *onMouse != *want) && now - lastEffectSent >= 250) {
+            if ((!onMouse || *onMouse != *want || (effect.delivery && !delivery_.Has(effect.delivery))) && now - lastEffectSent >= 250) {
                 lastEffectSent = now;
                 if (mouse.Set(*want)) {
                     onMouse = want;
+                    delivery_.Confirm(effect.delivery);
                     perKeyOn = false;
                 } else {
                     lostMouse("the mouse didn't take its effect");
                 }
             }
-            if (onMouse) {
+            if (onMouse && *onMouse == *want) {
                 state_ = State::Active;
                 mouseEffect_ = true;
                 continue;
@@ -488,14 +493,17 @@ void LogitechOutput::Run() {
                 }
             }
             if (perKeyOn) {
-                const double t = fx::Seconds(effect, now, since);
+                const double t = fx::SecondsAt(effect, PreciseNowMs(), static_cast<double>(since));
                 const size_t n = mouse.layout().strip.size();
                 std::vector<Rgb> frame(n);
                 for (size_t i = 0; i < n; ++i)
                     frame[i] = Scale(fx::Render(effect, t, static_cast<int>(i), static_cast<int>(n)), level);
                 // Changes right away; the same frame again now and then (the mouse may have slept).
-                if (frame != lastFrame || now - lastFrameSent > 5000) {
+                // The same frame again every second: the mouse goes back to its own color cycle when it hears
+                // nothing for a while, which a still stretch of an effect would let it.
+                if (frame != lastFrame || (effect.delivery && !delivery_.Has(effect.delivery)) || now - lastFrameSent > 1000) {
                     if (mouse.Frame(frame.data())) {
+                        delivery_.Confirm(effect.delivery);
                         lastFrame = frame;
                         lastFrameSent = now;
                     } else {
@@ -510,7 +518,7 @@ void LogitechOutput::Run() {
             }
         }
         mouseEffect_ = false;
-        const Rgb c = Scale(fx::Render(effect, fx::Seconds(effect, now, since), 0, 1), level);
+        const Rgb c = Scale(fx::Render(effect, fx::SecondsAt(effect, PreciseNowMs(), static_cast<double>(since)), 0, 1), level);
         if (onMouse) {
             // Back from the mouse's own effect: a plain color on it, then the SDK's colors again.
             onMouse.reset();
@@ -524,7 +532,7 @@ void LogitechOutput::Run() {
         if (!inited) {
             // Mice without a known LED map can still follow games and effects as one color.
             if (mouse.open() && mouse.layout().Has(hidpp::Kind::Fixed)) {
-                if (p[0] != last[0] || p[1] != last[1] || p[2] != last[2] || now - lastSent > 2000) {
+                if (p[0] != last[0] || p[1] != last[1] || p[2] != last[2] || now - lastSent > 2000 || (effect.delivery && !delivery_.Has(effect.delivery))) {
                     hidpp::Effect fixed;
                     fixed.color = c;
                     if (!mouse.Set(fixed)) {
@@ -532,6 +540,7 @@ void LogitechOutput::Run() {
                         state_ = sdkLoaded ? State::Waiting : State::NoGHub;
                         continue;
                     }
+                    delivery_.Confirm(effect.delivery);
                     std::copy(std::begin(p), std::end(p), last);
                     lastSent = now;
                 }
@@ -543,7 +552,7 @@ void LogitechOutput::Run() {
         }
         // Send changes right away, and the same color again every 2 s (G HUB may have been
         // restarted or had another program in between).
-        if (p[0] != last[0] || p[1] != last[1] || p[2] != last[2] || now - lastSent > 2000) {
+        if (p[0] != last[0] || p[1] != last[1] || p[2] != last[2] || now - lastSent > 2000 || (effect.delivery && !delivery_.Has(effect.delivery))) {
             if (!real::LogiLedSetLighting(p[0], p[1], p[2])) {
                 real::LogiLedShutdown();
                 inited = false;
@@ -553,6 +562,7 @@ void LogitechOutput::Run() {
                 state_ = State::Waiting;
                 continue;
             }
+            delivery_.Confirm(effect.delivery);
             last[0] = p[0];
             last[1] = p[1];
             last[2] = p[2];

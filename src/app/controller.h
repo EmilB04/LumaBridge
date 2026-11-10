@@ -33,6 +33,7 @@
 #include "azoth_output.h"
 #include "dualsense_output.h"
 #include "pad_input.h"
+#include "nollie_output.h"
 #include "openrgb_output.h"
 #include "lamparray_output.h"
 #include "hardware_helper.h"
@@ -51,6 +52,10 @@ public:
     struct Output {
         // Stopped: LumaBridge isn't driving the lights (paused or stopped by the user).
         bool stopped = true;
+        std::vector<std::string> released;  // base idle handback; zones can still own their devices
+        bool Controls(const std::string& id) const {
+            return !stopped && std::find(released.begin(), released.end(), ZoneDevice(id)) == released.end();
+        }
         fx::Params fx;         // the effect (games: Static, or Strobe while they flash)
         bool fanTest = false;  // fans show the layout test pattern (Devices page)
         std::string label;     // "Battlefield 1 - Logitech LIGHTSYNC", "Manual color", ...
@@ -58,14 +63,20 @@ public:
         // Devices with their own look (device::kFans, ...) while your own lighting shows;
         // the others show `fx`.
         std::map<std::string, fx::Params> devices;
+        // Per device (zones): whether it shows a game's lighting, where that differs from `game`.
+        std::map<std::string, bool> gameFor;
+        bool GameFor(const std::string& id) const {
+            auto it = gameFor.find(id);
+            return it != gameFor.end() ? it->second : game;
+        }
 
         const fx::Params& For(const std::string& id) const {
             auto it = devices.find(id);
             return it != devices.end() ? it->second : fx;
         }
         bool SameLighting(const Output& o) const {
-            if (stopped != o.stopped || fanTest != o.fanTest || !fx::SameParams(fx, o.fx) ||
-                devices.size() != o.devices.size())
+            if (stopped != o.stopped || released != o.released || fanTest != o.fanTest || !fx::SameParams(fx, o.fx) ||
+                devices.size() != o.devices.size() || gameFor != o.gameFor)
                 return false;
             for (const auto& [id, p] : devices) {
                 auto it = o.devices.find(id);
@@ -76,6 +87,7 @@ public:
     };
 
     bool Init();
+    void RecoverHandoffColor(HANDLE cancel = nullptr);
     // Idempotent. `handBack`: start Armoury Crate so it takes the lights back.
     void Shutdown(bool handBack = true);
 
@@ -113,6 +125,7 @@ public:
     bool auraPaused() const { return pause() != Pause::None; }
     void ResumeAura();
     void StopLighting();
+    void SetDeviceNative(const std::string& id, bool native);
     // While Armoury Crate is taking the lights back (the controller restarts, ~10 s): the
     // time left, else 0. Also the total, for a progress bar.
     uint64_t handbackMsLeft() const;
@@ -148,6 +161,29 @@ public:
     // What a device shows: its effect in `out`, turned round if the device is set to run the
     // other way.
     fx::Params DeviceEffect(const Output& out, const std::string& id) const;
+    // Setup effects: the parts of a zone in order (each fan, strip, memory stick, the board, the
+    // keyboard, ...): a device's first part and how many it has. The zone's id; "" is Everything.
+    struct SetupPart {
+        std::string id;  // device::k*
+        std::string name;
+        int first = 0, count = 1;
+    };
+    struct ZoneParts {
+        std::vector<SetupPart> parts;
+        int count = 1;
+    };
+    const ZoneParts& setupParts(const std::string& zoneId) const {
+        static const ZoneParts none;
+        auto it = setupParts_.find(zoneId);
+        return it != setupParts_.end() ? it->second : none;
+    }
+    // A device's brightness: its own times its zone's (on top of the overall one).
+    double Level(const std::string& id) const;
+    // The zone a device is in ("" : Everything).
+    std::string ZoneKey(const std::string& device) const;
+    // Where an item of the setup sits for the order effects travel in: the 2D layout, or in the 3D
+    // view the desk and case.
+    Spot ArrangedSpot(const std::string& item) const;
     fx::Params DeviceEffect(const std::string& id) const { return DeviceEffect(output_, id); }
     // Install folder of a known game (by profile key, e.g. "cs2"), from the Games List scan.
     std::wstring GameDir(const char* profileKey) const;
@@ -228,6 +264,19 @@ public:
     bool LampArrayOn(const LampArrayDevice& d) const;
     bool LampArrayDefaultOn(const LampArrayDevice& d) const;
 
+    // Nollie ARGB hubs, lit directly over USB, channel by channel.
+    const NollieOutput& nollie() const { return nollie_; }
+    void SetNollieEnabled(bool on);
+    // Whether LumaBridge lights this hub: the user's choice (on unless switched off), and it opened.
+    bool NollieOn(const NollieDevice& d) const;
+    // Shows the test pattern on this channel (nollie::Key) until cleared with "".
+    void SetNollieTest(const std::string& key) { nollieTest_ = key; Changed(); }
+    const std::string& nollieTest() const { return nollieTest_; }
+    // Plays the hub's boot effect now (its identity).
+    void PlayNollieBoot(const std::string& deviceId) { nollie_.PlayBoot(deviceId); }
+    // Starts the hub's sequence over (its identity).
+    void RestartNollieSequence(const std::string& deviceId) { nollie_.RestartSequence(deviceId); }
+
     // Devices OpenRGB supports, through its SDK server (optional).
     const OpenRgbOutput& openRgb() const { return openRgb_; }
     void SetOpenRgbEnabled(bool on);
@@ -257,6 +306,8 @@ public:
 
 private:
     Output Decide() const;
+    bool savedHandoffEnabled_ = false, savedLightingStopped_ = false;
+    Rgb savedHandoffColor_{};
     void RainbowLook(fx::Params* p) const;  // the rainbow settings from Prefs
     void UpdateGames(uint64_t now);
     void UpdateFeeds(uint64_t now);
@@ -303,10 +354,24 @@ private:
     DualSenseOutput dualsense_;
     PadInput pad_;
     OpenRgbOutput openRgb_;
+    NollieOutput nollie_;
+    std::string nollieTest_;
+    std::map<std::string, ZoneParts> setupParts_;
+    void UpdateSetupParts();
+    bool GameOutput(Output* out) const;
+    fx::Params ZoneParams(const Zone& z) const;
+    void ApplyZones(Output* o) const;
     LampArrayOutput lampArray_;
     HardwareHelper hardware_;
     uint64_t sensorsPushedAt_ = 0;
     std::string logitechNote_;
+    void SendOutputs();
+    void PaintHandoffColor(unsigned milliseconds, const std::vector<std::string>& targets = {});
+    bool IsHandoff(const std::string& id) const;
+    std::vector<std::string> handoffTargets_;
+    uint64_t handoffToken_ = 0;
+    bool handoffActive_ = false, handoffRecovery_ = false;
+    HANDLE recoveryCancel_ = nullptr;
     void UpdateLogitech();
     bool feedActive_[18] = {};
     std::future<std::vector<InstalledGame>> libraryJob_;

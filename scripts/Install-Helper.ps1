@@ -35,7 +35,7 @@ $TaskPath = '\LumaBridge\'
 $TaskName = 'Hardware helper'
 # Bumped whenever the task or the helper changes; LumaBridge asks to set it up again when
 # the recorded version is older (kHelperTaskVersion in src/app/integrations.h).
-$TaskVersion = 7
+$TaskVersion = 8
 $VersionKey = 'HKLM:\SOFTWARE\LumaBridge'
 $InstallDir = Join-Path $env:ProgramFiles 'LumaBridge'
 $Modules = 'SmbusPIIX4.bin', 'SmbusI801.bin', 'LpcIO.bin', 'AMDFamily17.bin', 'IntelMSR.bin'

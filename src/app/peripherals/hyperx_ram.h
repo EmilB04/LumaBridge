@@ -47,17 +47,11 @@ inline uint8_t SlotBase(int slot) {
 // tool can leave it on the second (it then reads 0), so only DDR3 / DDR5 are ruled out.
 inline bool IsStick(bool answers, int type) { return answers && type != 0x0B && type != 0x12; }
 
-// Which SPD slots get colors. `found`: bit i = the SPD in slot i answered; `listed`: how many
-// sticks the firmware lists (0: unknown). Another program on the bus can make an SPD miss its
-// turn (seen on the owner's PC: one of three sticks found, all three on the next start), and
-// the controller covers every slot anyway, so when fewer answered than the firmware lists,
-// or none did, all four slots get the colors (an empty slot's registers are only written,
-// never read back).
-inline uint8_t SlotsToLight(uint8_t found, int listed) {
-    int n = 0;
-    for (int s = 0; s < kSlots; ++s) n += (found >> s) & 1;
-    return !n || n < listed ? static_cast<uint8_t>((1 << kSlots) - 1) : static_cast<uint8_t>(found & 0xF);
-}
+// RGB register groups do not reliably match SPD slot numbering on every board. The
+// controller has four documented groups regardless of SPD responses. Update all four,
+// including empty groups, so an SPD-derived mask cannot leave an installed stick stale.
+// This uses the same RGB-only writes already used by the incomplete-SPD fallback.
+inline uint8_t SlotsToLight(uint8_t, int) { return 0x0F; }
 
 // The sticks to report to the app (it shows their count): the ones found, or as many as the
 // firmware lists when it lists more (their slots aren't known, so from slot 0 up).

@@ -12,6 +12,7 @@ extern "C" {
 #include <string>
 #include <vector>
 
+#include "frame_clock.h"
 #include "log.h"
 
 namespace luma::app::nzxt {
@@ -119,7 +120,7 @@ void Kraken::Start(uint16_t pid, bool screen) {
 
 void Kraken::Stop() {
     if (!thread_.joinable()) return;
-    stop_ = true;
+    RequestStop();
     thread_.join();
     if (lightingThread_.joinable()) lightingThread_.join();
     lightingActive_ = false;
@@ -137,6 +138,7 @@ void Kraken::SetLighting(const fx::Params& effect, double brightness, bool own) 
 }
 
 void Kraken::RunLighting(uint16_t pid) {
+    WorkerCancellation::Scope cancellable(lightingCancellation_);
     HANDLE h = INVALID_HANDLE_VALUE;
     HANDLE ev = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!ev) { lightingError_ = GetLastError(); return; }
@@ -149,8 +151,9 @@ void Kraken::RunLighting(uint16_t pid) {
         lightingActive_ = false;
         sentAt = 0;
     };
+    FramePacer pacer(10);  // ten colors per second, steady; do not hammer the cooler's USB controller
     while (!stop_) {
-        Sleep(100);  // ten colors per second; do not hammer the cooler's USB controller
+        pacer.Wait();
         fx::Params effect;
         double level;
         bool own;
@@ -173,8 +176,8 @@ void Kraken::RunLighting(uint16_t pid) {
             }
             if (h == INVALID_HANDLE_VALUE) continue;
         }
-        const Rgb color = Scale(fx::Render(effect, fx::Seconds(effect, now, since), 0, 1), level);
-        if (sentAt && color == last && now - sentAt < 3000) continue;
+        const Rgb color = Scale(fx::Render(effect, fx::SecondsAt(effect, PreciseNowMs(), static_cast<double>(since)), 0, 1), level);
+        if (sentAt && color == last && now - sentAt < 1000 && (!effect.delivery || delivery_.Has(effect.delivery))) continue;
         const auto packet = FixedLighting(LightingChannels(pid), color);
         std::vector<uint8_t> report(outputLength);
         std::copy(packet.begin(), packet.end(), report.begin());
@@ -196,6 +199,7 @@ void Kraken::RunLighting(uint16_t pid) {
             nextTry = now + 5000;
             continue;
         }
+        delivery_.Confirm(effect.delivery);
         lightingError_ = 0;
         lightingActive_ = true;
         sentAt = now;
@@ -206,6 +210,7 @@ void Kraken::RunLighting(uint16_t pid) {
 }
 
 void Kraken::Run(uint16_t pid, bool screen) {
+    WorkerCancellation::Scope cancellable(cancellation_);
     HANDLE h = INVALID_HANDLE_VALUE;
     HANDLE ev = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     uint64_t nextLook = 0;
