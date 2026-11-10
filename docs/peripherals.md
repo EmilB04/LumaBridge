@@ -426,7 +426,19 @@ Nollie 1, 8, 16 and 32 channel hubs (and the 28 series and Prism8) are lit over 
 other program: `nollie_protocol.h` (reports and device table, pure and tested),
 `nollie_layout.h` (what is on each channel), `nollie_output.cpp` (the thread). The protocol and
 the table of USB IDs, channel counts and wiring follow OpenRGB's Nollie driver
-(`Controllers/NollieController`); LumaBridge only sends colors and reads nothing back.
+(`Controllers/NollieController`); LumaBridge only sends colors.
+
+**What the hub keeps on its own (read only).** The 64-byte hubs with the OS2 firmware (USB
+vendor 16D5) play effects with no program running, and a boot effect at power-on, set up in
+Nollie's own app. When such a hub is opened, LumaBridge asks it once what it keeps and writes
+the answers to the log ("Nollie: ... firmware", "at power-on", "boot canvases", "canvas 14
+(boot)"): `nollie_onboard.h` (the questions and how the answers are read, pure and tested),
+`LogOnboard` in `nollie_output.cpp`. The questions are the ones Nollie's app sends (`F9` and
+`FC` reports); nothing is written. The 8 channel hub has no storage for animations: its boot
+effect is one of eight built into the firmware (Light up, Color wipe, Slowly wipe, Pull flower,
+Stackab1-3, Bullets) with colors and a speed, on up to two boot canvases (14 and 15). The
+answers' layout is not confirmed on real hardware yet; each log line also carries the raw
+bytes. A hub that doesn't answer two questions in a row is not asked again.
 
 - **16 / 32 channel hubs:** one 1025-byte report per channel (channel, flag, LED count
   big-endian, then G R B per LED). Channels go out in hardware order; channels 15 and 31 always

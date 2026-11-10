@@ -1,6 +1,7 @@
 // Nollie ARGB hubs, lit directly over USB HID (nollie_protocol.h): each channel with the
 // effect of its own look, as a strip or as a chain of fans (nollie_layout.h). Only colors are
-// sent. When LumaBridge lets go it stops sending, and the hub keeps showing the last frame
+// sent; a hub with the OS2 firmware is also asked once what it keeps on its own, for the log
+// (nollie_onboard.h). When LumaBridge lets go it stops sending, and the hub keeps showing the last frame
 // until it loses power.
 // Runs on its own thread; looks for new hubs every 15 seconds.
 #pragma once

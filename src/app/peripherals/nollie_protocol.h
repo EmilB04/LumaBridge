@@ -1,6 +1,7 @@
 // Nollie ARGB hubs (1, 8, 16 and 32 channels, the 28 series, Prism8), over USB HID. The
 // protocol and the device table follow OpenRGB's Nollie driver (Controllers/NollieController);
-// only colors are sent, nothing is read from the hub. Pure and tested.
+// only colors are sent. (What the hub keeps on its own is asked for in nollie_onboard.h.)
+// Pure and tested.
 //
 // Two families speak two dialects:
 //   - 16 / 32 channel hubs ("Hs"): one 1025-byte report per channel carrying all its LEDs,

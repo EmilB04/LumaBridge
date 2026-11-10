@@ -20,6 +20,7 @@
 #include "dualsense_effects.h"
 #include "lighting_zones.h"
 #include "nollie_hub.h"
+#include "nollie_onboard.h"
 #include "nollie_sequence.h"
 #include "nollie_layout.h"
 #include "azoth_oled_music.h"
@@ -3325,6 +3326,50 @@ static void TestNollie() {
     CHECK(n::Hub{}.smooth && n::Hub{}.refreshHz == 60);
     CHECK(!n::Decode("", &hubBack) && !n::Decode("7|1|1|4|1|60|0|1|000000|000000|0|000000,FFFFFF|0|x", &hubBack) && !n::Decode("1|1|1|4|1|60|0|1|000000|000000|0|000000|0|junk", &hubBack));
 }
+// What the hub keeps on its own: the questions, and reading the answers.
+static void TestNollieOnboard() {
+    namespace n = luma::app::nollie;
+    namespace o = luma::app::nollie::onboard;
+    using luma::Rgb;
+    // Only the 64-byte hubs with the OS2 firmware are asked.
+    CHECK(o::Speaks(*n::Find(0x16D5, 0x2A08)) && o::Speaks(*n::Find(0x16D5, 0x2C08)));
+    CHECK(!o::Speaks(*n::Find(0x16D2, 0x1F01)) && !o::Speaks(*n::Find(0x16D5, 0x2A32)));
+
+    // A question: report ID, command, what, and the canvas when there is one.
+    const n::Packet mode = o::Query(o::kGetEffect, o::kMode);
+    CHECK(mode.bytes.size() == 65 && mode.bytes[0] == 0 && mode.bytes[1] == 0xF9 && mode.bytes[2] == 1 &&
+          mode.bytes[3] == 0);
+    const n::Packet canvas = o::Query(o::kGetEffect, o::kCanvasEffect, o::kBootCanvasBase + 1);
+    CHECK(canvas.bytes[1] == 0xF9 && canvas.bytes[2] == 2 && canvas.bytes[3] == 15);
+    const n::Packet firmware = o::Query(o::kGetConfig, o::kConfigFirmware);
+    CHECK(firmware.bytes[1] == 0xFC && firmware.bytes[2] == 2);
+    // No question is a color report (those number up to 47) or the "show" report.
+    for (const n::Packet& p : {mode, canvas, firmware}) CHECK(p.bytes[1] >= 0xF0 && p.bytes[1] != 0xFF);
+
+    // Answers.
+    CHECK(o::DecodeFirmware({2, 4, 1, 9}) == "2.4.1" && o::DecodeFirmware({}) == "0.0.0");
+    const o::Version v = o::DecodeVersion({0, 20, 0x5B, 0x1F});
+    CHECK(v.settings == 20 && v.board == 8027);
+    CHECK(o::Empty({0, 0, 0}) && o::Empty({}) && !o::Empty({0, 1}));
+    CHECK(o::DecodeLedCounts({12, 0, 0x2C, 0x01, 7}, 3) == (std::vector<int>{12, 300, 7}));
+    CHECK(o::DecodeChannelMap({3, 2, 1, 0, 9}, 4) == (std::vector<int>{3, 2, 1, 0}));
+    o::CanvasEffect effect;
+    CHECK(!o::DecodeCanvasEffect({0xF9, 2, 14, 1}, &effect));
+    CHECK(o::DecodeCanvasEffect({0xF9, 2, 14, 1, 100, 3, 4, 8, 0, 5, 255, 0, 0, 0, 255, 0, 0, 0, 255}, &effect));
+    CHECK(effect.mode == 1 && effect.brightness == 100 && effect.step == 3 && effect.size == 4 &&
+          effect.channels == 8 && effect.map == 0 && effect.delay == 5);
+    CHECK(effect.colors[0] == (Rgb{255, 0, 0}) && effect.colors[1] == (Rgb{0, 255, 0}) &&
+          effect.colors[2] == (Rgb{0, 0, 255}));
+
+    // Names for the log.
+    CHECK(std::string(o::EffectName(1, true)) == "Color wipe" && std::string(o::EffectName(1, false)) == "Solid");
+    CHECK(std::string(o::EffectName(8, true)) == "unknown" && std::string(o::EffectName(23, false)) == "ColorFromPalette" &&
+          std::string(o::EffectName(24, false)) == "unknown");
+    CHECK(std::string(o::ModeName(1)) == "its own effects" && std::string(o::StageName(1)) == "playing the boot effect");
+    CHECK(std::string(o::IntroName(0)) == "the boot canvases" && std::string(o::SteadyName(0)) == "its own effects");
+    CHECK(o::List({1, 20, 3}) == "1, 20, 3" && o::List({}).empty());
+    CHECK(o::Hex({0x0A, 0xF9, 0x00}, 2) == "0A F9" && o::Hex({1}, 5) == "01");
+}
 
 static void TestSetupEffects() {
     namespace fx = luma::fx;
@@ -4491,6 +4536,7 @@ int main() {
     TestZones();
     TestSetupEffects();
     TestNollie();
+    TestNollieOnboard();
     TestDeviceInventory();
     TestHyperXRam();
     TestDeleteZone();

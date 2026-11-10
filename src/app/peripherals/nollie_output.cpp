@@ -15,6 +15,7 @@ extern "C" {
 #include "frame_clock.h"
 #include "lighting_identity.h"
 #include "log.h"
+#include "nollie_onboard.h"
 
 namespace luma::app {
 namespace {
@@ -42,7 +43,7 @@ int InterfaceOf(std::string path) {
 struct Found {
     std::wstring path;
     const nollie::Model* model = nullptr;
-    DWORD outLen = 0;
+    DWORD outLen = 0, inLen = 0;
     USHORT usagePage = 0;
 };
 
@@ -76,6 +77,7 @@ std::vector<Found> FindHubs() {
                 HIDP_CAPS caps{};
                 if (HidD_GetPreparsedData(q, &pre) && HidP_GetCaps(pre, &caps) == HIDP_STATUS_SUCCESS) {
                     f.outLen = caps.OutputReportByteLength;
+                    f.inLen = caps.InputReportByteLength;
                     f.usagePage = caps.UsagePage;
                 }
                 if (pre) HidD_FreePreparsedData(pre);
@@ -163,6 +165,132 @@ private:
     NollieDevice info_;
 };
 
+// Asks a hub what it keeps on its own (nollie_onboard.h) and writes the answers to the log:
+// the firmware, what plays at power-on, the boot canvases and the looping ones. Nothing is
+// changed on the hub. It has its own handle, so a hub that never answers can't hold up the
+// one the colors go through.
+class OnboardReader {
+public:
+    explicit OnboardReader(const Found& f) : outLen_(f.outLen), inLen_(f.inLen) {
+        h_ = CreateFileW(f.path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                         OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+        event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    }
+    ~OnboardReader() {
+        if (h_ != INVALID_HANDLE_VALUE) CloseHandle(h_);
+        if (event_) CloseHandle(event_);
+    }
+    bool ok() const { return h_ != INVALID_HANDLE_VALUE && event_ && outLen_ > 0 && inLen_ > 1; }
+    // Two questions in a row without an answer: the hub doesn't speak this, stop asking.
+    bool silent() const { return missed_ >= 2; }
+
+    // Reports waiting from before the questions would be read as answers.
+    void Drain() {
+        std::vector<uint8_t> old;
+        for (int i = 0; i < 16 && Read(&old, 10); ++i) {}
+    }
+
+    // One question, one answer (without its report ID). False when the hub stays quiet.
+    bool Ask(uint8_t command, uint8_t what, int number, std::vector<uint8_t>* reply) {
+        reply->clear();
+        if (silent()) return false;
+        std::vector<uint8_t> buf = nollie::onboard::Query(command, what, number).bytes;
+        if (buf.size() < outLen_) buf.resize(outLen_, 0);
+        if (!Finish(WriteFile(h_, buf.data(), static_cast<DWORD>(buf.size()), nullptr, Fresh()), 200) || !Read(reply, 100)) {
+            ++missed_;
+            return false;
+        }
+        missed_ = 0;
+        return true;
+    }
+
+private:
+    OVERLAPPED* Fresh() {
+        ResetEvent(event_);
+        op_ = OVERLAPPED{};
+        op_.hEvent = event_;
+        return &op_;
+    }
+    // Waits for the read or write just started; one that takes too long is called off.
+    bool Finish(BOOL started, DWORD timeoutMs, DWORD* moved = nullptr) {
+        DWORD n = 0;
+        if (!started && GetLastError() != ERROR_IO_PENDING) return false;
+        if (!started && WaitForSingleObject(event_, timeoutMs) != WAIT_OBJECT_0) {
+            CancelIo(h_);
+            GetOverlappedResult(h_, &op_, &n, TRUE);  // until the cancelled call lets go of the buffer
+            return false;
+        }
+        if (!GetOverlappedResult(h_, &op_, &n, FALSE)) return false;
+        if (moved) *moved = n;
+        return true;
+    }
+    bool Read(std::vector<uint8_t>* reply, DWORD timeoutMs) {
+        std::vector<uint8_t> buf(inLen_, 0);
+        DWORD got = 0;
+        if (!Finish(ReadFile(h_, buf.data(), static_cast<DWORD>(buf.size()), nullptr, Fresh()), timeoutMs, &got) || got < 2)
+            return false;
+        reply->assign(buf.begin() + 1, buf.begin() + got);
+        return true;
+    }
+
+    HANDLE h_ = INVALID_HANDLE_VALUE, event_ = nullptr;
+    OVERLAPPED op_{};
+    DWORD outLen_ = 0, inLen_ = 0;
+    int missed_ = 0;
+};
+
+void LogOnboard(const Found& f) {
+    namespace ob = nollie::onboard;
+    const nollie::Model& m = *f.model;
+    if (!ob::Speaks(m)) return;
+    OnboardReader hub(f);
+    if (!hub.ok()) {
+        LUMA_INFO("Nollie: %s can't be asked for its own settings (no input reports)", m.name);
+        return;
+    }
+    hub.Drain();
+    std::vector<uint8_t> r;
+    if (hub.Ask(ob::kGetConfig, ob::kConfigFirmware, -1, &r)) {
+        const std::string firmware = ob::DecodeFirmware(r);
+        std::vector<uint8_t> v;
+        hub.Ask(ob::kGetConfig, ob::kConfigVersion, -1, &v);
+        const ob::Version version = ob::DecodeVersion(v);
+        LUMA_INFO("Nollie: %s firmware %s, settings version %d, board %d (answers: %s / %s)", m.name, firmware.c_str(),
+                  version.settings, version.board, ob::Hex(r, 4).c_str(), ob::Hex(v, 4).c_str());
+    }
+    if (hub.Ask(ob::kGetEffect, ob::kMode, -1, &r))
+        LUMA_INFO("Nollie: %s on its own: %s, now %s (answer: %s)", m.name, ob::ModeName(ob::At(r, 0)),
+                  ob::StageName(ob::At(r, 1)), ob::Hex(r, 4).c_str());
+    if (hub.Ask(ob::kGetEffect, ob::kBootPlaylist, -1, &r))
+        LUMA_INFO("Nollie: %s at power-on: %s, then %s (answer: %s)", m.name, ob::IntroName(ob::At(r, 0)),
+                  ob::SteadyName(ob::At(r, 1)), ob::Hex(r, 4).c_str());
+    if (hub.Ask(ob::kGetEffect, ob::kLedCounts, -1, &r))
+        LUMA_INFO("Nollie: %s LEDs per channel as the hub counts them: %s", m.name,
+                  ob::List(ob::DecodeLedCounts(r, m.channels)).c_str());
+    // The looping canvases, then the boot ones: how many, how fast, which channels, which effect.
+    for (const bool boot : {false, true}) {
+        int count = 0, frameMs = 0;
+        if (hub.Ask(ob::kGetEffect, boot ? ob::kBootCanvasCount : ob::kCanvasCount, -1, &r)) count = ob::At(r, 0);
+        if (hub.Ask(ob::kGetEffect, boot ? ob::kBootFrameMs : ob::kFrameMs, -1, &r)) frameMs = ob::At(r, 0);
+        if (!hub.Ask(ob::kGetEffect, boot ? ob::kBootCanvasMap : ob::kCanvasMap, 0, &r)) continue;
+        LUMA_INFO("Nollie: %s %s canvases: %d, %d ms a frame, channels in canvas order: %s", m.name,
+                  boot ? "boot" : "looping", count, frameMs, ob::List(ob::DecodeChannelMap(r, m.channels)).c_str());
+        const int base = boot ? ob::kBootCanvasBase : 0;
+        for (int i = 0; i < std::min(count, boot ? ob::kBootCanvases : ob::kLoopCanvases); ++i) {
+            ob::CanvasEffect c;
+            if (!hub.Ask(ob::kGetEffect, ob::kCanvasEffect, base + i, &r) || !ob::DecodeCanvasEffect(r, &c)) continue;
+            LUMA_INFO("Nollie: %s canvas %d%s: %s (%d), brightness %d, step %d, size %d, %d channels, LED order %d, "
+                      "delay %d, colors %d,%d,%d / %d,%d,%d / %d,%d,%d (answer: %s)",
+                      m.name, base + i, boot ? " (boot)" : "", ob::EffectName(c.mode, boot), c.mode, c.brightness, c.step,
+                      c.size, c.channels, c.map, c.delay, c.colors[0].r, c.colors[0].g, c.colors[0].b, c.colors[1].r,
+                      c.colors[1].g, c.colors[1].b, c.colors[2].r, c.colors[2].g, c.colors[2].b, ob::Hex(r, 19).c_str());
+        }
+    }
+    if (hub.silent())
+        LUMA_INFO("Nollie: %s didn't answer when asked for its own settings (an older firmware, or its own app is asking too)",
+                  m.name);
+}
+
 }  // namespace
 
 void NollieOutput::Start() {
@@ -244,6 +372,7 @@ void NollieOutput::Run() {
                 seen.push_back(f.path);
                 auto hub = std::make_unique<Hub>();
                 if (hub->Open(f)) {
+                    LogOnboard(f);  // before the first colors: what the hub would show by itself
                     hub->since = hub->countFrom = now;
                     hubs.push_back(std::move(hub));
                 } else {
