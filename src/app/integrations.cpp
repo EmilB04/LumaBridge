@@ -210,53 +210,81 @@ void Integrations::Refresh(bool gsRunning, int gsPort, bool gsOk, bool foundGG, 
                                  "Games ship their own iCUE file, so add LumaBridge to each game folder.",
                                  IntegrationState::PerGame, "Per game"});
 
-    {
-        Integration it{"handback", "Armoury Crate hand-back",
-                       "Lets LumaBridge give the lights back to Armoury Crate silently (no window, no clicks) by "
-                       "restarting the motherboard's lighting controller, which then reloads Armoury Crate's effect.",
-                       IntegrationState::NotInstalled, ""};
-        if (HandbackTaskInstalled()) {
-            DWORD version = 0, size = sizeof version;
-            RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\LumaBridge", L"HandbackTaskVersion", RRF_RT_REG_DWORD,
-                         nullptr, &version, &size);
-            if (version >= kHandbackTaskVersion) {
-                it.state = IntegrationState::Active;
-                it.detail = "Set up";
-            } else {
-                it.state = IntegrationState::Problem;
-                it.detail = "Set up by an older LumaBridge - click Update (administrator, once)";
-            }
-        } else {
-            it.detail = "Needs administrator approval once. Without it, LumaBridge opens Armoury Crate instead.";
-        }
-        items_.push_back(it);
-    }
-
-    {
-        Integration it{"helper", "Hardware access",
-                       "Lets LumaBridge light HyperX / Kingston FURY RGB memory, read fan speeds and CPU / board "
-                       "temperatures itself (no LibreHardwareMonitor), and pause Armoury Crate's lighting while "
-                       "LumaBridge has the lights. Installs the bundled, signed PawnIO driver and LumaBridge's helper.",
-                       IntegrationState::NotInstalled, ""};
-        if (HelperTaskInstalled()) {
-            DWORD version = 0, size = sizeof version;
-            RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\LumaBridge", L"HelperTaskVersion", RRF_RT_REG_DWORD, nullptr,
-                         &version, &size);
-            if (version >= kHelperTaskVersion) {
-                it.state = IntegrationState::Active;
-                it.detail = "Set up";
-            } else {
-                it.state = IntegrationState::Problem;
-                it.detail = "Set up by an older LumaBridge - click Update (administrator, once)";
-            }
-        } else {
-            it.detail = "One click, one administrator approval. Everything it needs comes with LumaBridge.";
-        }
-        items_.push_back(it);
-    }
+    // Both are filled in by ApplyTasks once Windows has answered (see CheckTasks).
+    items_.push_back(Integration{"handback", "Armoury Crate hand-back",
+                                 "Lets LumaBridge give the lights back to Armoury Crate silently (no window, no clicks) by "
+                                 "restarting the motherboard's lighting controller, which then reloads Armoury Crate's effect.",
+                                 IntegrationState::NotInstalled, "Checking..."});
+    items_.push_back(Integration{"helper", "Hardware access",
+                                 "Lets LumaBridge light HyperX / Kingston FURY RGB memory, read fan speeds and CPU / board "
+                                 "temperatures itself (no LibreHardwareMonitor), and pause Armoury Crate's lighting while "
+                                 "LumaBridge has the lights. Installs the bundled, signed PawnIO driver and LumaBridge's helper.",
+                                 IntegrationState::NotInstalled, "Checking..."});
+    ApplyTasks();
+    CheckTasks();
 
     systemDll("lightfx", "Alienware AlienFX", "Older titles with Alienware lighting.", L"LightFX.dll",
               "Alienware Command Center");
+}
+
+void Integrations::CheckTasks() {
+    TakeTaskResult();
+    if (taskCheck_) {  // still asking; that answer may be older than what just changed
+        recheck_ = true;
+        return;
+    }
+    auto check = std::make_shared<TaskCheck>();
+    taskCheck_ = check;
+    // Detached on purpose: closing the app must not wait for a slow answer.
+    std::thread([check] {
+        TaskState s;
+        s.handback = HandbackTaskInstalled();
+        s.helper = HelperTaskInstalled();
+        DWORD size = sizeof(DWORD);
+        if (s.handback)
+            RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\LumaBridge", L"HandbackTaskVersion", RRF_RT_REG_DWORD, nullptr,
+                         &s.handbackVersion, &size);
+        size = sizeof(DWORD);
+        if (s.helper)
+            RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\LumaBridge", L"HelperTaskVersion", RRF_RT_REG_DWORD, nullptr,
+                         &s.helperVersion, &size);
+        check->state = s;
+        check->done = true;
+    }).detach();
+}
+
+void Integrations::TakeTaskResult() {
+    if (!taskCheck_ || !taskCheck_->done) return;
+    tasks_ = taskCheck_->state;
+    tasksKnown_ = true;
+    taskCheck_.reset();
+    ApplyTasks();
+    if (recheck_) {
+        recheck_ = false;
+        CheckTasks();
+    }
+}
+
+void Integrations::ApplyTasks() {
+    if (!tasksKnown_) return;
+    for (auto& it : items_) {
+        const bool handback = it.id == "handback";
+        if (!handback && it.id != "helper") continue;
+        const bool installed = handback ? tasks_.handback : tasks_.helper;
+        const DWORD version = handback ? tasks_.handbackVersion : tasks_.helperVersion;
+        const DWORD wanted = handback ? kHandbackTaskVersion : kHelperTaskVersion;
+        if (!installed) {
+            it.state = IntegrationState::NotInstalled;
+            it.detail = handback ? "Needs administrator approval once. Without it, LumaBridge opens Armoury Crate instead."
+                                 : "One click, one administrator approval. Everything it needs comes with LumaBridge.";
+        } else if (version >= wanted) {
+            it.state = IntegrationState::Active;
+            it.detail = "Set up";
+        } else {
+            it.state = IntegrationState::Problem;
+            it.detail = "Set up by an older LumaBridge - click Update (administrator, once)";
+        }
+    }
 }
 
 void Integrations::Install(const std::string& id, const std::wstring& gameDir, bool force) {
@@ -282,6 +310,7 @@ void Integrations::SetAll(bool enabled) {
     if (Busy()) return;
     pending_.clear();
     for (const auto& it : items_) {
+        if (!tasksKnown_ && (it.id == "helper" || it.id == "handback")) continue;  // not answered yet
         if (IncludeInIntegrationBatch(it.id, it.state, enabled))
             pending_.push_back(it.id);
     }
@@ -297,6 +326,7 @@ void Integrations::SetAll(bool enabled) {
 }
 
 void Integrations::Tick() {
+    TakeTaskResult();
     if (!batchRunning_ || busy_) return;
     if (batchWaiting_ && LastMessage().rfind("Done:", 0) != 0) {
         // A declined prompt or failed step must not launch more administrator prompts.

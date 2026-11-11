@@ -603,6 +603,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);  // file dialogs
     g_ctl.Init();
     StartHandoffWatcher();
+    g_integrations.CheckTasks();  // two slow Windows questions, answered while the window opens
     // Until the setup guide is done, the window opens even when started with Windows.
     const bool startHidden = wcsstr(cmdLine, L"--minimized") && g_ctl.prefs().startMinimized && g_ctl.prefs().setupDone;
 

@@ -6,6 +6,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -28,6 +29,10 @@ public:
 
     void Refresh(bool gameSenseRunning, int gameSensePort, bool gameSenseOk, bool foundGG, int ggPort,
                  bool ggOk);
+    // Asks Windows (in the background) whether the hand-back and hardware tasks are set up.
+    // Each question starts a program, which can take seconds, so never on the UI thread.
+    // Call it at start so the answer is ready before the first page is drawn.
+    void CheckTasks();
     const std::vector<Integration>& list() const { return items_; }
 
     // Runs the matching script in the background. `gameDir` only for per-game SDKs; `force`
@@ -58,8 +63,23 @@ private:
     void Run(const std::string& id, const std::string& what, const std::wstring& script, const std::wstring& args,
              bool elevated);
 
+    // What Windows said about the two scheduled tasks.
+    struct TaskState {
+        bool handback = false, helper = false;
+        DWORD handbackVersion = 0, helperVersion = 0;
+    };
+    struct TaskCheck {
+        std::atomic<bool> done{false};
+        TaskState state;
+    };
+    void TakeTaskResult();
+    void ApplyTasks();
+
     std::vector<Integration> items_;
     std::wstring appDir_;
+    std::shared_ptr<TaskCheck> taskCheck_;  // running in the background
+    TaskState tasks_;
+    bool tasksKnown_ = false, recheck_ = false;
     std::atomic<bool> busy_{false};
     std::atomic<bool> finished_{false};
     mutable std::mutex msgMutex_;
